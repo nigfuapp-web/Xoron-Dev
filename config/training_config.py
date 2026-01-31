@@ -48,16 +48,16 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    chunk_size: int = 5000
+    chunk_size: int = 2500
     max_per_epoch: int = 10000
-    samples_per_dataset: int = 50
+    samples_per_dataset: int = 25
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
     gradient_accumulation_steps: int = 128
     learning_rate: float = 2e-4
     weight_decay: float = 0.01
-    num_epochs: int = 8
+    num_epochs: int = 2
     warmup_ratio: float = 0.03
     max_seq_length: int = 1024
     max_grad_norm: float = 1.0  # Gradient clipping
