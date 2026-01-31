@@ -1475,6 +1475,35 @@ def run_cli_mode(args):
     if args.train_only:
         train_only_components = [c.strip() for c in args.train_only.split(',')]
     
+    # Apply auto-freeze based on modality flags (applies to ALL modes: --build, --hf, etc.)
+    # All component groups: vision, video, audio, llm, cross_attention, image_generation, video_generation, modality_markers
+    auto_freeze = []
+    
+    if args.video:
+        # Video mode: train video understanding and generation, keep vision for frame encoding
+        auto_freeze = ['image_generation', 'audio']
+        print("\n🔥 Training for video mode: vision, video, video_generation, llm, cross_attention, modality_markers")
+        print("❄️ Auto-freezing: image_generation, audio")
+    elif args.image:
+        # Image mode: train image understanding and generation
+        auto_freeze = ['video', 'video_generation', 'audio']
+        print("\n🔥 Training for image mode: vision, image_generation, llm, cross_attention, modality_markers")
+        print("❄️ Auto-freezing: video, video_generation, audio")
+    elif args.text:
+        # Text mode: train ONLY the LLM and related text components
+        auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
+        print("\n🔥 Training for text mode: llm, cross_attention, modality_markers")
+        print("❄️ Auto-freezing: vision, video, audio, image_generation, video_generation")
+    elif args.voice:
+        # Voice mode: train audio understanding and generation
+        auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
+        print("\n🔥 Training for voice mode: audio, llm, cross_attention, modality_markers")
+        print("❄️ Auto-freezing: vision, video, image_generation, video_generation")
+    
+    # Combine auto-freeze with any user-specified freeze components
+    if auto_freeze:
+        freeze_components = list(set(freeze_components + auto_freeze))
+    
     # List checkpoints
     if args.list:
         print_header("AVAILABLE CHECKPOINTS")
@@ -1545,47 +1574,7 @@ def run_cli_mode(args):
     
     # HuggingFace model training
     if args.hf:
-        # Determine auto-freeze based on modality flags
-        # All component groups: vision, video, audio, llm, cross_attention, image_generation, video_generation, modality_markers
-        auto_freeze = []
-        modality_name = 'all modalities'
-        train_components = []
-        
-        if args.video:
-            modality_name = 'video'
-            # Video mode: train video understanding and generation, keep vision for frame encoding
-            # Freeze: image_generation, audio
-            auto_freeze = ['image_generation', 'audio']
-            train_components = ['vision', 'video', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for video mode: vision, video, video_generation, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: image_generation, audio")
-        elif args.image:
-            modality_name = 'image'
-            # Image mode: train image understanding and generation
-            # Freeze: video, video_generation, audio
-            auto_freeze = ['video', 'video_generation', 'audio']
-            train_components = ['vision', 'image_generation', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for image mode: vision, image_generation, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: video, video_generation, audio")
-        elif args.text:
-            modality_name = 'text'
-            # Text mode: train ONLY the LLM and related text components
-            # Freeze: ALL multimodal components (vision, video, audio, generators)
-            auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
-            train_components = ['llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for text mode: llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: vision, video, audio, image_generation, video_generation")
-        elif args.voice:
-            modality_name = 'voice/audio'
-            # Voice mode: train audio understanding and generation
-            # Freeze: vision, video, image/video generators
-            auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
-            train_components = ['audio', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for voice mode: audio, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: vision, video, image_generation, video_generation")
-        
-        # Combine auto-freeze with any user-specified freeze components
-        combined_freeze = list(set(freeze_components + auto_freeze))
+        modality_name = 'video' if args.video else ('image' if args.image else ('text' if args.text else ('voice/audio' if args.voice else 'all modalities')))
         
         print_banner()
         print_device_info()
@@ -1594,7 +1583,7 @@ def run_cli_mode(args):
             hf_model_id=args.hf_model,
             training_config=training_config,
             dataset_configs=dataset_configs,
-            freeze_components=combined_freeze,
+            freeze_components=freeze_components,  # Already has auto-freeze applied
             train_only_components=train_only_components,
             export_onnx=args.onnx,
             export_gguf=args.gguf,
@@ -1603,48 +1592,10 @@ def run_cli_mode(args):
         )
         return
     
-    # Modality-specific training (--video, --image, --text, --voice) without --hf
-    # When only a modality flag is passed, build and train on that modality
-    # Automatically freeze other modality components
+    # Modality-specific training (--video, --image, --text, --voice) without --build or --hf
+    # This is for when ONLY a modality flag is passed without --build
     if args.video or args.image or args.text or args.voice:
         modality_name = 'video' if args.video else ('image' if args.image else ('text' if args.text else 'voice/audio'))
-        
-        # Auto-freeze other modality components based on selected modality
-        # All component groups: vision, video, audio, llm, cross_attention, image_generation, video_generation, modality_markers
-        auto_freeze = []
-        train_components = []
-        
-        if args.video:
-            # Video mode: train video understanding and generation, keep vision for frame encoding
-            # Freeze: image_generation, audio
-            auto_freeze = ['image_generation', 'audio']
-            train_components = ['vision', 'video', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for video mode: vision, video, video_generation, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: image_generation, audio")
-        elif args.image:
-            # Image mode: train image understanding and generation
-            # Freeze: video, video_generation, audio
-            auto_freeze = ['video', 'video_generation', 'audio']
-            train_components = ['vision', 'image_generation', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for image mode: vision, image_generation, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: video, video_generation, audio")
-        elif args.text:
-            # Text mode: train ONLY the LLM and related text components
-            # Freeze: ALL multimodal components (vision, video, audio, generators)
-            auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
-            train_components = ['llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for text mode: llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: vision, video, audio, image_generation, video_generation")
-        elif args.voice:
-            # Voice mode: train audio understanding and generation
-            # Freeze: vision, video, image/video generators
-            auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
-            train_components = ['audio', 'llm', 'cross_attention', 'modality_markers']
-            print("\n🔥 Training for voice mode: audio, llm, cross_attention, modality_markers")
-            print("❄️ Auto-freezing: vision, video, image_generation, video_generation")
-        
-        # Combine auto-freeze with any user-specified freeze components
-        combined_freeze = list(set(freeze_components + auto_freeze))
         
         print_banner()
         print_device_info()
@@ -1654,7 +1605,7 @@ def run_cli_mode(args):
             training_config,
             dataset_configs,
             build_only=False,
-            freeze_components=combined_freeze,
+            freeze_components=freeze_components,  # Already has auto-freeze applied
             train_only_components=train_only_components,
             export_onnx=args.onnx,
             export_gguf=args.gguf,
