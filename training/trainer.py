@@ -128,40 +128,47 @@ class XoronTrainer:
         """Enable gradient checkpointing for memory efficiency across all components."""
         enabled_components = []
         
-        # Enable for LLM
+        # Enable for LLM - check multiple possible locations
         if hasattr(self.model, 'llm') and self.model.llm is not None:
-            if hasattr(self.model.llm, 'gradient_checkpointing_enable'):
+            # Try model.llm.model.gradient_checkpointing (MoELlamaForCausalLM structure)
+            if hasattr(self.model.llm, 'model') and hasattr(self.model.llm.model, 'gradient_checkpointing'):
+                self.model.llm.model.gradient_checkpointing = True
+                enabled_components.append('LLM')
+            # Try model.llm.gradient_checkpointing_enable() (HuggingFace style)
+            elif hasattr(self.model.llm, 'gradient_checkpointing_enable'):
                 self.model.llm.gradient_checkpointing_enable()
                 enabled_components.append('LLM')
+            # Try model.llm.gradient_checkpointing directly
             elif hasattr(self.model.llm, 'gradient_checkpointing'):
                 self.model.llm.gradient_checkpointing = True
                 enabled_components.append('LLM')
         
-        # Enable for Vision Encoder
+        # Enable for Vision Encoder - CLIP models have gradient_checkpointing_enable
         if hasattr(self.model, 'vision_encoder') and self.model.vision_encoder is not None:
-            if hasattr(self.model.vision_encoder, 'gradient_checkpointing_enable'):
-                self.model.vision_encoder.gradient_checkpointing_enable()
-                enabled_components.append('Vision')
-            elif hasattr(self.model.vision_encoder, 'model') and hasattr(self.model.vision_encoder.model, 'gradient_checkpointing_enable'):
-                self.model.vision_encoder.model.gradient_checkpointing_enable()
-                enabled_components.append('Vision')
+            # Try the inner model (CLIP)
+            if hasattr(self.model.vision_encoder, 'model'):
+                inner = self.model.vision_encoder.model
+                if hasattr(inner, 'gradient_checkpointing_enable'):
+                    inner.gradient_checkpointing_enable()
+                    enabled_components.append('Vision')
+                elif hasattr(inner, 'vision_model') and hasattr(inner.vision_model, 'gradient_checkpointing_enable'):
+                    inner.vision_model.gradient_checkpointing_enable()
+                    enabled_components.append('Vision')
         
-        # Enable for Video Encoder
+        # Enable for Video Encoder (uses vision encoder internally)
         if hasattr(self.model, 'video_encoder') and self.model.video_encoder is not None:
+            # Video encoder typically wraps vision encoder, so this might already be covered
             if hasattr(self.model.video_encoder, 'gradient_checkpointing_enable'):
                 self.model.video_encoder.gradient_checkpointing_enable()
-                enabled_components.append('Video')
-            elif hasattr(self.model.video_encoder, 'model') and hasattr(self.model.video_encoder.model, 'gradient_checkpointing_enable'):
-                self.model.video_encoder.model.gradient_checkpointing_enable()
                 enabled_components.append('Video')
         
         # Enable for Audio Encoder
         if hasattr(self.model, 'audio_encoder') and self.model.audio_encoder is not None:
-            if hasattr(self.model.audio_encoder, 'gradient_checkpointing_enable'):
-                self.model.audio_encoder.gradient_checkpointing_enable()
+            if hasattr(self.model.audio_encoder, 'encoder') and hasattr(self.model.audio_encoder.encoder, 'gradient_checkpointing_enable'):
+                self.model.audio_encoder.encoder.gradient_checkpointing_enable()
                 enabled_components.append('Audio Encoder')
-            elif hasattr(self.model.audio_encoder, 'model') and hasattr(self.model.audio_encoder.model, 'gradient_checkpointing_enable'):
-                self.model.audio_encoder.model.gradient_checkpointing_enable()
+            elif hasattr(self.model.audio_encoder, 'gradient_checkpointing_enable'):
+                self.model.audio_encoder.gradient_checkpointing_enable()
                 enabled_components.append('Audio Encoder')
         
         # Enable for Audio Decoder
@@ -169,32 +176,31 @@ class XoronTrainer:
             if hasattr(self.model.audio_decoder, 'gradient_checkpointing_enable'):
                 self.model.audio_decoder.gradient_checkpointing_enable()
                 enabled_components.append('Audio Decoder')
-            elif hasattr(self.model.audio_decoder, 'model') and hasattr(self.model.audio_decoder.model, 'gradient_checkpointing_enable'):
-                self.model.audio_decoder.model.gradient_checkpointing_enable()
-                enabled_components.append('Audio Decoder')
         
-        # Enable for Image Generator (Diffusion)
+        # Enable for Image Generator (Diffusion) - UNet based
         if hasattr(self.model, 'generator') and self.model.generator is not None:
-            if hasattr(self.model.generator, 'gradient_checkpointing_enable'):
-                self.model.generator.gradient_checkpointing_enable()
-                enabled_components.append('Image Generator')
-            elif hasattr(self.model.generator, 'unet') and hasattr(self.model.generator.unet, 'enable_gradient_checkpointing'):
-                self.model.generator.unet.enable_gradient_checkpointing()
-                enabled_components.append('Image Generator')
+            if hasattr(self.model.generator, 'unet'):
+                if hasattr(self.model.generator.unet, 'enable_gradient_checkpointing'):
+                    self.model.generator.unet.enable_gradient_checkpointing()
+                    enabled_components.append('Image Generator')
+                elif hasattr(self.model.generator.unet, 'gradient_checkpointing_enable'):
+                    self.model.generator.unet.gradient_checkpointing_enable()
+                    enabled_components.append('Image Generator')
         
         # Enable for Video Generator
         if hasattr(self.model, 'video_generator') and self.model.video_generator is not None:
-            if hasattr(self.model.video_generator, 'gradient_checkpointing_enable'):
-                self.model.video_generator.gradient_checkpointing_enable()
-                enabled_components.append('Video Generator')
-            elif hasattr(self.model.video_generator, 'unet') and hasattr(self.model.video_generator.unet, 'enable_gradient_checkpointing'):
-                self.model.video_generator.unet.enable_gradient_checkpointing()
-                enabled_components.append('Video Generator')
+            if hasattr(self.model.video_generator, 'unet'):
+                if hasattr(self.model.video_generator.unet, 'enable_gradient_checkpointing'):
+                    self.model.video_generator.unet.enable_gradient_checkpointing()
+                    enabled_components.append('Video Generator')
+                elif hasattr(self.model.video_generator.unet, 'gradient_checkpointing_enable'):
+                    self.model.video_generator.unet.gradient_checkpointing_enable()
+                    enabled_components.append('Video Generator')
         
         if enabled_components:
             print(f"   ✅ Gradient checkpointing enabled for: {', '.join(enabled_components)}")
         else:
-            print("   ⚠️ Gradient checkpointing: No compatible components found")
+            print("   ⚠️ Gradient checkpointing: No compatible components found (may need manual setup)")
     
     @staticmethod
     def create_lora_plus_optimizer(model, base_lr: float, lr_ratio: float = 16.0, weight_decay: float = 0.01):
