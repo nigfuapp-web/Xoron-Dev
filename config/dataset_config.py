@@ -350,10 +350,22 @@ DATASET_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
 
 # Modality groups for fine-tuning - maps modality to dataset categories
 MODALITY_GROUPS: Dict[str, List[str]] = {
-    'text': ['code', 'conversation', 'tool_use', 'agentic'],
+    # Text mode includes ALL text-based datasets including synth
+    'text': [
+        'code', 'conversation', 'tool_use', 'agentic',
+        # Synth datasets for text training
+        'chain_of_thought',      # CoT reasoning
+        'anti_hallucination',    # IDK, fact-check, citations, etc.
+        'document',              # Document handling
+        'fim',                   # Fill-in-the-middle code completion
+        'git_operations',        # Commits, diffs, issues, repo context
+        'code_execution',        # Jupyter, execution traces
+        'file_operations',       # File system operations
+        'system_admin',          # Apt, Docker, SSH, databases, etc.
+    ],
     'reasoning': ['chain_of_thought'],
     'anti_hallucination': ['anti_hallucination'],  # Critical for reducing hallucinations
-    'agentic_coding': ['fim', 'git_operations', 'code_execution', 'file_operations'],
+    'agentic_coding': ['fim', 'git_operations', 'code_execution', 'file_operations', 'system_admin'],
     'image': ['image_caption', 'image_vqa', 'image_generation', 'image_editing', 'ui_to_code'],
     'video': ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert'],
     'audio': ['voice_asr', 'voice_tts'],
@@ -617,10 +629,6 @@ DATASET_CONFIGS["system_admin"] = [
         "format": "jsonl"
     },
 ]
-
-# Add system_admin to agentic_coding modality group
-MODALITY_GROUPS['agentic_coding'].append('system_admin')
-
 
 # === NEW DATASETS (Added) ===
 
