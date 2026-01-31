@@ -710,7 +710,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     print("📁 Datasets (Streaming Mode)")
     print("-" * 40)
 
-    # Create streaming dataset - no chunk limits, streams until max_per_epoch
+    # Create streaming dataset with per-dataset limits
     train_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -719,6 +719,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         image_processor=image_processor,
         max_length=training_config.max_seq_length,
         max_per_epoch=training_config.max_per_epoch,
+        max_per_dataset=training_config.max_per_dataset,
         voice_processor=voice_proc,
         max_video_frames=xoron_config.max_video_frames,
         video_size=xoron_config.generation_video_size,

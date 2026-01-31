@@ -151,6 +151,7 @@ def show_current_config(config: Dict[str, Any]):
     print(f"   Learning Rate: {training.get('learning_rate', 2e-4)}")
     print(f"   Max Seq Length: {training.get('max_seq_length', 1024)}")
     print(f"   Max Per Epoch: {training.get('max_per_epoch', 12000)}")
+    print(f"   Max Per Dataset: {training.get('max_per_dataset', 500)}")
     print(f"   Streaming: True (memory efficient)")
     print(f"   FP16: {training.get('fp16', True)}")
 
@@ -331,6 +332,7 @@ def configure_training(config: Dict[str, Any]):
     training['warmup_ratio'] = get_input("Warmup ratio", training.get('warmup_ratio', 0.03), float)
     training['max_seq_length'] = get_input("Max sequence length", training.get('max_seq_length', 1024), int)
     training['max_per_epoch'] = get_input("Max samples per epoch", training.get('max_per_epoch', 12000), int)
+    training['max_per_dataset'] = get_input("Max samples per dataset", training.get('max_per_dataset', 500), int)
     training['save_steps'] = get_input("Save checkpoint every N steps", training.get('save_steps', 500), int)
     training['logging_steps'] = get_input("Log every N steps", training.get('logging_steps', 50), int)
 

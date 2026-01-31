@@ -49,6 +49,7 @@ class TrainingConfig:
 
     # Dataset settings
     max_per_epoch: int = 10000
+    max_per_dataset: int = 500  # Prevent any single dataset from dominating the epoch
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
@@ -128,6 +129,7 @@ class TrainingConfig:
         print(f"   Final model dir: {self.final_model_dir}")
         print(f"\n📊 Dataset Settings:")
         print(f"   Max per epoch: {self.max_per_epoch:,}")
+        print(f"   Max per dataset: {self.max_per_dataset:,}")
         print(f"   Streaming: True (memory efficient)")
         print(f"\n⚙️ Training Settings:")
         print(f"   Device: {self.device}")
@@ -172,6 +174,7 @@ class TrainingConfig:
             'output_dir': self.output_dir,
             'final_model_dir': self.final_model_dir,
             'max_per_epoch': self.max_per_epoch,
+            'max_per_dataset': self.max_per_dataset,
             'batch_size': self.batch_size,
             'gradient_accumulation_steps': self.gradient_accumulation_steps,
             'learning_rate': self.learning_rate,

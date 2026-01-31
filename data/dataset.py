@@ -34,6 +34,7 @@ class TrueStreamingDataset(IterableDataset):
         image_processor,
         max_length: int = 1024,
         max_per_epoch: int = 12000,
+        max_per_dataset: int = 500,
         voice_processor=None,
         max_video_frames: int = 32,
         video_size: int = 256,
@@ -41,6 +42,7 @@ class TrueStreamingDataset(IterableDataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.max_per_epoch = max_per_epoch
+        self.max_per_dataset = max_per_dataset
         self.tokens = tokens
         self.format_functions = format_functions
         self.dataset_configs = dataset_configs
@@ -729,10 +731,11 @@ class TrueStreamingDataset(IterableDataset):
         - No samples are stored in memory
         - Media is processed on-demand and immediately returned
         - Samples are formatted using format_functions before yielding
+        - Each dataset is capped at max_per_dataset to prevent domination
         """
         samples_yielded = 0
         
-        # Create iterators for all sources
+        # Create iterators for all sources with per-dataset counters
         active_sources = []
         for source in self._dataset_sources:
             if source["is_local"]:
@@ -744,12 +747,14 @@ class TrueStreamingDataset(IterableDataset):
                 **source,
                 "iterator": iterator,
                 "exhausted": False,
+                "count": 0,  # Track samples from this dataset
             })
         
-        # Track stats
+        # Track stats by category
         type_counts = {}
+        dataset_counts = {}
         
-        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples)...", flush=True)
+        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples, {self.max_per_dataset} per dataset)...", flush=True)
         
         # Round-robin through sources
         while samples_yielded < self.max_per_epoch and active_sources:
@@ -766,6 +771,12 @@ class TrueStreamingDataset(IterableDataset):
                     sources_to_remove.append(source_idx)
                     continue
                 
+                # Check if this dataset has hit its limit
+                if source["count"] >= self.max_per_dataset:
+                    source["exhausted"] = True
+                    sources_to_remove.append(source_idx)
+                    continue
+                
                 try:
                     raw_sample = next(source["iterator"])
                     
@@ -775,9 +786,11 @@ class TrueStreamingDataset(IterableDataset):
                     if processed is not None:
                         yield processed
                         samples_yielded += 1
+                        source["count"] += 1
                         
                         dtype = source["dtype"]
                         type_counts[dtype] = type_counts.get(dtype, 0) + 1
+                        dataset_counts[source["name"]] = source["count"]
                         
                         # Log progress every 1000 samples
                         if samples_yielded % 1000 == 0:
@@ -797,8 +810,9 @@ class TrueStreamingDataset(IterableDataset):
         
         # Print final stats
         print(f"\n✅ Epoch complete: {samples_yielded} samples streamed", flush=True)
+        print(f"   📊 By category:", flush=True)
         for dtype, count in sorted(type_counts.items()):
-            print(f"   📂 {dtype}: {count} samples", flush=True)
+            print(f"      {dtype}: {count} samples", flush=True)
         
         gc.collect()
 
