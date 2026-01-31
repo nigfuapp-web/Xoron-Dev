@@ -6,22 +6,23 @@ import random
 import time
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, IterableDataset
-from typing import Dict, List, Any, Optional, Callable
+from torch.utils.data import IterableDataset
+from typing import Dict, List, Any, Optional, Callable, Iterator
 from PIL import Image
 import numpy as np
 
 
-class TrueStreamingDataset(Dataset):
+class TrueStreamingDataset(IterableDataset):
     """
-    True streaming dataset with lazy loading and on-demand media processing.
+    True streaming dataset with proper iterator-based data loading.
     
-    Key improvements for memory efficiency:
-    - Lazy initialization: First chunk is NOT loaded until first __getitem__ call
+    Key features for memory efficiency:
+    - Uses IterableDataset for true streaming (no data stored in memory)
+    - Round-robin iteration across all dataset sources
     - On-demand processing: Media (images/video/audio) is processed only when accessed
-    - Stores only raw sample metadata in chunks, not processed tensors
-    - Proper chunk rotation during iteration
-    - Memory-efficient: Only current batch's media is in memory at any time
+    - Streams until max_per_epoch samples are yielded per epoch
+    - Works with both HuggingFace streaming datasets and local JSONL files
+    - Samples are formatted using format_functions before being returned
     """
 
     def __init__(
@@ -36,11 +37,9 @@ class TrueStreamingDataset(Dataset):
         voice_processor=None,
         max_video_frames: int = 32,
         video_size: int = 256,
-        samples_per_category: Optional[Dict[str, int]] = None
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.samples_per_category = samples_per_category or {}
         self.max_per_epoch = max_per_epoch
         self.tokens = tokens
         self.format_functions = format_functions
@@ -52,27 +51,14 @@ class TrueStreamingDataset(Dataset):
 
         self.total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
 
-        # Calculate actual chunk size
-        actual_chunk_size = 0
-        for cat, configs in dataset_configs.items():
-            if configs:
-                cat_limit = self.samples_per_category.get(cat, 1)
-                actual_chunk_size += len(configs) * cat_limit
-        self.chunk_size = actual_chunk_size
-
-        self.dataset_iterators = {}
-        # Store raw sample data (metadata only, no processed tensors)
-        self.current_samples = []
-        self.samples_loaded = 0
-        self.total_chunks_loaded = 0
-        self._initialized = False
-        self._current_chunk_idx = 0
-
-        # Lazy initialization - only set up iterators, don't load data yet
+        # Dataset sources list - will be populated in _init_iterators
+        self._dataset_sources = []
+        
+        # Initialize dataset sources
         self._init_iterators()
 
     def _init_iterators(self):
-        """Initialize dataset iterators."""
+        """Initialize dataset sources for streaming."""
         from datasets import load_dataset
         
         # Import Audio for casting audio columns
@@ -82,29 +68,34 @@ class TrueStreamingDataset(Dataset):
         except ImportError:
             has_audio_feature = False
 
+        self._dataset_sources = []
+        
+        print("\n📦 Initializing streaming datasets...", flush=True)
+
         for dtype, configs in self.dataset_configs.items():
             if not configs:
                 continue
-            self.dataset_iterators[dtype] = []
             for cfg in configs:
                 max_retries = 3
                 retry_delay = 2
                 ds = None
                 
-                # Handle local JSONL files
+                # Handle local JSONL files - create streaming generator
                 if cfg.get("local", False):
-                    ds = self._load_local_dataset(cfg, dtype)
-                    if ds is not None:
-                        sample_limit = self.samples_per_category.get(dtype, 25)
-                        self.dataset_iterators[dtype].append({
+                    local_path = self._get_local_path(cfg)
+                    if local_path:
+                        self._dataset_sources.append({
+                            "dtype": dtype,
                             "name": cfg["name"],
-                            "iterator": iter(ds),
                             "config": cfg,
-                            "exhausted": False,
                             "is_local": True,
-                            "local_data": ds,  # Store original data for cycling
+                            "local_path": local_path,
+                            "hf_dataset": None,
                         })
-                        print(f"   ✅ {cfg['name']} ({len(ds)}/{sample_limit} samples)")
+                        print(f"   ✅ {cfg['name']} (local streaming)")
+                    else:
+                        print(f"   ⚠️ Local dataset not found: {cfg.get('path', '')}")
+                        print(f"      Run: python -m synth.generate_dataset to generate it")
                     continue
                 
                 # Handle remote HuggingFace datasets
@@ -113,14 +104,13 @@ class TrueStreamingDataset(Dataset):
                         load_kwargs = {
                             "path": cfg["path"],
                             "split": cfg["split"],
-                            "streaming": cfg.get("streaming", True),
+                            "streaming": True,  # Always use streaming for HF datasets
                         }
                         if "config" in cfg:
                             load_kwargs["name"] = cfg["config"]
                         ds = load_dataset(**load_kwargs)
                         
                         # For voice datasets, disable automatic audio decoding to avoid torchcodec issues
-                        # We'll decode manually using soundfile/librosa in _process_audio
                         if dtype in ['voice_asr', 'voice_tts'] and has_audio_feature:
                             try:
                                 ds = ds.cast_column('audio', Audio(decode=False))
@@ -137,51 +127,43 @@ class TrueStreamingDataset(Dataset):
                             ds = None
 
                 if ds is not None:
-                    self.dataset_iterators[dtype].append({
+                    self._dataset_sources.append({
+                        "dtype": dtype,
                         "name": cfg["name"],
-                        "iterator": iter(ds),
                         "config": cfg,
-                        "exhausted": False,
+                        "is_local": False,
+                        "local_path": None,
+                        "hf_dataset": ds,
                     })
-                    print(f"   ✅ {cfg['name']}")
-
-    def _load_local_dataset(self, cfg, dtype):
-        """Load a local JSONL dataset file with sample limit."""
-        import json
+                    print(f"   ✅ {cfg['name']} (HF streaming)")
         
+        print(f"\n📊 {len(self._dataset_sources)} dataset sources initialized", flush=True)
+    
+    def _get_local_path(self, cfg):
+        """Get the full path for a local dataset."""
         path = cfg.get("path", "")
         
-        # Handle relative paths
-        if not os.path.isabs(path):
-            # Try relative to current directory first
-            if not os.path.exists(path):
-                # Try relative to project root
-                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                path = os.path.join(project_root, path)
+        if os.path.isabs(path):
+            return path if os.path.exists(path) else None
         
-        if not os.path.exists(path):
-            print(f"   ⚠️ Local dataset not found: {path}")
-            print(f"      Run: python -m synth.generate_dataset to generate it")
-            return None
+        if os.path.exists(path):
+            return path
         
-        try:
-            # Get sample limit for this category
-            sample_limit = self.samples_per_category.get(dtype, 25)
-            
-            data = []
-            with open(path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        data.append(json.loads(line))
-                        # Stop loading once we hit the limit
-                        if len(data) >= sample_limit:
-                            break
-            
-            # Don't print here - will be printed with ✅ in _init_iterators
-            return data
-        except Exception as e:
-            print(f"   ⚠️ Failed to load local dataset {path}: {e}")
-            return None
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        full_path = os.path.join(project_root, path)
+        return full_path if os.path.exists(full_path) else None
+    
+    def _create_local_iterator(self, path):
+        """Create a streaming iterator for a local JSONL file."""
+        import json
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
     def _process_image(self, image_data) -> Optional[torch.Tensor]:
         """Process image data to tensor."""
@@ -591,279 +573,241 @@ class TrueStreamingDataset(Dataset):
         except Exception:
             return None
 
-    def _load_next_chunk(self):
-        """
-        Load next chunk of samples - stores only RAW DATA, not processed tensors.
+    def _extract_image_data(self, sample: Dict, dtype: str) -> Any:
+        """Extract raw image data from sample."""
+        image_fields = ["image", "jpg", "source_img", "original_image", "input_image", "prompt_asset"]
+        for field in image_fields:
+            if field in sample and sample[field] is not None:
+                return sample[field]
+        return None
+
+    def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
+        """Extract raw video data from sample."""
+        if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
+            return None
         
-        This is memory-efficient because:
-        - Only text and metadata are stored in memory
-        - Raw media references (paths, URLs, bytes) are stored, not processed tensors
-        - Actual media processing happens on-demand in __getitem__
-        """
-        self.current_samples = []
-        self._current_chunk_idx = 0
-
-        print(f"\n📦 Loading chunk {self.total_chunks_loaded + 1} (metadata only)...", flush=True)
+        # Direct video data fields
+        video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
+        for field in video_fields:
+            if field in sample and sample[field] is not None:
+                return sample[field]
         
-        # Track statistics
-        samples_with_image_data = 0
-        samples_with_video_data = 0
-        samples_with_audio_data = 0
+        # URL fields
+        url_fields = ["contentUrl", "video_url", "videoUrl", "url", "Video", "video1", "video2"]
+        for field in url_fields:
+            if field in sample and sample[field]:
+                url = sample[field]
+                if isinstance(url, str) and url.startswith('http'):
+                    return url
+        
+        return None
 
-        for dtype, iterators in self.dataset_iterators.items():
-            if not iterators:
-                continue
+    def _extract_audio_data(self, sample: Dict, dtype: str) -> Any:
+        """Extract raw audio data from sample."""
+        if dtype not in ['voice_asr', 'voice_tts']:
+            return None
+        
+        audio_fields = ["audio", "speech", "waveform", "audio_path", "file"]
+        for field in audio_fields:
+            if field in sample and sample[field] is not None:
+                return sample[field]
+        
+        # URL fields
+        url_fields = ["audio_url", "url", "file_url"]
+        for field in url_fields:
+            if field in sample and sample[field]:
+                url = sample[field]
+                if isinstance(url, str) and url.startswith('http'):
+                    return url
+        
+        return None
 
+    def _process_raw_sample(self, raw_sample: Dict, dtype: str, cfg: Dict) -> Optional[Dict[str, torch.Tensor]]:
+        """
+        Process a raw sample into model-ready tensors.
+        
+        This includes:
+        1. Filtering (if needed)
+        2. Extracting media data
+        3. Formatting text using format_functions
+        4. Tokenizing
+        5. Processing media on-demand
+        """
+        try:
+            # Filter samples if needed
+            if cfg.get("filter_images") and raw_sample.get("image") is None:
+                return None
+            
+            # Extract raw media data
+            raw_image_data = self._extract_image_data(raw_sample, dtype)
+            raw_video_data = self._extract_video_data(raw_sample, dtype)
+            raw_audio_data = self._extract_audio_data(raw_sample, dtype)
+            
+            # Create sample metadata (small, serializable data only for formatting)
+            sample_metadata = {}
+            for k, v in raw_sample.items():
+                if k in ["image", "video", "frames", "jpg", "jpeg", "png",
+                        "source_img", "target_img", "audio", "speech", "waveform"]:
+                    continue
+                if isinstance(v, (str, int, float, bool, type(None))):
+                    sample_metadata[k] = v
+                elif isinstance(v, (list, dict)) and len(str(v)) < 10000:
+                    sample_metadata[k] = v
+            
+            # Format the sample text using the appropriate format function
             format_fn = self.format_functions.get(dtype)
             if not format_fn:
-                continue
+                return None
+            
+            formatted = format_fn(sample_metadata)
+            if not formatted or not formatted.get("text"):
+                return None
+            
+            text = formatted["text"]
+            
+            # Tokenize
+            encoding = self.tokenizer(
+                text,
+                max_length=self.max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            
+            input_ids = encoding["input_ids"].squeeze(0)
+            attention_mask = encoding["attention_mask"].squeeze(0)
+            labels = input_ids.clone()
+            labels[attention_mask == 0] = -100
+            
+            # Process media on-demand
+            pixel_values = self._process_image(raw_image_data) if raw_image_data else None
+            if pixel_values is None:
+                pixel_values = torch.zeros(3, 224, 224)
+            
+            video_frames = None
+            if raw_video_data and dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
+                video_frames = self._process_video_frames(raw_video_data, sample_metadata)
+                if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
+                    pixel_values = video_frames[0]
+            
+            if video_frames is None:
+                video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
+            
+            audio_features = None
+            if raw_audio_data and dtype in ['voice_asr', 'voice_tts']:
+                audio_features = self._process_audio(raw_audio_data, sample_metadata)
+            
+            max_audio_len = 1000
+            if audio_features is None:
+                audio_features = torch.zeros(80, max_audio_len)
+            else:
+                if audio_features.shape[1] > max_audio_len:
+                    audio_features = audio_features[:, :max_audio_len]
+                elif audio_features.shape[1] < max_audio_len:
+                    pad = torch.zeros(audio_features.shape[0], max_audio_len - audio_features.shape[1])
+                    audio_features = torch.cat([audio_features, pad], dim=1)
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
+                "pixel_values": pixel_values,
+                "video_frames": video_frames,
+                "audio_features": audio_features,
+                "sample_type": dtype,
+            }
+        
+        except Exception:
+            return None
 
-            type_total = 0
-
-            for ds_info in iterators:
-                # Reset local datasets if exhausted (they cycle)
-                if ds_info["exhausted"] and ds_info.get("is_local", False):
-                    ds_info["iterator"] = iter(ds_info["local_data"])
-                    ds_info["exhausted"] = False
+    def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
+        """
+        Iterate through all datasets in round-robin fashion until max_per_epoch.
+        
+        This is memory-efficient because:
+        - Only one sample is processed at a time
+        - No samples are stored in memory
+        - Media is processed on-demand and immediately returned
+        - Samples are formatted using format_functions before yielding
+        """
+        samples_yielded = 0
+        
+        # Create iterators for all sources
+        active_sources = []
+        for source in self._dataset_sources:
+            if source["is_local"]:
+                iterator = self._create_local_iterator(source["local_path"])
+            else:
+                iterator = iter(source["hf_dataset"])
+            
+            active_sources.append({
+                **source,
+                "iterator": iterator,
+                "exhausted": False,
+            })
+        
+        # Track stats
+        type_counts = {}
+        
+        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples)...", flush=True)
+        
+        # Round-robin through sources
+        while samples_yielded < self.max_per_epoch and active_sources:
+            # Shuffle sources each round for variety
+            random.shuffle(active_sources)
+            
+            sources_to_remove = []
+            
+            for source_idx, source in enumerate(active_sources):
+                if samples_yielded >= self.max_per_epoch:
+                    break
                 
-                if ds_info["exhausted"]:
+                if source["exhausted"]:
+                    sources_to_remove.append(source_idx)
                     continue
-
-                ds_count = 0
-                attempts = 0
-                category_limit = self.samples_per_category.get(dtype, 1)
-                max_attempts = category_limit * 10
-
+                
                 try:
-                    while ds_count < category_limit and attempts < max_attempts:
-                        if self.samples_loaded >= self.max_per_epoch:
-                            break
-
-                        attempts += 1
-                        sample = next(ds_info["iterator"])
-
-                        cfg = ds_info["config"]
-                        if cfg.get("filter_images") and sample.get("image") is None:
-                            continue
-
-                        # Store RAW image data reference (not processed tensor)
-                        raw_image_data = None
-                        image_fields = ["image", "jpg", "source_img", "original_image", "input_image", "prompt_asset"]
-                        for img_field in image_fields:
-                            if img_field in sample and sample[img_field] is not None:
-                                raw_image_data = sample[img_field]
-                                samples_with_image_data += 1
-                                break
-
-                        # Store RAW video data reference (not processed frames)
-                        raw_video_data = None
-                        if dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
-                            # Direct video data fields
-                            video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
-                            for vid_field in video_fields:
-                                if vid_field in sample and sample[vid_field] is not None:
-                                    raw_video_data = sample[vid_field]
-                                    samples_with_video_data += 1
-                                    break
-
-                            # URL fields for video
-                            if raw_video_data is None:
-                                url_fields = ["contentUrl", "video_url", "videoUrl", "url", "Video", "video1", "video2"]
-                                for url_field in url_fields:
-                                    if url_field in sample and sample[url_field]:
-                                        url = sample[url_field]
-                                        if isinstance(url, str) and url.startswith('http'):
-                                            raw_video_data = url
-                                            samples_with_video_data += 1
-                                            break
-
-                        # Store RAW audio data reference (not processed mel)
-                        raw_audio_data = None
-                        if dtype in ['voice_asr', 'voice_tts']:
-                            audio_fields = ["audio", "speech", "waveform", "audio_path", "file"]
-                            for aud_field in audio_fields:
-                                if aud_field in sample and sample[aud_field] is not None:
-                                    raw_audio_data = sample[aud_field]
-                                    samples_with_audio_data += 1
-                                    break
-                            
-                            # Try URL fields if no audio found
-                            if raw_audio_data is None:
-                                url_fields = ["audio_url", "url", "file_url"]
-                                for url_field in url_fields:
-                                    if url_field in sample and sample[url_field]:
-                                        url = sample[url_field]
-                                        if isinstance(url, str) and url.startswith('http'):
-                                            raw_audio_data = url
-                                            samples_with_audio_data += 1
-                                            break
-
-                        # Store only serializable metadata (no tensors, no large objects)
-                        sample_metadata = {}
-                        for k, v in sample.items():
-                            # Skip large binary/tensor data - we already captured what we need
-                            if k in ["image", "video", "frames", "jpg", "jpeg", "png",
-                                    "source_img", "target_img", "audio", "speech", "waveform"]:
-                                continue
-                            # Only store simple types that are memory-efficient
-                            if isinstance(v, (str, int, float, bool, type(None))):
-                                sample_metadata[k] = v
-                            elif isinstance(v, (list, dict)) and len(str(v)) < 10000:
-                                sample_metadata[k] = v
-
-                        formatted = format_fn(sample_metadata)
-                        if formatted and formatted.get("text"):
-                            # Store raw data references, NOT processed tensors
-                            self.current_samples.append({
-                                "text": formatted["text"],
-                                "raw_image_data": raw_image_data,
-                                "raw_video_data": raw_video_data,
-                                "raw_audio_data": raw_audio_data,
-                                "sample_metadata": sample_metadata,
-                                "type": dtype
-                            })
-                            ds_count += 1
-                            type_total += 1
-                            self.samples_loaded += 1
-
+                    raw_sample = next(source["iterator"])
+                    
+                    # Process and format the sample
+                    processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
+                    
+                    if processed is not None:
+                        yield processed
+                        samples_yielded += 1
+                        
+                        dtype = source["dtype"]
+                        type_counts[dtype] = type_counts.get(dtype, 0) + 1
+                        
+                        # Log progress every 1000 samples
+                        if samples_yielded % 1000 == 0:
+                            print(f"   📈 Streamed {samples_yielded}/{self.max_per_epoch} samples", flush=True)
+                
                 except StopIteration:
-                    ds_info["exhausted"] = True
-                except Exception as e:
-                    if dtype in ['voice_asr', 'voice_tts']:
-                        print(f"      ⚠️ Error in {dtype} ({ds_info['name']}): {type(e).__name__}: {str(e)[:100]}", flush=True)
-
-            if type_total > 0:
-                print(f"  📂 {dtype}: {type_total} samples", flush=True)
-            elif dtype in ['voice_asr', 'voice_tts']:
-                print(f"  📂 {dtype}: 0 samples (check dataset format)", flush=True)
-
-            if self.samples_loaded >= self.max_per_epoch:
-                break
-
-        self.total_chunks_loaded += 1
-        self._initialized = True
-        random.shuffle(self.current_samples)
-
-        print(f"  📦 Chunk {self.total_chunks_loaded}: {len(self.current_samples)} samples (metadata only)", flush=True)
-        print(f"      With image refs: {samples_with_image_data}, video refs: {samples_with_video_data}, audio refs: {samples_with_audio_data}", flush=True)
-        print(f"      💾 Memory efficient: Media will be processed on-demand", flush=True)
-
+                    source["exhausted"] = True
+                    sources_to_remove.append(source_idx)
+                except Exception:
+                    # Skip problematic samples but continue
+                    pass
+            
+            # Remove exhausted sources
+            for idx in sorted(sources_to_remove, reverse=True):
+                if idx < len(active_sources):
+                    del active_sources[idx]
+        
+        # Print final stats
+        print(f"\n✅ Epoch complete: {samples_yielded} samples streamed", flush=True)
+        for dtype, count in sorted(type_counts.items()):
+            print(f"   📂 {dtype}: {count} samples", flush=True)
+        
         gc.collect()
 
     def __len__(self):
+        """Return max_per_epoch as the effective length."""
         return self.max_per_epoch
 
-    def _ensure_initialized(self):
-        """Ensure first chunk is loaded (lazy initialization)."""
-        if not self._initialized:
-            print("\n📥 Loading first chunk on first access...")
-            self._load_next_chunk()
-
-    def __getitem__(self, idx):
-        """
-        Get item with ON-DEMAND media processing.
-        
-        This is memory-efficient because:
-        - Media is processed only when this specific sample is accessed
-        - Processed tensors are returned but not stored in the dataset
-        - Each batch only has its own media in memory
-        """
-        # Lazy initialization - load first chunk on first access
-        self._ensure_initialized()
-        
-        # Calculate local index within current chunk
-        local_idx = idx % len(self.current_samples) if self.current_samples else 0
-        
-        # Check if we need to load a new chunk
-        # Load new chunk when we've cycled through current chunk AND have more data to load
-        if local_idx == 0 and idx > 0 and self.samples_loaded < self.max_per_epoch:
-            self._load_next_chunk()
-
-        # Return empty sample if no data available
-        if not self.current_samples:
-            return {
-                "input_ids": torch.zeros(self.max_length, dtype=torch.long),
-                "attention_mask": torch.zeros(self.max_length, dtype=torch.long),
-                "labels": torch.full((self.max_length,), -100, dtype=torch.long),
-                "pixel_values": torch.zeros(3, 224, 224),
-                "video_frames": torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size),
-                "audio_features": torch.zeros(80, 1000),
-            }
-
-        sample_idx = local_idx % len(self.current_samples)
-        sample = self.current_samples[sample_idx]
-        text = sample["text"]
-        dtype = sample.get("type", "text")
-
-        # Tokenize text
-        encoding = self.tokenizer(
-            text,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        input_ids = encoding["input_ids"].squeeze(0)
-        attention_mask = encoding["attention_mask"].squeeze(0)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
-
-        # ON-DEMAND image processing - process raw data NOW, not during chunk loading
-        pixel_values = None
-        raw_image_data = sample.get("raw_image_data")
-        if raw_image_data is not None:
-            pixel_values = self._process_image(raw_image_data)
-        
-        if pixel_values is None:
-            pixel_values = torch.zeros(3, 224, 224)
-
-        # ON-DEMAND video processing - process raw data NOW
-        video_frames = None
-        raw_video_data = sample.get("raw_video_data")
-        if raw_video_data is not None and dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
-            video_frames = self._process_video_frames(raw_video_data, sample.get("sample_metadata", {}))
-            
-            # For image_to_video, use first frame as image if no image data
-            if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
-                pixel_values = video_frames[0]
-        
-        if video_frames is None:
-            video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
-
-        # ON-DEMAND audio processing - process raw data NOW
-        audio_features = None
-        raw_audio_data = sample.get("raw_audio_data")
-        if raw_audio_data is not None and dtype in ['voice_asr', 'voice_tts']:
-            audio_features = self._process_audio(raw_audio_data, sample.get("sample_metadata", {}))
-        
-        max_audio_len = 1000
-        if audio_features is None:
-            audio_features = torch.zeros(80, max_audio_len)
-        else:
-            if audio_features.shape[1] > max_audio_len:
-                audio_features = audio_features[:, :max_audio_len]
-            elif audio_features.shape[1] < max_audio_len:
-                pad = torch.zeros(audio_features.shape[0], max_audio_len - audio_features.shape[1])
-                audio_features = torch.cat([audio_features, pad], dim=1)
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "pixel_values": pixel_values,
-            "video_frames": video_frames,
-            "audio_features": audio_features,
-            "sample_type": dtype,
-        }
-
     def reset(self):
-        """Reset dataset for new epoch."""
+        """Reset dataset for new epoch - reinitialize all sources."""
         print(f"\n🔄 Resetting dataset for new epoch...")
-        self.samples_loaded = 0
-        self.total_chunks_loaded = 0
-        self.current_samples = []
-        self._initialized = False
-        self._current_chunk_idx = 0
         self._init_iterators()
-        # Don't load chunk here - lazy loading will handle it on first access
+        gc.collect()

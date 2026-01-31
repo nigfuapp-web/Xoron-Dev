@@ -48,9 +48,7 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    chunk_size: int = 2500
     max_per_epoch: int = 10000
-    samples_per_dataset: int = 25
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
@@ -129,9 +127,8 @@ class TrainingConfig:
         print(f"   Output dir: {self.output_dir}")
         print(f"   Final model dir: {self.final_model_dir}")
         print(f"\n📊 Dataset Settings:")
-        print(f"   Chunk size: {self.chunk_size:,}")
         print(f"   Max per epoch: {self.max_per_epoch:,}")
-        print(f"   Samples per dataset: {self.samples_per_dataset}")
+        print(f"   Streaming: True (memory efficient)")
         print(f"\n⚙️ Training Settings:")
         print(f"   Device: {self.device}")
         print(f"   Batch size: {self.batch_size}")
@@ -174,9 +171,7 @@ class TrainingConfig:
             'datasets_dir': self.datasets_dir,
             'output_dir': self.output_dir,
             'final_model_dir': self.final_model_dir,
-            'chunk_size': self.chunk_size,
             'max_per_epoch': self.max_per_epoch,
-            'samples_per_dataset': self.samples_per_dataset,
             'batch_size': self.batch_size,
             'gradient_accumulation_steps': self.gradient_accumulation_steps,
             'learning_rate': self.learning_rate,

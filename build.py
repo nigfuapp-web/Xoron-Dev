@@ -705,16 +705,12 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     formatter = MultimodalFormatter(SPECIAL_TOKENS, image_processor)
     format_functions = get_format_functions(formatter)
 
-    # Calculate samples per category (only for active categories)
-    total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
-    samples_per_category = {cat: training_config.samples_per_dataset for cat in dataset_configs.keys() if dataset_configs.get(cat)}
-
     # Datasets section header
     print("\n" + "-" * 40)
-    print("📁 Datasets")
+    print("📁 Datasets (Streaming Mode)")
     print("-" * 40)
 
-    # Create dataset with filtered configs
+    # Create streaming dataset - no chunk limits, streams until max_per_epoch
     train_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -726,7 +722,6 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         voice_processor=voice_proc,
         max_video_frames=xoron_config.max_video_frames,
         video_size=xoron_config.generation_video_size,
-        samples_per_category=samples_per_category,
     )
 
     # Create collate function

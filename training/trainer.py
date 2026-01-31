@@ -573,21 +573,23 @@ class XoronTrainer:
         training_start_time = time.time()
         batch_times = []
 
-        train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=False,
-            num_workers=0,
-            collate_fn=self.collate_fn
-        )
-
         for epoch in range(self.start_epoch, self.config.num_epochs):
             print(f"\n{'='*60}")
             print(f"EPOCH {epoch + 1}/{self.config.num_epochs}")
             print(f"{'='*60}")
 
+            # Reset dataset for new epoch (except first epoch)
             if epoch > self.start_epoch:
                 self.train_dataset.reset()
+            
+            # Create DataLoader for this epoch (IterableDataset requires fresh DataLoader per epoch)
+            train_loader = DataLoader(
+                self.train_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=False,  # IterableDataset handles shuffling internally
+                num_workers=0,
+                collate_fn=self.collate_fn
+            )
 
             epoch_loss = self._train_epoch(train_loader, epoch, batch_times, training_start_time)
 
