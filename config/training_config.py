@@ -49,7 +49,7 @@ class TrainingConfig:
 
     # Dataset settings
     max_per_epoch: int = 10000
-    max_per_dataset: int = 500  # Prevent any single dataset from dominating the epoch
+    max_per_dataset: int = 100  # Prevent any single dataset from dominating the epoch
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
