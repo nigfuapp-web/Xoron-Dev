@@ -125,10 +125,76 @@ class XoronTrainer:
             self._load_checkpoint(resume_from)
     
     def _enable_gradient_checkpointing(self):
-        """Enable gradient checkpointing for memory efficiency."""
-        if hasattr(self.model, 'llm') and hasattr(self.model.llm, 'gradient_checkpointing'):
-            self.model.llm.gradient_checkpointing = True
-            print("   ✅ Gradient checkpointing enabled for LLM")
+        """Enable gradient checkpointing for memory efficiency across all components."""
+        enabled_components = []
+        
+        # Enable for LLM
+        if hasattr(self.model, 'llm') and self.model.llm is not None:
+            if hasattr(self.model.llm, 'gradient_checkpointing_enable'):
+                self.model.llm.gradient_checkpointing_enable()
+                enabled_components.append('LLM')
+            elif hasattr(self.model.llm, 'gradient_checkpointing'):
+                self.model.llm.gradient_checkpointing = True
+                enabled_components.append('LLM')
+        
+        # Enable for Vision Encoder
+        if hasattr(self.model, 'vision_encoder') and self.model.vision_encoder is not None:
+            if hasattr(self.model.vision_encoder, 'gradient_checkpointing_enable'):
+                self.model.vision_encoder.gradient_checkpointing_enable()
+                enabled_components.append('Vision')
+            elif hasattr(self.model.vision_encoder, 'model') and hasattr(self.model.vision_encoder.model, 'gradient_checkpointing_enable'):
+                self.model.vision_encoder.model.gradient_checkpointing_enable()
+                enabled_components.append('Vision')
+        
+        # Enable for Video Encoder
+        if hasattr(self.model, 'video_encoder') and self.model.video_encoder is not None:
+            if hasattr(self.model.video_encoder, 'gradient_checkpointing_enable'):
+                self.model.video_encoder.gradient_checkpointing_enable()
+                enabled_components.append('Video')
+            elif hasattr(self.model.video_encoder, 'model') and hasattr(self.model.video_encoder.model, 'gradient_checkpointing_enable'):
+                self.model.video_encoder.model.gradient_checkpointing_enable()
+                enabled_components.append('Video')
+        
+        # Enable for Audio Encoder
+        if hasattr(self.model, 'audio_encoder') and self.model.audio_encoder is not None:
+            if hasattr(self.model.audio_encoder, 'gradient_checkpointing_enable'):
+                self.model.audio_encoder.gradient_checkpointing_enable()
+                enabled_components.append('Audio Encoder')
+            elif hasattr(self.model.audio_encoder, 'model') and hasattr(self.model.audio_encoder.model, 'gradient_checkpointing_enable'):
+                self.model.audio_encoder.model.gradient_checkpointing_enable()
+                enabled_components.append('Audio Encoder')
+        
+        # Enable for Audio Decoder
+        if hasattr(self.model, 'audio_decoder') and self.model.audio_decoder is not None:
+            if hasattr(self.model.audio_decoder, 'gradient_checkpointing_enable'):
+                self.model.audio_decoder.gradient_checkpointing_enable()
+                enabled_components.append('Audio Decoder')
+            elif hasattr(self.model.audio_decoder, 'model') and hasattr(self.model.audio_decoder.model, 'gradient_checkpointing_enable'):
+                self.model.audio_decoder.model.gradient_checkpointing_enable()
+                enabled_components.append('Audio Decoder')
+        
+        # Enable for Image Generator (Diffusion)
+        if hasattr(self.model, 'generator') and self.model.generator is not None:
+            if hasattr(self.model.generator, 'gradient_checkpointing_enable'):
+                self.model.generator.gradient_checkpointing_enable()
+                enabled_components.append('Image Generator')
+            elif hasattr(self.model.generator, 'unet') and hasattr(self.model.generator.unet, 'enable_gradient_checkpointing'):
+                self.model.generator.unet.enable_gradient_checkpointing()
+                enabled_components.append('Image Generator')
+        
+        # Enable for Video Generator
+        if hasattr(self.model, 'video_generator') and self.model.video_generator is not None:
+            if hasattr(self.model.video_generator, 'gradient_checkpointing_enable'):
+                self.model.video_generator.gradient_checkpointing_enable()
+                enabled_components.append('Video Generator')
+            elif hasattr(self.model.video_generator, 'unet') and hasattr(self.model.video_generator.unet, 'enable_gradient_checkpointing'):
+                self.model.video_generator.unet.enable_gradient_checkpointing()
+                enabled_components.append('Video Generator')
+        
+        if enabled_components:
+            print(f"   ✅ Gradient checkpointing enabled for: {', '.join(enabled_components)}")
+        else:
+            print("   ⚠️ Gradient checkpointing: No compatible components found")
     
     @staticmethod
     def create_lora_plus_optimizer(model, base_lr: float, lr_ratio: float = 16.0, weight_decay: float = 0.01):
@@ -426,17 +492,44 @@ class XoronTrainer:
             print(f"   Starting from epoch {self.start_epoch + 1}, step {self.global_step}")
         else:
             print("🚀 STARTING FULL MULTIMODAL TRAINING (SOTA)")
-        print("   ✓ LLM: text/conversation/code/tools/agentic")
-        print("   ✓ Chain-of-Thought: structured reasoning with special tokens")
-        print("   ✓ Vision: image/video understanding")
-        print("   ✓ Image Diffusion: text-to-image generation")
-        print("   ✓ Video Diffusion: text-to-video + image-to-video (REAL DATA)")
-        print("   ✓ Voice: ASR (speech-to-text) + TTS (text-to-speech)")
-        print("   ✓ Image Editing: instruction-guided image editing")
         
-        # Show trainable components
+        # Get trainable and frozen components
         trainable = self.model.get_trainable_component_names()
-        print(f"   🔥 Trainable components: {', '.join(trainable)}")
+        frozen = self.model.get_frozen_component_names()
+        
+        # Define component descriptions
+        component_descriptions = {
+            'llm': 'LLM: text/conversation/code/tools/agentic',
+            'vision': 'Vision: image understanding',
+            'video': 'Video: video understanding',
+            'audio': 'Voice: ASR (speech-to-text) + TTS (text-to-speech)',
+            'image_generation': 'Image Diffusion: text-to-image generation',
+            'video_generation': 'Video Diffusion: text-to-video + image-to-video',
+            'cross_attention': 'Cross-Attention: multimodal fusion',
+            'modality_markers': 'Modality Markers: special tokens',
+        }
+        
+        # Show component status with 🔥 for trainable and ❄️ for frozen
+        for component, description in component_descriptions.items():
+            if component in trainable:
+                print(f"   🔥 {description}")
+            elif component in frozen:
+                print(f"   ❄️ {description}")
+        
+        # Also show Chain-of-Thought and Image Editing if LLM is trainable
+        if 'llm' in trainable:
+            print("   🔥 Chain-of-Thought: structured reasoning with special tokens")
+            print("   🔥 Image Editing: instruction-guided image editing")
+        elif 'llm' in frozen:
+            print("   ❄️ Chain-of-Thought: structured reasoning with special tokens")
+            print("   ❄️ Image Editing: instruction-guided image editing")
+        
+        # Summary line
+        trainable_str = ', '.join(trainable) if trainable else 'none'
+        frozen_str = ', '.join(frozen) if frozen else 'none'
+        print(f"\n   🔥 Trainable: {trainable_str}")
+        if frozen:
+            print(f"   ❄️ Frozen: {frozen_str}")
         print("=" * 60)
 
         print(f"\n📐 Generation sizes:")

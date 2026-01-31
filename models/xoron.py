@@ -857,3 +857,38 @@ class XoronMultimodalModel(nn.Module):
                                 trainable.append(group_name)
                                 break
         return trainable
+
+    def get_frozen_component_names(self) -> List[str]:
+        """Get list of component groups that are frozen (no trainable parameters)."""
+        frozen = []
+        for group_name, attr_names in COMPONENT_GROUPS.items():
+            has_component = False
+            is_trainable = False
+            for attr_name in attr_names:
+                if hasattr(self, attr_name):
+                    component = getattr(self, attr_name)
+                    if component is not None:
+                        has_component = True
+                        if isinstance(component, nn.Parameter):
+                            if component.requires_grad:
+                                is_trainable = True
+                                break
+                        elif isinstance(component, nn.Module):
+                            if any(p.requires_grad for p in component.parameters()):
+                                is_trainable = True
+                                break
+            # Only add to frozen if component exists but is not trainable
+            if has_component and not is_trainable:
+                frozen.append(group_name)
+        return frozen
+
+    def get_component_status(self) -> tuple:
+        """
+        Get tuple of (trainable_components, frozen_components) for display.
+        
+        Returns:
+            tuple: (list of trainable component names, list of frozen component names)
+        """
+        trainable = self.get_trainable_component_names()
+        frozen = self.get_frozen_component_names()
+        return trainable, frozen

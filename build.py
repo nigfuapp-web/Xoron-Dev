@@ -588,6 +588,18 @@ def apply_freezing(model, freeze_components: List[str], train_only_components: L
         print(f"\n❄️ Frozen components: {freeze_components}")
 
 
+def print_component_status(model):
+    """Print component training status with 🔥 for trainable and ❄️ for frozen."""
+    trainable, frozen = model.get_component_status()
+    
+    trainable_str = ', '.join(trainable) if trainable else 'none'
+    frozen_str = ', '.join(frozen) if frozen else 'none'
+    
+    print(f"\n🔥 Trainable: {trainable_str}")
+    if frozen:
+        print(f"❄️ Frozen: {frozen_str}")
+
+
 def setup_tokenizer(model, xoron_config):
     """Setup tokenizer with special tokens and custom chat template."""
     print("\n📝 Setting up tokenizer...")
@@ -672,21 +684,22 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     print("⚙️ TRAINING SETUP")
     print("=" * 60)
 
-    # Load image processor
-    print("\n🖼️ Loading image processor...")
+    # Load image processor section
+    print("\n" + "-" * 40)
+    print("🖼️ Loading image processor...")
     try:
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch16")
-        print("   ✅ Image processor ready")
+        print("✅ Image processor ready")
     except:
         image_processor = None
-        print("   ⚠️ Image processor not available")
+        print("⚠️ Image processor not available")
+    print("-" * 40)
 
     # Initialize voice processor
     try:
         voice_proc = VoiceProcessor()
     except:
         voice_proc = None
-        print("   ⚠️ Voice processor not available")
 
     # Setup formatter
     formatter = MultimodalFormatter(SPECIAL_TOKENS, image_processor)
@@ -695,6 +708,11 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     # Calculate samples per category (only for active categories)
     total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
     samples_per_category = {cat: training_config.samples_per_dataset for cat in dataset_configs.keys() if dataset_configs.get(cat)}
+
+    # Datasets section header
+    print("\n" + "-" * 40)
+    print("📁 Datasets")
+    print("-" * 40)
 
     # Create dataset with filtered configs
     train_dataset = TrueStreamingDataset(
@@ -827,7 +845,7 @@ def run_build_and_train(
         apply_freezing(model, freeze_components or [], train_only_components or [])
     
     print(f"\n✅ Model ready")
-    print(f"   Trainable components: {model.get_trainable_component_names()}")
+    print_component_status(model)
 
     # Setup tokenizer
     tokenizer = setup_tokenizer(model, xoron_config)
@@ -964,7 +982,7 @@ def run_hf_training(
         apply_freezing(model, freeze_components or [], train_only_components or [])
     
     print(f"\n✅ Model ready")
-    print(f"   Trainable components: {model.get_trainable_component_names()}")
+    print_component_status(model)
 
     # Setup tokenizer
     tokenizer = setup_tokenizer(model, xoron_config)
