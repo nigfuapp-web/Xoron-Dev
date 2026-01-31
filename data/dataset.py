@@ -101,6 +101,8 @@ class TrueStreamingDataset(Dataset):
                             "iterator": iter(ds),
                             "config": cfg,
                             "exhausted": False,
+                            "is_local": True,
+                            "local_data": ds,  # Store original data for cycling
                         })
                         print(f"   ✅ {cfg['name']} ({len(ds)}/{sample_limit} samples)")
                     continue
@@ -619,6 +621,11 @@ class TrueStreamingDataset(Dataset):
             type_total = 0
 
             for ds_info in iterators:
+                # Reset local datasets if exhausted (they cycle)
+                if ds_info["exhausted"] and ds_info.get("is_local", False):
+                    ds_info["iterator"] = iter(ds_info["local_data"])
+                    ds_info["exhausted"] = False
+                
                 if ds_info["exhausted"]:
                     continue
 
