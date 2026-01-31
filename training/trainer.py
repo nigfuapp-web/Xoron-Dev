@@ -522,12 +522,16 @@ class XoronTrainer:
             elif component in frozen:
                 print(f"   ❄️ {description}")
         
-        # Also show Chain-of-Thought and Image Editing if LLM is trainable
+        # Chain-of-Thought depends on LLM being trainable
         if 'llm' in trainable:
             print("   🔥 Chain-of-Thought: structured reasoning with special tokens")
-            print("   🔥 Image Editing: instruction-guided image editing")
         elif 'llm' in frozen:
             print("   ❄️ Chain-of-Thought: structured reasoning with special tokens")
+        
+        # Image Editing depends on BOTH llm AND image_generation being trainable
+        if 'llm' in trainable and 'image_generation' in trainable:
+            print("   🔥 Image Editing: instruction-guided image editing")
+        elif 'image_generation' in frozen or 'llm' in frozen:
             print("   ❄️ Image Editing: instruction-guided image editing")
         
         # Summary line
