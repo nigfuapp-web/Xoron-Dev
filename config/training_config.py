@@ -48,9 +48,9 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    chunk_size: int = 300
-    max_per_epoch: int = 2100
-    samples_per_dataset: int = 3
+    chunk_size: int = 5000
+    max_per_epoch: int = 10000
+    samples_per_dataset: int = 50
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
