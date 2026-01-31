@@ -93,15 +93,16 @@ class TrueStreamingDataset(Dataset):
                 
                 # Handle local JSONL files
                 if cfg.get("local", False):
-                    ds = self._load_local_dataset(cfg)
+                    ds = self._load_local_dataset(cfg, dtype)
                     if ds is not None:
+                        sample_limit = self.samples_per_category.get(dtype, 25)
                         self.dataset_iterators[dtype].append({
                             "name": cfg["name"],
                             "iterator": iter(ds),
                             "config": cfg,
                             "exhausted": False,
                         })
-                        print(f"   ✅ {cfg['name']} (local)")
+                        print(f"   ✅ {cfg['name']} ({len(ds)}/{sample_limit} samples)")
                     continue
                 
                 # Handle remote HuggingFace datasets
@@ -142,8 +143,8 @@ class TrueStreamingDataset(Dataset):
                     })
                     print(f"   ✅ {cfg['name']}")
 
-    def _load_local_dataset(self, cfg):
-        """Load a local JSONL dataset file."""
+    def _load_local_dataset(self, cfg, dtype):
+        """Load a local JSONL dataset file with sample limit."""
         import json
         
         path = cfg.get("path", "")
@@ -162,13 +163,19 @@ class TrueStreamingDataset(Dataset):
             return None
         
         try:
+            # Get sample limit for this category
+            sample_limit = self.samples_per_category.get(dtype, 25)
+            
             data = []
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         data.append(json.loads(line))
+                        # Stop loading once we hit the limit
+                        if len(data) >= sample_limit:
+                            break
             
-            print(f"   📂 Loaded {len(data)} samples from {path}")
+            # Don't print here - will be printed with ✅ in _init_iterators
             return data
         except Exception as e:
             print(f"   ⚠️ Failed to load local dataset {path}: {e}")
