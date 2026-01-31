@@ -1,0 +1,370 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1600" width="1920" height="1600">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="50%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="barGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1920" height="1600" fill="#0a0a0f"/>
+  
+  <!-- Grid pattern -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#151520" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1920" height="1600" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Title -->
+  <text x="960" y="55" text-anchor="middle" fill="url(#titleGrad)" font-family="Inter, -apple-system, sans-serif" font-size="42" font-weight="bold">
+    📊 XORON-DEV SYNTHETIC DATASETS
+  </text>
+  <text x="960" y="90" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="18">
+    High-Quality Training Data for Agentic AI
+  </text>
+  
+  <!-- Stats bar -->
+  <rect x="60" y="115" width="1800" height="60" rx="12" fill="#12121a" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
+  
+  <!-- Stats content -->
+  <text x="100" y="152" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">
+    📁 35 Datasets
+  </text>
+  <text x="280" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
+    |  📝 70,000 Total Samples
+  </text>
+  <text x="560" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
+    |  🗂️ 6 Categories
+  </text>
+  <text x="790" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
+    |  🔄 100% Unique Samples
+  </text>
+  <text x="1060" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
+    |  🏷️ Available Tools Tokens Included
+  </text>
+
+
+  <!-- Shell &amp; Execution -->
+  <rect x="60" y="200" width="586" height="300" rx="12" fill="#12121a" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="201" width="584" height="48" rx="11" fill="#3b82f6" opacity="0.15"/>
+  <text x="80" y="232" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">⚡ Shell &amp; Execution</text>
+  <text x="626" y="232" text-anchor="end" fill="#3b82f6" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">5 datasets</text>
+
+
+  <rect x="72" y="260" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="276" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Shell Execution</text>
+  <text x="82" y="291" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Basic shell commands</text>
+  <text x="614" y="284" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="305" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="321" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Shell Error</text>
+  <text x="82" y="336" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Error handling patterns</text>
+  <text x="614" y="329" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="350" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="366" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Shell Timeout</text>
+  <text x="82" y="381" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Timeout scenarios</text>
+  <text x="614" y="374" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="395" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="411" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Multi Step Execution</text>
+  <text x="82" y="426" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Multi-command workflows</text>
+  <text x="614" y="419" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="440" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="456" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Execution</text>
+  <text x="82" y="471" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Code execution results</text>
+  <text x="614" y="464" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- Anti-Hallucination -->
+  <rect x="60" y="520" width="586" height="480" rx="12" fill="#12121a" stroke="#ef4444" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="521" width="584" height="48" rx="11" fill="#ef4444" opacity="0.15"/>
+  <text x="80" y="552" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">🛡️ Anti-Hallucination</text>
+  <text x="626" y="552" text-anchor="end" fill="#ef4444" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">9 datasets</text>
+
+
+  <rect x="72" y="580" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="596" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Uncertainty</text>
+  <text x="82" y="611" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Uncertainty expression</text>
+  <text x="614" y="604" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="625" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="641" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Idk</text>
+  <text x="82" y="656" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">&quot;I don&apos;t know&quot; responses</text>
+  <text x="614" y="649" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="670" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="686" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Fact Check</text>
+  <text x="82" y="701" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Fact verification</text>
+  <text x="614" y="694" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="715" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="731" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Grounded Response</text>
+  <text x="82" y="746" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Grounded answers</text>
+  <text x="614" y="739" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="760" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="776" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Self Correction</text>
+  <text x="82" y="791" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Self-correction</text>
+  <text x="614" y="784" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="805" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="821" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Confidence Level</text>
+  <text x="82" y="836" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Confidence scoring</text>
+  <text x="614" y="829" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="850" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="866" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Citation</text>
+  <text x="82" y="881" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Source citations</text>
+  <text x="614" y="874" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="895" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="911" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Retrieval Grounded</text>
+  <text x="82" y="926" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">RAG grounding</text>
+  <text x="614" y="919" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="72" y="940" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="82" y="956" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Knowledge Cutoff</text>
+  <text x="82" y="971" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Knowledge boundaries</text>
+  <text x="614" y="964" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- Code &amp; Programming -->
+  <rect x="666" y="200" width="586" height="345" rx="12" fill="#12121a" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="667" y="201" width="584" height="48" rx="11" fill="#10b981" opacity="0.15"/>
+  <text x="686" y="232" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">💻 Code &amp; Programming</text>
+  <text x="1232" y="232" text-anchor="end" fill="#10b981" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">6 datasets</text>
+
+
+  <rect x="678" y="260" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="276" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Python Script</text>
+  <text x="688" y="291" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Python script execution</text>
+  <text x="1220" y="284" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="305" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="321" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Jupyter</text>
+  <text x="688" y="336" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Jupyter notebook cells</text>
+  <text x="1220" y="329" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="350" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="366" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Debugging</text>
+  <text x="688" y="381" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Debug &amp; fix scenarios</text>
+  <text x="1220" y="374" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="395" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="411" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">File Ops</text>
+  <text x="688" y="426" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">File operations</text>
+  <text x="1220" y="419" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="440" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="456" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Edit Lines</text>
+  <text x="688" y="471" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Line-level edits</text>
+  <text x="1220" y="464" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="485" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="501" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Fim</text>
+  <text x="688" y="516" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Fill-in-the-middle</text>
+  <text x="1220" y="509" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- Documents &amp; Reasoning -->
+  <rect x="666" y="565" width="586" height="165" rx="12" fill="#12121a" stroke="#06b6d4" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="667" y="566" width="584" height="48" rx="11" fill="#06b6d4" opacity="0.15"/>
+  <text x="686" y="597" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">📄 Documents &amp; Reasoning</text>
+  <text x="1232" y="597" text-anchor="end" fill="#06b6d4" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">2 datasets</text>
+
+
+  <rect x="678" y="625" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="641" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Document</text>
+  <text x="688" y="656" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Document processing</text>
+  <text x="1220" y="649" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="678" y="670" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="688" y="686" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Cot</text>
+  <text x="688" y="701" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Chain-of-thought</text>
+  <text x="1220" y="694" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- Git &amp; Version Control -->
+  <rect x="1272" y="200" width="586" height="255" rx="12" fill="#12121a" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="1273" y="201" width="584" height="48" rx="11" fill="#8b5cf6" opacity="0.15"/>
+  <text x="1292" y="232" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">📦 Git &amp; Version Control</text>
+  <text x="1838" y="232" text-anchor="end" fill="#8b5cf6" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">4 datasets</text>
+
+
+  <rect x="1284" y="260" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="276" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Commit</text>
+  <text x="1294" y="291" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Commit messages</text>
+  <text x="1826" y="284" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="305" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="321" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Diff</text>
+  <text x="1294" y="336" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Code diffs</text>
+  <text x="1826" y="329" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="350" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="366" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Issue</text>
+  <text x="1294" y="381" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">GitHub issues</text>
+  <text x="1826" y="374" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="395" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="411" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Repo Context</text>
+  <text x="1294" y="426" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Repository context</text>
+  <text x="1826" y="419" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- System Administration -->
+  <rect x="1272" y="475" width="586" height="480" rx="12" fill="#12121a" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="1273" y="476" width="584" height="48" rx="11" fill="#f59e0b" opacity="0.15"/>
+  <text x="1292" y="507" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">🔧 System Administration</text>
+  <text x="1838" y="507" text-anchor="end" fill="#f59e0b" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">9 datasets</text>
+
+
+  <rect x="1284" y="535" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="551" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Apt Install</text>
+  <text x="1294" y="566" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Package installation</text>
+  <text x="1826" y="559" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="580" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="596" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Docker</text>
+  <text x="1294" y="611" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Docker operations</text>
+  <text x="1826" y="604" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="625" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="641" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Database Setup</text>
+  <text x="1294" y="656" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Database configuration</text>
+  <text x="1826" y="649" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="670" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="686" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Webserver Setup</text>
+  <text x="1294" y="701" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Web server setup</text>
+  <text x="1826" y="694" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="715" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="731" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Ssh Setup</text>
+  <text x="1294" y="746" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">SSH configuration</text>
+  <text x="1826" y="739" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="760" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="776" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Monitoring</text>
+  <text x="1294" y="791" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">System monitoring</text>
+  <text x="1826" y="784" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="805" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="821" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Download</text>
+  <text x="1294" y="836" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">File downloads</text>
+  <text x="1826" y="829" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="850" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="866" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Language Setup</text>
+  <text x="1294" y="881" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Language environments</text>
+  <text x="1826" y="874" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <rect x="1284" y="895" width="562" height="38" rx="8" fill="#1a1a25"/>
+  <text x="1294" y="911" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">Desktop Setup</text>
+  <text x="1294" y="926" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Desktop configuration</text>
+  <text x="1826" y="919" text-anchor="end" fill="#22d3ee" font-family="monospace" font-size="12" font-weight="bold">2,000</text>
+
+
+  <!-- Features Section -->
+  <rect x="60" y="1420" width="1800" height="120" rx="12" fill="#12121a" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
+  <text x="960" y="1450" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="bold">
+    ✨ Dataset Features
+  </text>
+  
+  <!-- Feature items -->
+  <g transform="translate(120, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">🔄 Parameterized</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Unique samples via generation</text>
+  </g>
+  
+  <g transform="translate(350, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">🏷️ Special Tokens</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Structured output format</text>
+  </g>
+  
+  <g transform="translate(580, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">🔧 Available Tools</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Tool definitions in 50% samples</text>
+  </g>
+  
+  <g transform="translate(810, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">⚖️ Weighted Loss</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Higher weight for key tokens</text>
+  </g>
+  
+  <g transform="translate(1040, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">📦 JSONL Format</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Easy to load and process</text>
+  </g>
+  
+  <g transform="translate(1270, 1475)">
+    <rect width="200" height="50" rx="8" fill="#1a1a25"/>
+    <text x="100" y="22" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="bold">🎯 Task-Specific</text>
+    <text x="100" y="40" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10">Targeted training data</text>
+  </g>
+
+
+  <!-- Footer -->
+  <text x="960" y="1575" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12">
+    Xoron-Dev Synthetic Datasets • Generated with unique_generator.py • github.com/nigfuapp-web/Xoron-Dev
+  </text>
+</svg>

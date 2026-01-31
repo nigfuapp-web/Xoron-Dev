@@ -1,0 +1,710 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 3200" width="1920" height="3200">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#ec4899"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1920" height="3200" fill="#0a0a0f"/>
+  
+  <!-- Grid pattern -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#151520" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1920" height="3200" fill="url(#grid)" opacity="0.5"/>
+  
+  <!-- Title -->
+  <text x="960" y="60" text-anchor="middle" fill="url(#titleGrad)" font-family="Inter, -apple-system, sans-serif" font-size="42" font-weight="bold">
+    🏷️ XORON-DEV SPECIAL TOKENS
+  </text>
+  <text x="960" y="95" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="18">
+    400+ Structured Tokens for Multimodal AI
+  </text>
+  
+  <!-- Stats bar -->
+  <rect x="60" y="120" width="1800" height="50" rx="10" fill="#12121a" stroke="#2a2a3a" stroke-width="1"/>
+  <text x="90" y="152" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">
+    📊 Total Tokens: 433
+  </text>
+  <text x="310" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="14">
+    |  🗂️ Categories: 15
+  </text>
+  <text x="540" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="14">
+    |  🎯 Weighted Loss: CoT 1.5x, Tools 1.3x, Anti-Hallucination 1.2x
+  </text>
+
+
+  <!-- Sequence Control Card -->
+  <rect x="60" y="190" width="870" height="275" rx="12" fill="#12121a" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="191" width="868" height="44" rx="11" fill="#3b82f6" opacity="0.15"/>
+  <text x="80" y="220" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔄 Sequence Control</text>
+  
+  <!-- Description -->
+  <text x="80" y="252" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Control sequence boundaries and text flow</text>
+
+
+  <rect x="75" y="270" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="288" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|bos|&gt;</text>
+
+  <rect x="485" y="270" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="288" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|eos|&gt;</text>
+
+  <rect x="75" y="305" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="323" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|pad|&gt;</text>
+
+  <rect x="485" y="305" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="323" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prompt|&gt;</text>
+
+  <rect x="75" y="340" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="358" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/prompt|&gt;</text>
+
+  <rect x="485" y="340" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="358" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|text|&gt;</text>
+
+  <rect x="75" y="375" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="393" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/text|&gt;</text>
+
+  <rect x="485" y="375" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="393" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|response|&gt;</text>
+
+  <rect x="75" y="410" width="400" height="28" rx="6" fill="#1a1a25" stroke="#3b82f6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="428" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/response|&gt;</text>
+
+  <!-- Conversation Card -->
+  <rect x="960" y="190" width="870" height="205" rx="12" fill="#12121a" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="191" width="868" height="44" rx="11" fill="#8b5cf6" opacity="0.15"/>
+  <text x="980" y="220" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">💬 Conversation</text>
+  
+  <!-- Description -->
+  <text x="980" y="252" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Multi-turn conversation structure</text>
+
+
+  <rect x="975" y="270" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="288" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|system|&gt;</text>
+
+  <rect x="1385" y="270" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="288" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/system|&gt;</text>
+
+  <rect x="975" y="305" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="323" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|user|&gt;</text>
+
+  <rect x="1385" y="305" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="323" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/user|&gt;</text>
+
+  <rect x="975" y="340" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="358" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|assistant|&gt;</text>
+
+  <rect x="1385" y="340" width="400" height="28" rx="6" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="358" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/assistant|&gt;</text>
+
+  <!-- Memory &amp; Context Card -->
+  <rect x="60" y="495" width="870" height="275" rx="12" fill="#12121a" stroke="#06b6d4" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="496" width="868" height="44" rx="11" fill="#06b6d4" opacity="0.15"/>
+  <text x="80" y="525" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🧠 Memory &amp; Context</text>
+  
+  <!-- Description -->
+  <text x="80" y="557" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Long-term memory and context management</text>
+
+
+  <rect x="75" y="575" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="593" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|memory|&gt;</text>
+
+  <rect x="485" y="575" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="593" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/memory|&gt;</text>
+
+  <rect x="75" y="610" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="628" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|working_memory|&gt;</text>
+
+  <rect x="485" y="610" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="628" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/working_memory|&gt;</text>
+
+  <rect x="75" y="645" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="663" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|summary|&gt;</text>
+
+  <rect x="485" y="645" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="663" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/summary|&gt;</text>
+
+  <rect x="75" y="680" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="698" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|user_profile|&gt;</text>
+
+  <rect x="485" y="680" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="698" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/user_profile|&gt;</text>
+
+  <rect x="75" y="715" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="733" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|session|&gt;</text>
+
+  <rect x="485" y="715" width="400" height="28" rx="6" fill="#1a1a25" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="733" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/session|&gt;</text>
+
+  <!-- Fill-in-Middle (FIM) Card -->
+  <rect x="960" y="425" width="870" height="170" rx="12" fill="#12121a" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="426" width="868" height="44" rx="11" fill="#f59e0b" opacity="0.15"/>
+  <text x="980" y="455" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">✏️ Fill-in-Middle (FIM)</text>
+  
+  <!-- Description -->
+  <text x="980" y="487" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Code completion and ghost text</text>
+
+
+  <rect x="975" y="505" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f59e0b" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="523" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|fim_prefix|&gt;</text>
+
+  <rect x="1385" y="505" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f59e0b" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="523" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|fim_middle|&gt;</text>
+
+  <rect x="975" y="540" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f59e0b" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="558" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|fim_suffix|&gt;</text>
+
+  <rect x="1385" y="540" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f59e0b" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="558" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|fim_pad|&gt;</text>
+
+  <!-- Git &amp; Version Control Card -->
+  <rect x="60" y="800" width="870" height="345" rx="12" fill="#12121a" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="801" width="868" height="44" rx="11" fill="#10b981" opacity="0.15"/>
+  <text x="80" y="830" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📦 Git &amp; Version Control</text>
+  
+  <!-- Description -->
+  <text x="80" y="862" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Git operations and repository context</text>
+
+
+  <rect x="75" y="880" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="898" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|commit_before|&gt;</text>
+
+  <rect x="485" y="880" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="898" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|commit_after|&gt;</text>
+
+  <rect x="75" y="915" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="933" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|commit_msg|&gt;</text>
+
+  <rect x="485" y="915" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="933" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|diff|&gt;</text>
+
+  <rect x="75" y="950" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="968" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/diff|&gt;</text>
+
+  <rect x="485" y="950" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="968" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|diff_add|&gt;</text>
+
+  <rect x="75" y="985" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1003" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|diff_del|&gt;</text>
+
+  <rect x="485" y="985" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1003" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|reponame|&gt;</text>
+
+  <rect x="75" y="1020" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1038" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|branch|&gt;</text>
+
+  <rect x="485" y="1020" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1038" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|issue|&gt;</text>
+
+  <rect x="75" y="1055" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1073" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/issue|&gt;</text>
+
+  <rect x="485" y="1055" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1073" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|pr|&gt;</text>
+
+  <rect x="75" y="1090" width="400" height="28" rx="6" fill="#1a1a25" stroke="#10b981" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1108" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/pr|&gt;</text>
+
+  <!-- Code Execution Card -->
+  <rect x="960" y="625" width="870" height="310" rx="12" fill="#12121a" stroke="#ec4899" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="626" width="868" height="44" rx="11" fill="#ec4899" opacity="0.15"/>
+  <text x="980" y="655" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">⚡ Code Execution</text>
+  
+  <!-- Description -->
+  <text x="980" y="687" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Jupyter notebooks and shell execution</text>
+
+
+  <rect x="975" y="705" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="723" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|jupyter|&gt;</text>
+
+  <rect x="1385" y="705" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="723" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/jupyter|&gt;</text>
+
+  <rect x="975" y="740" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="758" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|jupyter_code|&gt;</text>
+
+  <rect x="1385" y="740" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="758" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|jupyter_output|&gt;</text>
+
+  <rect x="975" y="775" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="793" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|jupyter_error|&gt;</text>
+
+  <rect x="1385" y="775" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="793" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|exec|&gt;</text>
+
+  <rect x="975" y="810" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="828" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/exec|&gt;</text>
+
+  <rect x="1385" y="810" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="828" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|exec_result|&gt;</text>
+
+  <rect x="975" y="845" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="863" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|exec_error|&gt;</text>
+
+  <rect x="1385" y="845" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="863" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|exec_timeout|&gt;</text>
+
+  <rect x="975" y="880" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ec4899" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="898" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|empty_output|&gt;</text>
+
+  <!-- File Operations Card -->
+  <rect x="60" y="1175" width="870" height="345" rx="12" fill="#12121a" stroke="#f97316" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="1176" width="868" height="44" rx="11" fill="#f97316" opacity="0.15"/>
+  <text x="80" y="1205" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📁 File Operations</text>
+  
+  <!-- Description -->
+  <text x="80" y="1237" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Agentic file system operations</text>
+
+
+  <rect x="75" y="1255" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1273" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|add_file|&gt;</text>
+
+  <rect x="485" y="1255" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1273" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|delete_file|&gt;</text>
+
+  <rect x="75" y="1290" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1308" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|rename_file|&gt;</text>
+
+  <rect x="485" y="1290" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1308" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|edit_file|&gt;</text>
+
+  <rect x="75" y="1325" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1343" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|read_file|&gt;</text>
+
+  <rect x="485" y="1325" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1343" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file_content|&gt;</text>
+
+  <rect x="75" y="1360" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1378" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|filepath|&gt;</text>
+
+  <rect x="485" y="1360" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1378" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/filepath|&gt;</text>
+
+  <rect x="75" y="1395" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1413" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|edit_range|&gt;</text>
+
+  <rect x="485" y="1395" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1413" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|line|&gt;</text>
+
+  <rect x="75" y="1430" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1448" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|replace|&gt;</text>
+
+  <rect x="485" y="1430" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1448" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|insert_before|&gt;</text>
+
+  <rect x="75" y="1465" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f97316" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1483" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|insert_after|&gt;</text>
+
+  <!-- Document Types Card -->
+  <rect x="960" y="965" width="870" height="310" rx="12" fill="#12121a" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="966" width="868" height="44" rx="11" fill="#6366f1" opacity="0.15"/>
+  <text x="980" y="995" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📄 Document Types</text>
+  
+  <!-- Description -->
+  <text x="980" y="1027" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Document and file type markers</text>
+
+
+  <rect x="975" y="1045" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1063" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|doc|&gt;</text>
+
+  <rect x="1385" y="1045" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1063" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/doc|&gt;</text>
+
+  <rect x="975" y="1080" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1098" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:txt|&gt;</text>
+
+  <rect x="1385" y="1080" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1098" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:md|&gt;</text>
+
+  <rect x="975" y="1115" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1133" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:json|&gt;</text>
+
+  <rect x="1385" y="1115" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1133" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:yaml|&gt;</text>
+
+  <rect x="975" y="1150" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1168" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:html|&gt;</text>
+
+  <rect x="1385" y="1150" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1168" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:css|&gt;</text>
+
+  <rect x="975" y="1185" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1203" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|file:csv|&gt;</text>
+
+  <rect x="1385" y="1185" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1203" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|filename|&gt;</text>
+
+  <rect x="975" y="1220" width="400" height="28" rx="6" fill="#1a1a25" stroke="#6366f1" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1238" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/filename|&gt;</text>
+
+  <!-- Multimodal Card -->
+  <rect x="60" y="1550" width="870" height="345" rx="12" fill="#12121a" stroke="#14b8a6" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="1551" width="868" height="44" rx="11" fill="#14b8a6" opacity="0.15"/>
+  <text x="80" y="1580" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎨 Multimodal</text>
+  
+  <!-- Description -->
+  <text x="80" y="1612" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Image, video, and spatial markers</text>
+
+
+  <rect x="75" y="1630" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1648" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|image|&gt;</text>
+
+  <rect x="485" y="1630" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1648" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/image|&gt;</text>
+
+  <rect x="75" y="1665" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1683" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|video|&gt;</text>
+
+  <rect x="485" y="1665" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1683" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/video|&gt;</text>
+
+  <rect x="75" y="1700" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1718" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|gen_image|&gt;</text>
+
+  <rect x="485" y="1700" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1718" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/gen_image|&gt;</text>
+
+  <rect x="75" y="1735" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1753" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|gen_video|&gt;</text>
+
+  <rect x="485" y="1735" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1753" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/gen_video|&gt;</text>
+
+  <rect x="75" y="1770" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1788" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|timestamp|&gt;</text>
+
+  <rect x="485" y="1770" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1788" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|keyframe|&gt;</text>
+
+  <rect x="75" y="1805" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1823" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|scene_change|&gt;</text>
+
+  <rect x="485" y="1805" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="1823" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|bbox|&gt;</text>
+
+  <rect x="75" y="1840" width="400" height="28" rx="6" fill="#1a1a25" stroke="#14b8a6" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="1858" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|region|&gt;</text>
+
+  <!-- Tool Calling Card -->
+  <rect x="960" y="1305" width="870" height="310" rx="12" fill="#12121a" stroke="#ef4444" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="1306" width="868" height="44" rx="11" fill="#ef4444" opacity="0.15"/>
+  <text x="980" y="1335" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔧 Tool Calling</text>
+  
+  <!-- Description -->
+  <text x="980" y="1367" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Function calling and tool use</text>
+
+
+  <rect x="975" y="1385" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1403" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|tool_call|&gt;</text>
+
+  <rect x="1385" y="1385" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1403" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/tool_call|&gt;</text>
+
+  <rect x="975" y="1420" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1438" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|tool_result|&gt;</text>
+
+  <rect x="1385" y="1420" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1438" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/tool_result|&gt;</text>
+
+  <rect x="975" y="1455" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1473" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|function_name|&gt;</text>
+
+  <rect x="1385" y="1455" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1473" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|function_args|&gt;</text>
+
+  <rect x="975" y="1490" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1508" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|available_tools|&gt;</text>
+
+  <rect x="1385" y="1490" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1508" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/available_tools|&gt;</text>
+
+  <rect x="975" y="1525" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1543" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|tool_def|&gt;</text>
+
+  <rect x="1385" y="1525" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1543" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|tool_error|&gt;</text>
+
+  <rect x="975" y="1560" width="400" height="28" rx="6" fill="#1a1a25" stroke="#ef4444" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1578" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|tool_success|&gt;</text>
+
+  <!-- Code Languages Card -->
+  <rect x="60" y="1925" width="870" height="310" rx="12" fill="#12121a" stroke="#84cc16" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="1926" width="868" height="44" rx="11" fill="#84cc16" opacity="0.15"/>
+  <text x="80" y="1955" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">💻 Code Languages</text>
+  
+  <!-- Description -->
+  <text x="80" y="1987" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Programming language markers</text>
+
+
+  <rect x="75" y="2005" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2023" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|code|&gt;</text>
+
+  <rect x="485" y="2005" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2023" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/code|&gt;</text>
+
+  <rect x="75" y="2040" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2058" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:python|&gt;</text>
+
+  <rect x="485" y="2040" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2058" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:javascript|&gt;</text>
+
+  <rect x="75" y="2075" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2093" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:typescript|&gt;</text>
+
+  <rect x="485" y="2075" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2093" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:rust|&gt;</text>
+
+  <rect x="75" y="2110" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2128" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:go|&gt;</text>
+
+  <rect x="485" y="2110" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2128" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:java|&gt;</text>
+
+  <rect x="75" y="2145" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2163" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:cpp|&gt;</text>
+
+  <rect x="485" y="2145" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2163" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:shell|&gt;</text>
+
+  <rect x="75" y="2180" width="400" height="28" rx="6" fill="#1a1a25" stroke="#84cc16" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2198" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|lang:sql|&gt;</text>
+
+  <!-- Chain-of-Thought Card -->
+  <rect x="960" y="1645" width="870" height="345" rx="12" fill="#12121a" stroke="#a855f7" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="1646" width="868" height="44" rx="11" fill="#a855f7" opacity="0.15"/>
+  <text x="980" y="1675" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">💭 Chain-of-Thought</text>
+  
+  <!-- Description -->
+  <text x="980" y="1707" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Reasoning and inner monologue</text>
+
+
+  <rect x="975" y="1725" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1743" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|think|&gt;</text>
+
+  <rect x="1385" y="1725" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1743" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/think|&gt;</text>
+
+  <rect x="975" y="1760" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1778" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|observation|&gt;</text>
+
+  <rect x="1385" y="1760" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1778" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|step|&gt;</text>
+
+  <rect x="975" y="1795" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1813" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|reflection|&gt;</text>
+
+  <rect x="1385" y="1795" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1813" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|hypothesis|&gt;</text>
+
+  <rect x="975" y="1830" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1848" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|conclusion|&gt;</text>
+
+  <rect x="1385" y="1830" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1848" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|plan|&gt;</text>
+
+  <rect x="975" y="1865" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1883" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/plan|&gt;</text>
+
+  <rect x="1385" y="1865" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1883" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|critique|&gt;</text>
+
+  <rect x="975" y="1900" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1918" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|analysis|&gt;</text>
+
+  <rect x="1385" y="1900" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1918" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|decision|&gt;</text>
+
+  <rect x="975" y="1935" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="1953" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|because|&gt;</text>
+
+  <rect x="1385" y="1935" width="400" height="28" rx="6" fill="#1a1a25" stroke="#a855f7" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="1953" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|therefore|&gt;</text>
+
+  <!-- Anti-Hallucination Card -->
+  <rect x="60" y="2265" width="870" height="345" rx="12" fill="#12121a" stroke="#f43f5e" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="2266" width="868" height="44" rx="11" fill="#f43f5e" opacity="0.15"/>
+  <text x="80" y="2295" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🛡️ Anti-Hallucination</text>
+  
+  <!-- Description -->
+  <text x="80" y="2327" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Uncertainty and citation tokens</text>
+
+
+  <rect x="75" y="2345" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2363" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|confidence:high|&gt;</text>
+
+  <rect x="485" y="2345" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2363" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|confidence:medium|&gt;</text>
+
+  <rect x="75" y="2380" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2398" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|confidence:low|&gt;</text>
+
+  <rect x="485" y="2380" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2398" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|uncertain|&gt;</text>
+
+  <rect x="75" y="2415" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2433" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|unknown|&gt;</text>
+
+  <rect x="485" y="2415" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2433" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|need_verify|&gt;</text>
+
+  <rect x="75" y="2450" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2468" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|speculative|&gt;</text>
+
+  <rect x="485" y="2450" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2468" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|verify|&gt;</text>
+
+  <rect x="75" y="2485" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2503" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|fact_check|&gt;</text>
+
+  <rect x="485" y="2485" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2503" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|self_correct|&gt;</text>
+
+  <rect x="75" y="2520" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2538" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|cite|&gt;</text>
+
+  <rect x="485" y="2520" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2538" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|source|&gt;</text>
+
+  <rect x="75" y="2555" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2573" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|grounded|&gt;</text>
+
+  <rect x="485" y="2555" width="400" height="28" rx="6" fill="#1a1a25" stroke="#f43f5e" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2573" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|knowledge_cutoff|&gt;</text>
+
+  <!-- Audio &amp; Speech Card -->
+  <rect x="960" y="2020" width="870" height="345" rx="12" fill="#12121a" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="961" y="2021" width="868" height="44" rx="11" fill="#22c55e" opacity="0.15"/>
+  <text x="980" y="2050" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎤 Audio &amp; Speech</text>
+  
+  <!-- Description -->
+  <text x="980" y="2082" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">TTS emotions and prosody control</text>
+
+
+  <rect x="975" y="2100" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2118" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|listen|&gt;</text>
+
+  <rect x="1385" y="2100" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2118" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/listen|&gt;</text>
+
+  <rect x="975" y="2135" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2153" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|speak|&gt;</text>
+
+  <rect x="1385" y="2135" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2153" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/speak|&gt;</text>
+
+  <rect x="975" y="2170" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2188" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|audio|&gt;</text>
+
+  <rect x="1385" y="2170" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2188" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/audio|&gt;</text>
+
+  <rect x="975" y="2205" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:neutral|&gt;</text>
+
+  <rect x="1385" y="2205" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:happy|&gt;</text>
+
+  <rect x="975" y="2240" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:sad|&gt;</text>
+
+  <rect x="1385" y="2240" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:angry|&gt;</text>
+
+  <rect x="975" y="2275" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2293" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:fast|&gt;</text>
+
+  <rect x="1385" y="2275" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1585" y="2293" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:slow|&gt;</text>
+
+  <rect x="975" y="2310" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
+  <text x="1175" y="2328" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:emphasis|&gt;</text>
+
+  <!-- Structured Data Card -->
+  <rect x="60" y="2640" width="870" height="310" rx="12" fill="#12121a" stroke="#0ea5e9" stroke-width="2" filter="url(#shadow)"/>
+  
+  <!-- Header gradient overlay -->
+  <rect x="61" y="2641" width="868" height="44" rx="11" fill="#0ea5e9" opacity="0.15"/>
+  <text x="80" y="2670" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📊 Structured Data</text>
+  
+  <!-- Description -->
+  <text x="80" y="2702" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Tables, schemas, and data formats</text>
+
+
+  <rect x="75" y="2720" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2738" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|table|&gt;</text>
+
+  <rect x="485" y="2720" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2738" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/table|&gt;</text>
+
+  <rect x="75" y="2755" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2773" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|row|&gt;</text>
+
+  <rect x="485" y="2755" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2773" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|cell|&gt;</text>
+
+  <rect x="75" y="2790" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2808" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|schema|&gt;</text>
+
+  <rect x="485" y="2790" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2808" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|json|&gt;</text>
+
+  <rect x="75" y="2825" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2843" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|yaml|&gt;</text>
+
+  <rect x="485" y="2825" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2843" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|list|&gt;</text>
+
+  <rect x="75" y="2860" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2878" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|item|&gt;</text>
+
+  <rect x="485" y="2860" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2878" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|kv|&gt;</text>
+
+  <rect x="75" y="2895" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="275" y="2913" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|key|&gt;</text>
+
+  <rect x="485" y="2895" width="400" height="28" rx="6" fill="#1a1a25" stroke="#0ea5e9" stroke-width="1" opacity="0.8"/>
+  <text x="685" y="2913" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|value|&gt;</text>
+
+  <!-- Footer -->
+  <text x="960" y="3170" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12">
+    Xoron-Dev Special Tokens • Structured Output for Multimodal AI • github.com/nigfuapp-web/Xoron-Dev
+  </text>
+</svg>

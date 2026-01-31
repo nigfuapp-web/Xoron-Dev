@@ -1,0 +1,1065 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4a9eff"/>
+      <stop offset="50%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#ec4899"/>
+    </linearGradient>
+    
+    <linearGradient id="sunsetGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="30%" stop-color="#7c3aed"/>
+      <stop offset="50%" stop-color="#f97316"/>
+      <stop offset="70%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#fef3c7"/>
+    </linearGradient>
+    
+    <linearGradient id="codeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#08080d"/>
+      <stop offset="100%" stop-color="#0f0f1a"/>
+    </linearGradient>
+    
+    <!-- Filters -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    
+    <!-- Clip paths -->
+    <clipPath id="chatClip"><rect x="20" y="75" width="540" height="720"/></clipPath>
+    
+    <!-- Arrow marker -->
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#06b6d4"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1600" height="900" fill="#0a0a12"/>
+  
+  <!-- Subtle grid -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#2a2a3a" stroke-width="0.3" opacity="0.3"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  
+  <!-- Header -->
+  <rect x="0" y="0" width="1600" height="55" fill="#13131f"/>
+  <rect x="0" y="53" width="1600" height="2" fill="url(#headerGrad)"/>
+  <text x="25" y="35" fill="#e8e8f0" font-family="SF Pro Display, -apple-system, sans-serif" font-size="22" font-weight="700">
+    <tspan fill="#4a9eff">XORON</tspan><tspan fill="#e8e8f0">-DEV</tspan>
+  </text>
+  <text x="180" y="35" fill="#8888a0" font-family="SF Pro Display, -apple-system, sans-serif" font-size="14">
+    Multimodal AI Demo
+  </text>
+  
+  <!-- Scene indicator -->
+  <g id="sceneIndicator" transform="translate(1300, 20)">
+    <rect width="280" height="30" rx="15" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+    
+    <!-- Scene dots -->
+    <circle cx="25" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.017;0.167" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="70" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.183;0.333" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="115" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.350;0.500" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="160" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.517;0.667" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="205" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.683;0.833" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="250" cy="15" r="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+      <animate attributeName="fill" values="#0a0a12;#06b6d4;#0a0a12" dur="60s" 
+               keyTimes="0;0.850;1.000" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  
+  <!-- Timer -->
+  <g transform="translate(1520, 25)">
+    <text fill="#8888a0" font-family="SF Mono, monospace" font-size="12">
+      <tspan id="timer">60s</tspan>
+    </text>
+  </g>
+  
+  <!-- ==================== LEFT PANEL: CHAT INTERFACE ==================== -->
+  
+  <g id="chatPanel">
+    <rect x="15" y="65" width="550" height="820" rx="16" fill="#13131f" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
+    
+    <!-- Chat header -->
+    <rect x="15" y="65" width="550" height="50" rx="16" fill="#08080d"/>
+    <rect x="15" y="99" width="550" height="16" fill="#08080d"/>
+    <circle cx="45" cy="90" r="8" fill="#22c55e"/>
+    <text x="65" y="95" fill="#e8e8f0" font-family="SF Pro Display, sans-serif" font-size="15" font-weight="600">Xoron Assistant</text>
+    <text x="200" y="95" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="11">● Online</text>
+    
+    <!-- Chat content area with clipping -->
+    <g clip-path="url(#chatClip)">
+
+      <!-- SCENE 1: Code Generation (0-10s) -->
+      <g id="scene1Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="1;1;0;0;0;0;0;0;0;0;0;0" keyTimes="0;0.15;0.167;0.33;0.5;0.67;0.833;1;1;1;1;1"/>
+        
+        <!-- User message -->
+        <g>
+          <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.5s" fill="freeze"/>
+          <rect x="180" y="130" width="360" height="55" rx="16" fill="#2563eb"/>
+          <text x="200" y="155" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">Write a Python function to calculate</text>
+          <text x="200" y="173" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">the nth Fibonacci number efficiently</text>
+        </g>
+        
+        <!-- Typing indicator -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1;1;0" dur="10s" repeatCount="indefinite" keyTimes="0;0.15;0.2;0.35;0.4"/>
+          <rect x="35" y="200" width="70" height="35" rx="12" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+          <circle cx="52" cy="217" r="4" fill="#8888a0"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" repeatCount="indefinite"/></circle>
+          <circle cx="67" cy="217" r="4" fill="#8888a0"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.2s" repeatCount="indefinite"/></circle>
+          <circle cx="82" cy="217" r="4" fill="#8888a0"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.4s" repeatCount="indefinite"/></circle>
+        </g>
+        
+        <!-- Assistant response -->
+        <g>
+          <animate attributeName="opacity" values="0;0;0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.3;0.35;0.4;0.45"/>
+          <rect x="35" y="200" width="400" height="220" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          <text x="50" y="225" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13">Here's an efficient fibonacci function using memoization:</text>
+          
+          <!-- Code block -->
+          <rect x="45" y="240" width="380" height="160" rx="10" fill="url(#codeGrad)" stroke="#2a2a3a" stroke-width="1"/>
+          <text x="55" y="265" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">def</text>
+          <text x="85" y="265" fill="#06b6d4" font-family="SF Mono, monospace" font-size="12">fibonacci</text>
+          <text x="160" y="265" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">(n, memo={}):</text>
+          <text x="65" y="285" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">if</text>
+          <text x="85" y="285" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">n in memo:</text>
+          <text x="75" y="305" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">return</text>
+          <text x="125" y="305" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">memo[n]</text>
+          <text x="65" y="325" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">if</text>
+          <text x="85" y="325" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">n &lt;= 1:</text>
+          <text x="75" y="345" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">return</text>
+          <text x="125" y="345" fill="#f59e0b" font-family="SF Mono, monospace" font-size="12">n</text>
+          <text x="65" y="365" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">memo[n] = fibonacci(n-1) + fibonacci(n-2)</text>
+          <text x="65" y="385" fill="#a855f7" font-family="SF Mono, monospace" font-size="12">return</text>
+          <text x="115" y="385" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="12">memo[n]</text>
+        </g>
+      </g>
+
+      <!-- SCENE 2: Text to Image (10-20s) -->
+      <g id="scene2Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="0;0;1;1;0;0;0;0;0;0;0;0" keyTimes="0;0.15;0.167;0.32;0.333;0.5;0.67;0.833;1;1;1;1"/>
+        
+        <!-- User message -->
+        <g>
+          <rect x="120" y="130" width="420" height="40" rx="16" fill="#2563eb"/>
+          <text x="140" y="155" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">Generate an image of a magical sunset over mountains</text>
+        </g>
+        
+        <!-- Assistant response with generated image -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.4;0.5"/>
+          <rect x="35" y="190" width="320" height="280" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          <text x="50" y="215" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13">Here's your generated image:</text>
+          
+          <!-- Generated image -->
+          <rect x="50" y="230" width="280" height="180" rx="12" fill="url(#sunsetGrad)"/>
+          <!-- Mountain silhouettes -->
+          <polygon points="50,410 120,340 180,380 240,320 330,410" fill="#1e1b4b" opacity="0.9"/>
+          <polygon points="50,410 100,360 150,390 200,350 250,380 330,410" fill="#312e81" opacity="0.7"/>
+          
+          <!-- Sun -->
+          <circle cx="190" cy="300" r="30" fill="#fbbf24" filter="url(#glow)">
+            <animate attributeName="cy" values="310;300;310" dur="3s" repeatCount="indefinite"/>
+          </circle>
+          
+          <text x="50" y="435" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="11">✓ Generated with MobileDiffusion (256×256)</text>
+          <text x="50" y="455" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">20 diffusion steps • CFG 7.5</text>
+        </g>
+      </g>
+
+      <!-- SCENE 3: Image to Text (20-30s) -->
+      <g id="scene3Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="0;0;0;0;1;1;0;0;0;0;0;0" keyTimes="0;0.167;0.32;0.333;0.35;0.49;0.5;0.67;0.833;1;1;1"/>
+        
+        <!-- User message with image -->
+        <g>
+          <rect x="150" y="130" width="390" height="120" rx="16" fill="#2563eb"/>
+          <text x="170" y="155" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">What can you see in this image?</text>
+          <rect x="170" y="170" width="100" height="65" rx="8" fill="#08080d"/>
+          <text x="220" y="210" text-anchor="middle" font-size="28">🏔️</text>
+        </g>
+        
+        <!-- Assistant analysis -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.4;0.5"/>
+          <rect x="35" y="270" width="450" height="180" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          <text x="50" y="295" fill="#06b6d4" font-family="SF Pro Text, sans-serif" font-size="12" font-weight="600">🔍 Image Analysis</text>
+          
+          <text x="50" y="325" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13">I can see a stunning mountain landscape featuring:</text>
+          <text x="60" y="350" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• Snow-capped mountain peaks</text>
+          <text x="60" y="370" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• A clear blue sky with scattered clouds</text>
+          <text x="60" y="390" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• Pine forest in the foreground</text>
+          <text x="60" y="410" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• A serene alpine lake reflecting the mountains</text>
+          
+          <text x="50" y="440" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">Confidence: 96% • SigLIP Vision Encoder</text>
+        </g>
+      </g>
+
+      <!-- SCENE 4: Text to Audio (30-40s) -->
+      <g id="scene4Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="0;0;0;0;0;0;1;1;0;0;0;0" keyTimes="0;0.167;0.333;0.49;0.5;0.52;0.54;0.65;0.667;0.833;1;1"/>
+        
+        <!-- User message -->
+        <g>
+          <rect x="100" y="130" width="440" height="55" rx="16" fill="#2563eb"/>
+          <text x="120" y="152" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">Read this text aloud with a cheerful tone:</text>
+          <text x="120" y="172" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">"Welcome to Xoron, your AI assistant!"</text>
+        </g>
+        
+        <!-- Assistant audio response -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.4;0.5"/>
+          <rect x="35" y="205" width="380" height="200" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          <text x="50" y="230" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13">🔊 Generated Audio:</text>
+          
+          <!-- Audio player -->
+          <rect x="50" y="250" width="340" height="60" rx="10" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+          <circle cx="85" cy="280" r="18" fill="#22c55e"/>
+          <polygon points="80,272 80,288 93,280" fill="#e8e8f0"/>
+          
+          <!-- Waveform -->
+          <g transform="translate(115, 260)">
+            <rect x="0" y="16" width="5" height="8" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="8;16;8" dur="0.4s" repeatCount="indefinite" begin="0.0s"/>
+              <animate attributeName="y" values="16;12;16" dur="0.4s" repeatCount="indefinite" begin="0.0s"/>
+            </rect>
+            <rect x="9" y="10" width="5" height="20" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="20;28;20" dur="0.4s" repeatCount="indefinite" begin="0.03s"/>
+              <animate attributeName="y" values="10;6;10" dur="0.4s" repeatCount="indefinite" begin="0.03s"/>
+            </rect>
+            <rect x="18" y="4" width="5" height="32" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="32;40;32" dur="0.4s" repeatCount="indefinite" begin="0.06s"/>
+              <animate attributeName="y" values="4;0;4" dur="0.4s" repeatCount="indefinite" begin="0.06s"/>
+            </rect>
+            <rect x="27" y="5" width="5" height="30" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="30;38;30" dur="0.4s" repeatCount="indefinite" begin="0.09s"/>
+              <animate attributeName="y" values="5;1;5" dur="0.4s" repeatCount="indefinite" begin="0.09s"/>
+            </rect>
+            <rect x="36" y="-1" width="5" height="42" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="42;50;42" dur="0.4s" repeatCount="indefinite" begin="0.12s"/>
+              <animate attributeName="y" values="-1;-5;-1" dur="0.4s" repeatCount="indefinite" begin="0.12s"/>
+            </rect>
+            <rect x="45" y="15" width="5" height="10" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="10;18;10" dur="0.4s" repeatCount="indefinite" begin="0.15s"/>
+              <animate attributeName="y" values="15;11;15" dur="0.4s" repeatCount="indefinite" begin="0.15s"/>
+            </rect>
+            <rect x="54" y="9" width="5" height="22" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="22;30;22" dur="0.4s" repeatCount="indefinite" begin="0.18s"/>
+              <animate attributeName="y" values="9;5;9" dur="0.4s" repeatCount="indefinite" begin="0.18s"/>
+            </rect>
+            <rect x="63" y="10" width="5" height="20" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="20;28;20" dur="0.4s" repeatCount="indefinite" begin="0.21s"/>
+              <animate attributeName="y" values="10;6;10" dur="0.4s" repeatCount="indefinite" begin="0.21s"/>
+            </rect>
+            <rect x="72" y="4" width="5" height="32" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="32;40;32" dur="0.4s" repeatCount="indefinite" begin="0.24s"/>
+              <animate attributeName="y" values="4;0;4" dur="0.4s" repeatCount="indefinite" begin="0.24s"/>
+            </rect>
+            <rect x="81" y="-2" width="5" height="44" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="44;52;44" dur="0.4s" repeatCount="indefinite" begin="0.27s"/>
+              <animate attributeName="y" values="-2;-6;-2" dur="0.4s" repeatCount="indefinite" begin="0.27s"/>
+            </rect>
+            <rect x="90" y="14" width="5" height="12" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="12;20;12" dur="0.4s" repeatCount="indefinite" begin="0.3s"/>
+              <animate attributeName="y" values="14;10;14" dur="0.4s" repeatCount="indefinite" begin="0.3s"/>
+            </rect>
+            <rect x="99" y="8" width="5" height="24" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="24;32;24" dur="0.4s" repeatCount="indefinite" begin="0.32999999999999996s"/>
+              <animate attributeName="y" values="8;4;8" dur="0.4s" repeatCount="indefinite" begin="0.32999999999999996s"/>
+            </rect>
+            <rect x="108" y="9" width="5" height="22" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="22;30;22" dur="0.4s" repeatCount="indefinite" begin="0.36s"/>
+              <animate attributeName="y" values="9;5;9" dur="0.4s" repeatCount="indefinite" begin="0.36s"/>
+            </rect>
+            <rect x="117" y="3" width="5" height="34" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="34;42;34" dur="0.4s" repeatCount="indefinite" begin="0.39s"/>
+              <animate attributeName="y" values="3;-1;3" dur="0.4s" repeatCount="indefinite" begin="0.39s"/>
+            </rect>
+            <rect x="126" y="4" width="5" height="32" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="32;40;32" dur="0.4s" repeatCount="indefinite" begin="0.42s"/>
+              <animate attributeName="y" values="4;0;4" dur="0.4s" repeatCount="indefinite" begin="0.42s"/>
+            </rect>
+            <rect x="135" y="13" width="5" height="14" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="14;22;14" dur="0.4s" repeatCount="indefinite" begin="0.44999999999999996s"/>
+              <animate attributeName="y" values="13;9;13" dur="0.4s" repeatCount="indefinite" begin="0.44999999999999996s"/>
+            </rect>
+            <rect x="144" y="7" width="5" height="26" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="26;34;26" dur="0.4s" repeatCount="indefinite" begin="0.48s"/>
+              <animate attributeName="y" values="7;3;7" dur="0.4s" repeatCount="indefinite" begin="0.48s"/>
+            </rect>
+            <rect x="153" y="8" width="5" height="24" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="24;32;24" dur="0.4s" repeatCount="indefinite" begin="0.51s"/>
+              <animate attributeName="y" values="8;4;8" dur="0.4s" repeatCount="indefinite" begin="0.51s"/>
+            </rect>
+            <rect x="162" y="2" width="5" height="36" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="36;44;36" dur="0.4s" repeatCount="indefinite" begin="0.54s"/>
+              <animate attributeName="y" values="2;-2;2" dur="0.4s" repeatCount="indefinite" begin="0.54s"/>
+            </rect>
+            <rect x="171" y="3" width="5" height="34" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="34;42;34" dur="0.4s" repeatCount="indefinite" begin="0.57s"/>
+              <animate attributeName="y" values="3;-1;3" dur="0.4s" repeatCount="indefinite" begin="0.57s"/>
+            </rect>
+            <rect x="180" y="12" width="5" height="16" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="16;24;16" dur="0.4s" repeatCount="indefinite" begin="0.6s"/>
+              <animate attributeName="y" values="12;8;12" dur="0.4s" repeatCount="indefinite" begin="0.6s"/>
+            </rect>
+            <rect x="189" y="13" width="5" height="14" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="14;22;14" dur="0.4s" repeatCount="indefinite" begin="0.63s"/>
+              <animate attributeName="y" values="13;9;13" dur="0.4s" repeatCount="indefinite" begin="0.63s"/>
+            </rect>
+            <rect x="198" y="7" width="5" height="26" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="26;34;26" dur="0.4s" repeatCount="indefinite" begin="0.6599999999999999s"/>
+              <animate attributeName="y" values="7;3;7" dur="0.4s" repeatCount="indefinite" begin="0.6599999999999999s"/>
+            </rect>
+            <rect x="207" y="1" width="5" height="38" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="38;46;38" dur="0.4s" repeatCount="indefinite" begin="0.69s"/>
+              <animate attributeName="y" values="1;-3;1" dur="0.4s" repeatCount="indefinite" begin="0.69s"/>
+            </rect>
+            <rect x="216" y="2" width="5" height="36" rx="2" fill="#06b6d4">
+              <animate attributeName="height" values="36;44;36" dur="0.4s" repeatCount="indefinite" begin="0.72s"/>
+              <animate attributeName="y" values="2;-2;2" dur="0.4s" repeatCount="indefinite" begin="0.72s"/>
+            </rect>
+          </g>
+          
+          <text x="50" y="335" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11">Duration: 3.2s • 16kHz</text>
+          
+          <!-- Emotion tag -->
+          <rect x="50" y="355" width="120" height="28" rx="8" fill="#f59e0b" opacity="0.2" stroke="#f59e0b" stroke-width="1"/>
+          <text x="110" y="374" text-anchor="middle" fill="#f59e0b" font-family="SF Pro Text, sans-serif" font-size="11">🎭 Cheerful</text>
+          
+          <text x="180" y="374" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Neural TTS with emotion control</text>
+        </g>
+      </g>
+
+      <!-- SCENE 5: Tool Calling (40-50s) -->
+      <g id="scene5Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="0;0;0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.167;0.333;0.5;0.65;0.667;0.69;0.71;0.72;0.82;0.833;1"/>
+        
+        <!-- User message -->
+        <g>
+          <rect x="80" y="130" width="460" height="55" rx="16" fill="#2563eb"/>
+          <text x="100" y="152" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">Search the web for the latest Python 3.12 features</text>
+          <text x="100" y="172" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">and summarize them for me</text>
+        </g>
+        
+        <!-- Tool execution -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.3;0.4"/>
+          <rect x="35" y="205" width="480" height="280" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          
+          <!-- Tool call indicator -->
+          <rect x="50" y="220" width="140" height="28" rx="8" fill="#a855f7" opacity="0.2" stroke="#a855f7" stroke-width="1"/>
+          <text x="120" y="239" text-anchor="middle" fill="#a855f7" font-family="SF Pro Text, sans-serif" font-size="11">🔧 Using Tool</text>
+          
+          <!-- Tool call code -->
+          <rect x="50" y="260" width="440" height="80" rx="8" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+          <text x="60" y="280" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|tool_call|&gt;</text>
+          <text x="70" y="298" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">web_search("Python 3.12 new features")</text>
+          <text x="60" y="316" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|/tool_call|&gt;</text>
+          <text x="60" y="334" fill="#22c55e" font-family="SF Mono, monospace" font-size="10">&lt;|tool_result|&gt; Found 5 results...</text>
+          
+          <!-- Summary -->
+          <text x="50" y="365" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13" font-weight="600">Python 3.12 Key Features:</text>
+          <text x="60" y="390" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• Improved error messages with suggestions</text>
+          <text x="60" y="410" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• Per-interpreter GIL (PEP 684)</text>
+          <text x="60" y="430" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• Type parameter syntax (PEP 695)</text>
+          <text x="60" y="450" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="12">• F-string improvements</text>
+          
+          <text x="50" y="475" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Search completed • 3 sources cited</text>
+        </g>
+      </g>
+
+      <!-- SCENE 6: Video Generation (50-60s) -->
+      <g id="scene6Chat">
+        <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+                 values="0;0;0;0;0;0;0;0;0;0;1;1" keyTimes="0;0.167;0.333;0.5;0.667;0.82;0.833;0.85;0.87;0.89;0.9;1"/>
+        
+        <!-- User message -->
+        <g>
+          <rect x="100" y="130" width="440" height="55" rx="16" fill="#2563eb"/>
+          <text x="120" y="152" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">Create a short video of a butterfly landing</text>
+          <text x="120" y="172" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="14">on a flower in slow motion</text>
+        </g>
+        
+        <!-- Video generation response -->
+        <g>
+          <animate attributeName="opacity" values="0;0;1" dur="10s" repeatCount="indefinite" keyTimes="0;0.4;0.5"/>
+          <rect x="35" y="205" width="420" height="300" rx="16" fill="#166534" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+          <text x="50" y="230" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="13">🎬 Generated Video:</text>
+          
+          <!-- Video frames preview -->
+          <g transform="translate(50, 245)">
+            <rect x="0" y="0" width="85" height="60" rx="6" fill="#08080d" stroke="#2a2a3a" stroke-width="1">
+              <animate attributeName="stroke" values="#2a2a3a;#06b6d4;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.0s"/>
+            </rect>
+            <text x="42" y="35" text-anchor="middle" font-size="20">🦋</text>
+            <text x="42" y="55" text-anchor="middle" fill="#555566" font-size="8">Frame 1</text>
+            <rect x="95" y="0" width="85" height="60" rx="6" fill="#08080d" stroke="#2a2a3a" stroke-width="1">
+              <animate attributeName="stroke" values="#2a2a3a;#06b6d4;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.5s"/>
+            </rect>
+            <text x="137" y="35" text-anchor="middle" font-size="20">🦋</text>
+            <text x="137" y="55" text-anchor="middle" fill="#555566" font-size="8">Frame 5</text>
+            <rect x="190" y="0" width="85" height="60" rx="6" fill="#08080d" stroke="#2a2a3a" stroke-width="1">
+              <animate attributeName="stroke" values="#2a2a3a;#06b6d4;#2a2a3a" dur="2s" repeatCount="indefinite" begin="1.0s"/>
+            </rect>
+            <text x="232" y="35" text-anchor="middle" font-size="20">🦋</text>
+            <text x="232" y="55" text-anchor="middle" fill="#555566" font-size="8">Frame 9</text>
+            <rect x="285" y="0" width="85" height="60" rx="6" fill="#08080d" stroke="#2a2a3a" stroke-width="1">
+              <animate attributeName="stroke" values="#2a2a3a;#06b6d4;#2a2a3a" dur="2s" repeatCount="indefinite" begin="1.5s"/>
+            </rect>
+            <text x="327" y="35" text-anchor="middle" font-size="20">🦋</text>
+            <text x="327" y="55" text-anchor="middle" fill="#555566" font-size="8">Frame 13</text>
+          </g>
+          
+          <!-- Progress bar -->
+          <rect x="50" y="320" width="380" height="8" rx="4" fill="#08080d"/>
+          <rect x="50" y="320" width="0" height="8" rx="4" fill="#06b6d4">
+            <animate attributeName="width" values="0;380" dur="3s" repeatCount="indefinite"/>
+          </rect>
+          
+          <text x="50" y="350" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11">16 frames @ 256×256 • 4 fps</text>
+          
+          <!-- Video specs -->
+          <rect x="50" y="370" width="380" height="60" rx="8" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+          <text x="60" y="390" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="11">Temporal Diffusion Model</text>
+          <text x="60" y="410" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Motion consistency: 94% • Style coherence: 97%</text>
+          <text x="60" y="425" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Video generated successfully</text>
+        </g>
+      </g>
+
+    </g>
+    
+    <!-- Input box -->
+    <rect x="25" y="805" width="530" height="45" rx="22" fill="#08080d" stroke="#2a2a3a" stroke-width="1"/>
+    <text x="50" y="833" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="14">Type a message...</text>
+    <circle cx="520" cy="827" r="16" fill="#4a9eff"/>
+    <text x="520" y="833" text-anchor="middle" fill="#e8e8f0" font-size="14">↑</text>
+  </g>
+  
+  <!-- ==================== RIGHT PANEL: BACKEND VISUALIZATION ==================== -->
+  
+  <g id="backendPanel">
+    <rect x="580" y="65" width="1000" height="820" rx="16" fill="#13131f" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
+    
+    <!-- Backend header -->
+    <rect x="580" y="65" width="1000" height="50" rx="16" fill="#08080d"/>
+    <rect x="580" y="99" width="1000" height="16" fill="#08080d"/>
+    <text x="610" y="95" fill="#e8e8f0" font-family="SF Pro Display, sans-serif" font-size="15" font-weight="600">⚙️ Backend Processing Pipeline</text>
+
+    <!-- Backend Scene 1: Code Generation -->
+    <g id="backend1">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="1;1;0;0;0;0;0;0;0;0;0;0" keyTimes="0;0.15;0.167;0.33;0.5;0.67;0.833;1;1;1;1;1"/>
+      
+      <!-- Step 1: Tokenization -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="90" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+        </rect>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Tokenization</text>
+        <text x="15" y="50" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|user|&gt;</text>
+        <text x="75" y="50" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">Write a Python function...</text>
+        <text x="15" y="70" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|/user|&gt;</text>
+        <text x="15" y="85" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Qwen2.5 Tokenizer • 151,643 vocab</text>
+      </g>
+      
+      <!-- Arrow -->
+      <path d="M 910,175 L 940,175" stroke="#06b6d4" stroke-width="2" marker-end="url(#arrow)">
+        <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" repeatCount="indefinite"/>
+      </path>
+      
+      <!-- Step 2: Embedding -->
+      <g transform="translate(960, 130)">
+        <rect width="280" height="90" rx="10" fill="#08080d" stroke="#a855f7" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="0.3s"/>
+        </rect>
+        <text x="140" y="25" text-anchor="middle" fill="#a855f7" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Embedding Layer</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Token IDs → Dense Vectors</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Dimension: 2048</text>
+        <text x="15" y="85" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">+ Rotary Position Embeddings (RoPE)</text>
+      </g>
+      
+      <!-- Step 3: MoE Router -->
+      <g transform="translate(600, 240)">
+        <rect width="640" height="160" rx="10" fill="#08080d" stroke="#f59e0b" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+        </rect>
+        <text x="320" y="25" text-anchor="middle" fill="#f59e0b" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. MoE Router - Expert Selection</text>
+        
+        <!-- Expert grid -->
+        <rect x="20" y="45" width="145" height="40" rx="8" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e" stroke-width="2">
+          <animate attributeName="fill-opacity" values="0.15;0.4;0.15" dur="1.5s" repeatCount="indefinite"/>
+        </rect>
+        <text x="92" y="70" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="600">E1: Code  ✓</text>
+        <rect x="175" y="45" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="247" y="70" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E2: Math</text>
+        <rect x="330" y="45" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="402" y="70" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E3: Language</text>
+        <rect x="485" y="45" width="145" height="40" rx="8" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e" stroke-width="2">
+          <animate attributeName="fill-opacity" values="0.15;0.4;0.15" dur="1.5s" repeatCount="indefinite"/>
+        </rect>
+        <text x="557" y="70" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="600">E4: Logic  ✓</text>
+        <rect x="20" y="95" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="92" y="120" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E5: Vision</text>
+        <rect x="175" y="95" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="247" y="120" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E6: Audio</text>
+        <rect x="330" y="95" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="402" y="120" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E7: Tools</text>
+        <rect x="485" y="95" width="145" height="40" rx="8" fill="#0a0a12" fill-opacity="0.1" stroke="#2a2a3a" stroke-width="1">
+          
+        </rect>
+        <text x="557" y="120" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="400">E8: General</text>
+        <text x="320" y="150" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">Top-2 Selected: E1 (Code) + E4 (Logic) + Shared Expert (DeepSeek-style)</text>
+      </g>
+      
+      <!-- Step 4: Chain of Thought -->
+      <g transform="translate(600, 420)">
+        <rect width="640" height="120" rx="10" fill="#08080d" stroke="#a855f7" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="0.9s"/>
+        </rect>
+        <text x="320" y="25" text-anchor="middle" fill="#a855f7" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Chain-of-Thought Reasoning</text>
+        
+        <text x="20" y="50" fill="#a855f7" font-family="SF Mono, monospace" font-size="10">&lt;|think|&gt;</text>
+        <text x="20" y="70" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">User wants efficient fibonacci. Options: recursive, iterative, memoization.</text>
+        <text x="20" y="90" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">Memoization gives O(n) time complexity. Best approach for efficiency.</text>
+        <text x="20" y="110" fill="#a855f7" font-family="SF Mono, monospace" font-size="10">&lt;|/think|&gt;</text>
+      </g>
+      
+      <!-- Step 5: Code Generation -->
+      <g transform="translate(600, 560)">
+        <rect width="640" height="140" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="1.2s"/>
+        </rect>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">5. Code Generation</text>
+        
+        <text x="20" y="50" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|code|&gt;&lt;|lang:python|&gt;</text>
+        <text x="20" y="70" fill="#a855f7" font-family="SF Mono, monospace" font-size="10">def <tspan fill="#06b6d4">fibonacci</tspan><tspan fill="#e8e8f0">(n, memo={}):</tspan></text>
+        <text x="30" y="90" fill="#a855f7" font-family="SF Mono, monospace" font-size="10">if <tspan fill="#e8e8f0">n in memo:</tspan> <tspan fill="#a855f7">return</tspan> <tspan fill="#e8e8f0">memo[n]</tspan></text>
+        <text x="30" y="110" fill="#e8e8f0" font-family="SF Mono, monospace" font-size="10">...</text>
+        <text x="20" y="130" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|/code|&gt;</text>
+      </g>
+      
+      <!-- Step 6: Output Processing -->
+      <g transform="translate(600, 720)">
+        <rect width="640" height="80" rx="10" fill="#08080d" stroke="#06b6d4" stroke-width="2">
+          <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite" begin="1.5s"/>
+        </rect>
+        <text x="320" y="25" text-anchor="middle" fill="#06b6d4" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">6. Output Processing</text>
+        
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Strip hidden tokens: <tspan fill="#ef4444" text-decoration="line-through">&lt;|think|&gt;...&lt;|/think|&gt;</tspan></text>
+        <text x="20" y="70" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Keep: code block, explanation • Final output ready</text>
+      </g>
+      
+      <!-- Data flow animation -->
+      <circle r="6" fill="#06b6d4" filter="url(#glow)">
+        <animateMotion dur="5s" repeatCount="indefinite" path="M 750,220 L 750,240 L 920,400 L 920,540 L 920,700 L 920,800"/>
+        <animate attributeName="opacity" values="0;1;1;1;1;0" dur="5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <!-- Backend Scene 2: Image Generation -->
+    <g id="backend2">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="0;0;1;1;0;0;0;0;0;0;0;0" keyTimes="0;0.15;0.167;0.32;0.333;0.5;0.67;0.833;1;1;1;1"/>
+      
+      <!-- Text Encoding -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="80" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2"/>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Text Encoding</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">"magical sunset over mountains"</text>
+        <text x="15" y="70" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">CLIP Text Encoder → 768-dim embeddings</text>
+      </g>
+      
+      <!-- Diffusion Process -->
+      <g transform="translate(600, 230)">
+        <rect width="640" height="200" rx="10" fill="#08080d" stroke="#ec4899" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#ec4899" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Diffusion Process (MobileDiffusion)</text>
+        
+        <!-- Denoising steps visualization -->
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Denoising Steps:</text>
+        <rect x="20" y="60" width="115" height="70" rx="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1"/>
+        <rect x="25" y="65" width="105" height="50" rx="4" fill="url(#sunsetGrad)" opacity="0.2"/>
+        <text x="77" y="130" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Step 0</text>
+        <text x="77" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="8">Noise: 100%</text>
+        <text x="140" y="95" fill="#ec4899" font-size="14">→</text>
+        <rect x="145" y="60" width="115" height="70" rx="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1"/>
+        <rect x="150" y="65" width="105" height="50" rx="4" fill="url(#sunsetGrad)" opacity="0.4"/>
+        <text x="202" y="130" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Step 5</text>
+        <text x="202" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="8">Noise: 75%</text>
+        <text x="265" y="95" fill="#ec4899" font-size="14">→</text>
+        <rect x="270" y="60" width="115" height="70" rx="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1"/>
+        <rect x="275" y="65" width="105" height="50" rx="4" fill="url(#sunsetGrad)" opacity="0.6000000000000001"/>
+        <text x="327" y="130" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Step 10</text>
+        <text x="327" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="8">Noise: 50%</text>
+        <text x="390" y="95" fill="#ec4899" font-size="14">→</text>
+        <rect x="395" y="60" width="115" height="70" rx="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1"/>
+        <rect x="400" y="65" width="105" height="50" rx="4" fill="url(#sunsetGrad)" opacity="0.8"/>
+        <text x="452" y="130" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Step 15</text>
+        <text x="452" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="8">Noise: 25%</text>
+        <text x="515" y="95" fill="#ec4899" font-size="14">→</text>
+        <rect x="520" y="60" width="115" height="70" rx="6" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1"/>
+        <rect x="525" y="65" width="105" height="50" rx="4" fill="url(#sunsetGrad)" opacity="1.0"/>
+        <text x="577" y="130" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Step 20</text>
+        <text x="577" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="8">Noise: 0%</text>
+        <text x="320" y="175" text-anchor="middle" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">20 steps • CFG Scale: 7.5 • Scheduler: DDIM</text>
+        <text x="320" y="195" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Latent space denoising complete</text>
+      </g>
+      
+      <!-- VAE Decode -->
+      <g transform="translate(600, 450)">
+        <rect width="640" height="100" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. VAE Decoder</text>
+        <text x="20" y="55" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Latent (32×32×4) → Image (256×256×3)</text>
+        <text x="20" y="75" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Upscaling factor: 8x</text>
+        <text x="20" y="95" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Final image generated</text>
+      </g>
+    </g>
+
+    <!-- Backend Scene 3: Vision Understanding -->
+    <g id="backend3">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="0;0;0;0;1;1;0;0;0;0;0;0" keyTimes="0;0.167;0.32;0.333;0.35;0.49;0.5;0.67;0.833;1;1;1"/>
+      
+      <!-- Vision Encoder -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="100" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2"/>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Vision Encoder (SigLIP)</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Input: 384×384 image</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Patch size: 14×14 → 729 patches</text>
+        <text x="15" y="90" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Output: 729 vision tokens (1152-dim)</text>
+      </g>
+      
+      <!-- Cross Attention -->
+      <g transform="translate(920, 130)">
+        <rect width="320" height="100" rx="10" fill="#08080d" stroke="#06b6d4" stroke-width="2"/>
+        <text x="160" y="25" text-anchor="middle" fill="#06b6d4" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Cross-Attention Fusion</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Vision tokens + Text query</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">4 cross-attention layers</text>
+        <text x="15" y="90" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Multimodal understanding</text>
+      </g>
+      
+      <!-- LLM Processing -->
+      <g transform="translate(600, 250)">
+        <rect width="640" height="120" rx="10" fill="#08080d" stroke="#a855f7" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#a855f7" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. MoE LLM - Vision Expert Active</text>
+        
+        <!-- Show vision expert selected -->
+        <rect x="20" y="45" width="140" height="35" rx="6" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e" stroke-width="2"/>
+        <text x="90" y="68" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="600">E5: Vision ✓</text>
+        
+        <rect x="170" y="45" width="140" height="35" rx="6" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e" stroke-width="2"/>
+        <text x="240" y="68" text-anchor="middle" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="600">E3: Language ✓</text>
+        
+        <text x="20" y="105" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Generating detailed scene description with object detection and spatial reasoning</text>
+      </g>
+      
+      <!-- Output -->
+      <g transform="translate(600, 390)">
+        <rect width="640" height="100" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Generated Description</text>
+        <text x="20" y="55" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="11">"I can see a stunning mountain landscape featuring snow-capped peaks,</text>
+        <text x="20" y="75" fill="#e8e8f0" font-family="SF Pro Text, sans-serif" font-size="11">a clear blue sky, pine forests, and a serene alpine lake..."</text>
+        <text x="20" y="95" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">Confidence: 96% • Objects detected: 5</text>
+      </g>
+    </g>
+
+    <!-- Backend Scene 4: Text to Audio -->
+    <g id="backend4">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="0;0;0;0;0;0;1;1;0;0;0;0" keyTimes="0;0.167;0.333;0.49;0.5;0.52;0.54;0.65;0.667;0.833;1;1"/>
+      
+      <!-- Text Processing -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="90" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2"/>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Text Processing</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Input: "Welcome to Xoron..."</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Phoneme conversion + G2P</text>
+        <text x="15" y="85" fill="#f59e0b" font-family="SF Pro Text, sans-serif" font-size="9">&lt;|emotion:cheerful|&gt; tag detected</text>
+      </g>
+      
+      <!-- TTS Model -->
+      <g transform="translate(920, 130)">
+        <rect width="320" height="90" rx="10" fill="#08080d" stroke="#f59e0b" stroke-width="2"/>
+        <text x="160" y="25" text-anchor="middle" fill="#f59e0b" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Neural TTS</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Emotion-aware synthesis</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Prosody: +15% pitch, +10% speed</text>
+        <text x="15" y="85" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">Mel spectrogram generation</text>
+      </g>
+      
+      <!-- Mel Spectrogram Visualization -->
+      <g transform="translate(600, 240)">
+        <rect width="640" height="150" rx="10" fill="#08080d" stroke="#ec4899" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#ec4899" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. Mel Spectrogram</text>
+        
+        <!-- Spectrogram bars -->
+        <g transform="translate(20, 45)">
+          <rect x="0" y="61" width="7" height="29" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="29;39;29" dur="0.3s" repeatCount="indefinite" begin="0.0s"/>
+          </rect>
+          <rect x="10" y="72" width="7" height="18" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="18;28;18" dur="0.3s" repeatCount="indefinite" begin="0.02s"/>
+          </rect>
+          <rect x="20" y="40" width="7" height="50" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="50;60;50" dur="0.3s" repeatCount="indefinite" begin="0.04s"/>
+          </rect>
+          <rect x="30" y="44" width="7" height="46" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="46;56;46" dur="0.3s" repeatCount="indefinite" begin="0.06s"/>
+          </rect>
+          <rect x="40" y="47" width="7" height="43" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="43;53;43" dur="0.3s" repeatCount="indefinite" begin="0.08s"/>
+          </rect>
+          <rect x="50" y="58" width="7" height="32" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="32;42;32" dur="0.3s" repeatCount="indefinite" begin="0.1s"/>
+          </rect>
+          <rect x="60" y="62" width="7" height="28" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="28;38;28" dur="0.3s" repeatCount="indefinite" begin="0.12s"/>
+          </rect>
+          <rect x="70" y="64" width="7" height="26" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="26;36;26" dur="0.3s" repeatCount="indefinite" begin="0.14s"/>
+          </rect>
+          <rect x="80" y="21" width="7" height="69" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="69;79;69" dur="0.3s" repeatCount="indefinite" begin="0.16s"/>
+          </rect>
+          <rect x="90" y="71" width="7" height="19" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="19;29;19" dur="0.3s" repeatCount="indefinite" begin="0.18s"/>
+          </rect>
+          <rect x="100" y="72" width="7" height="18" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="18;28;18" dur="0.3s" repeatCount="indefinite" begin="0.2s"/>
+          </rect>
+          <rect x="110" y="64" width="7" height="26" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="26;36;26" dur="0.3s" repeatCount="indefinite" begin="0.22s"/>
+          </rect>
+          <rect x="120" y="48" width="7" height="42" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="42;52;42" dur="0.3s" repeatCount="indefinite" begin="0.24s"/>
+          </rect>
+          <rect x="130" y="46" width="7" height="44" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="44;54;44" dur="0.3s" repeatCount="indefinite" begin="0.26s"/>
+          </rect>
+          <rect x="140" y="11" width="7" height="79" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="79;89;79" dur="0.3s" repeatCount="indefinite" begin="0.28s"/>
+          </rect>
+          <rect x="150" y="72" width="7" height="18" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="18;28;18" dur="0.3s" repeatCount="indefinite" begin="0.3s"/>
+          </rect>
+          <rect x="160" y="50" width="7" height="40" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="40;50;40" dur="0.3s" repeatCount="indefinite" begin="0.32s"/>
+          </rect>
+          <rect x="170" y="22" width="7" height="68" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="68;78;68" dur="0.3s" repeatCount="indefinite" begin="0.34s"/>
+          </rect>
+          <rect x="180" y="47" width="7" height="43" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="43;53;43" dur="0.3s" repeatCount="indefinite" begin="0.36s"/>
+          </rect>
+          <rect x="190" y="18" width="7" height="72" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="72;82;72" dur="0.3s" repeatCount="indefinite" begin="0.38s"/>
+          </rect>
+          <rect x="200" y="40" width="7" height="50" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="50;60;50" dur="0.3s" repeatCount="indefinite" begin="0.4s"/>
+          </rect>
+          <rect x="210" y="75" width="7" height="15" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="15;25;15" dur="0.3s" repeatCount="indefinite" begin="0.42s"/>
+          </rect>
+          <rect x="220" y="55" width="7" height="35" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="35;45;35" dur="0.3s" repeatCount="indefinite" begin="0.44s"/>
+          </rect>
+          <rect x="230" y="21" width="7" height="69" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="69;79;69" dur="0.3s" repeatCount="indefinite" begin="0.46s"/>
+          </rect>
+          <rect x="240" y="32" width="7" height="58" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="58;68;58" dur="0.3s" repeatCount="indefinite" begin="0.48s"/>
+          </rect>
+          <rect x="250" y="40" width="7" height="50" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="50;60;50" dur="0.3s" repeatCount="indefinite" begin="0.5s"/>
+          </rect>
+          <rect x="260" y="56" width="7" height="34" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="34;44;34" dur="0.3s" repeatCount="indefinite" begin="0.52s"/>
+          </rect>
+          <rect x="270" y="48" width="7" height="42" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="42;52;42" dur="0.3s" repeatCount="indefinite" begin="0.54s"/>
+          </rect>
+          <rect x="280" y="32" width="7" height="58" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="58;68;58" dur="0.3s" repeatCount="indefinite" begin="0.56s"/>
+          </rect>
+          <rect x="290" y="62" width="7" height="28" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="28;38;28" dur="0.3s" repeatCount="indefinite" begin="0.58s"/>
+          </rect>
+          <rect x="300" y="64" width="7" height="26" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="26;36;26" dur="0.3s" repeatCount="indefinite" begin="0.6s"/>
+          </rect>
+          <rect x="310" y="27" width="7" height="63" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="63;73;63" dur="0.3s" repeatCount="indefinite" begin="0.62s"/>
+          </rect>
+          <rect x="320" y="63" width="7" height="27" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="27;37;27" dur="0.3s" repeatCount="indefinite" begin="0.64s"/>
+          </rect>
+          <rect x="330" y="30" width="7" height="60" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="60;70;60" dur="0.3s" repeatCount="indefinite" begin="0.66s"/>
+          </rect>
+          <rect x="340" y="31" width="7" height="59" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="59;69;59" dur="0.3s" repeatCount="indefinite" begin="0.68s"/>
+          </rect>
+          <rect x="350" y="42" width="7" height="48" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="48;58;48" dur="0.3s" repeatCount="indefinite" begin="0.7000000000000001s"/>
+          </rect>
+          <rect x="360" y="70" width="7" height="20" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="20;30;20" dur="0.3s" repeatCount="indefinite" begin="0.72s"/>
+          </rect>
+          <rect x="370" y="17" width="7" height="73" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="73;83;73" dur="0.3s" repeatCount="indefinite" begin="0.74s"/>
+          </rect>
+          <rect x="380" y="60" width="7" height="30" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="30;40;30" dur="0.3s" repeatCount="indefinite" begin="0.76s"/>
+          </rect>
+          <rect x="390" y="27" width="7" height="63" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="63;73;63" dur="0.3s" repeatCount="indefinite" begin="0.78s"/>
+          </rect>
+          <rect x="400" y="65" width="7" height="25" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="25;35;25" dur="0.3s" repeatCount="indefinite" begin="0.8s"/>
+          </rect>
+          <rect x="410" y="38" width="7" height="52" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="52;62;52" dur="0.3s" repeatCount="indefinite" begin="0.8200000000000001s"/>
+          </rect>
+          <rect x="420" y="29" width="7" height="61" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="61;71;61" dur="0.3s" repeatCount="indefinite" begin="0.84s"/>
+          </rect>
+          <rect x="430" y="51" width="7" height="39" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="39;49;39" dur="0.3s" repeatCount="indefinite" begin="0.86s"/>
+          </rect>
+          <rect x="440" y="67" width="7" height="23" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="23;33;23" dur="0.3s" repeatCount="indefinite" begin="0.88s"/>
+          </rect>
+          <rect x="450" y="70" width="7" height="20" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="20;30;20" dur="0.3s" repeatCount="indefinite" begin="0.9s"/>
+          </rect>
+          <rect x="460" y="46" width="7" height="44" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="44;54;44" dur="0.3s" repeatCount="indefinite" begin="0.92s"/>
+          </rect>
+          <rect x="470" y="38" width="7" height="52" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="52;62;52" dur="0.3s" repeatCount="indefinite" begin="0.9400000000000001s"/>
+          </rect>
+          <rect x="480" y="65" width="7" height="25" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="25;35;25" dur="0.3s" repeatCount="indefinite" begin="0.96s"/>
+          </rect>
+          <rect x="490" y="46" width="7" height="44" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="44;54;44" dur="0.3s" repeatCount="indefinite" begin="0.98s"/>
+          </rect>
+          <rect x="500" y="63" width="7" height="27" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="27;37;27" dur="0.3s" repeatCount="indefinite" begin="1.0s"/>
+          </rect>
+          <rect x="510" y="27" width="7" height="63" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="63;73;63" dur="0.3s" repeatCount="indefinite" begin="1.02s"/>
+          </rect>
+          <rect x="520" y="40" width="7" height="50" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="50;60;50" dur="0.3s" repeatCount="indefinite" begin="1.04s"/>
+          </rect>
+          <rect x="530" y="17" width="7" height="73" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="73;83;73" dur="0.3s" repeatCount="indefinite" begin="1.06s"/>
+          </rect>
+          <rect x="540" y="29" width="7" height="61" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="61;71;61" dur="0.3s" repeatCount="indefinite" begin="1.08s"/>
+          </rect>
+          <rect x="550" y="55" width="7" height="35" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="35;45;35" dur="0.3s" repeatCount="indefinite" begin="1.1s"/>
+          </rect>
+          <rect x="560" y="28" width="7" height="62" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="62;72;62" dur="0.3s" repeatCount="indefinite" begin="1.12s"/>
+          </rect>
+          <rect x="570" y="30" width="7" height="60" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="60;70;60" dur="0.3s" repeatCount="indefinite" begin="1.1400000000000001s"/>
+          </rect>
+          <rect x="580" y="49" width="7" height="41" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="41;51;41" dur="0.3s" repeatCount="indefinite" begin="1.16s"/>
+          </rect>
+          <rect x="590" y="41" width="7" height="49" rx="2" fill="#f59e0b" opacity="0.7">
+            <animate attributeName="height" values="49;59;49" dur="0.3s" repeatCount="indefinite" begin="1.18s"/>
+          </rect>
+        </g>
+        <text x="320" y="145" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">80 mel bins × 320 frames</text>
+      </g>
+      
+      <!-- Vocoder -->
+      <g transform="translate(600, 410)">
+        <rect width="640" height="80" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Vocoder (HiFi-GAN)</text>
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Mel → Waveform • Sample rate: 16kHz</text>
+        <text x="20" y="70" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Audio generated: 3.2 seconds</text>
+      </g>
+    </g>
+
+    <!-- Backend Scene 5: Tool Calling -->
+    <g id="backend5">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="0;0;0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.167;0.333;0.5;0.65;0.667;0.69;0.71;0.72;0.82;0.833;1"/>
+      
+      <!-- Intent Detection -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="80" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2"/>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Intent Detection</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Query requires external data</text>
+        <text x="15" y="70" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">→ Tool calling required</text>
+      </g>
+      
+      <!-- Available Tools -->
+      <g transform="translate(920, 130)">
+        <rect width="320" height="80" rx="10" fill="#08080d" stroke="#a855f7" stroke-width="2"/>
+        <text x="160" y="25" text-anchor="middle" fill="#a855f7" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Available Tools</text>
+        <text x="15" y="50" fill="#06b6d4" font-family="SF Mono, monospace" font-size="9">&lt;|available_tools|&gt;</text>
+        <text x="15" y="70" fill="#8888a0" font-family="SF Mono, monospace" font-size="9">web_search, execute_python, read_file...</text>
+      </g>
+      
+      <!-- Tool Selection -->
+      <g transform="translate(600, 230)">
+        <rect width="640" height="100" rx="10" fill="#08080d" stroke="#f59e0b" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#f59e0b" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. Tool Selection &amp; Execution</text>
+        
+        <text x="20" y="50" fill="#06b6d4" font-family="SF Mono, monospace" font-size="10">&lt;|tool_call|&gt;</text>
+        <text x="30" y="70" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">&lt;|function_name|&gt;web_search&lt;|/function_name|&gt;</text>
+        <text x="30" y="90" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">&lt;|function_args|&gt;{"query": "Python 3.12 features"}&lt;|/function_args|&gt;</text>
+      </g>
+      
+      <!-- Tool Result -->
+      <g transform="translate(600, 350)">
+        <rect width="640" height="100" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Tool Result Processing</text>
+        
+        <text x="20" y="50" fill="#22c55e" font-family="SF Mono, monospace" font-size="10">&lt;|tool_result|&gt;</text>
+        <text x="30" y="70" fill="#8888a0" font-family="SF Mono, monospace" font-size="10">Found 5 results from python.org, realpython.com...</text>
+        <text x="20" y="90" fill="#22c55e" font-family="SF Mono, monospace" font-size="10">&lt;|/tool_result|&gt;</text>
+      </g>
+      
+      <!-- Response Generation -->
+      <g transform="translate(600, 470)">
+        <rect width="640" height="80" rx="10" fill="#08080d" stroke="#06b6d4" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#06b6d4" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">5. Response Synthesis</text>
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Combining tool results with LLM knowledge</text>
+        <text x="20" y="70" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Cited sources: 3 • Confidence: High</text>
+      </g>
+    </g>
+
+    <!-- Backend Scene 6: Video Generation -->
+    <g id="backend6">
+      <animate attributeName="opacity" dur="60s" repeatCount="indefinite"
+               values="0;0;0;0;0;0;0;0;0;0;1;1" keyTimes="0;0.167;0.333;0.5;0.667;0.82;0.833;0.85;0.87;0.89;0.9;1"/>
+      
+      <!-- Text/Image Encoding -->
+      <g transform="translate(600, 130)">
+        <rect width="300" height="80" rx="10" fill="#08080d" stroke="#4a9eff" stroke-width="2"/>
+        <text x="150" y="25" text-anchor="middle" fill="#4a9eff" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Prompt Encoding</text>
+        <text x="15" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">"butterfly landing on flower"</text>
+        <text x="15" y="70" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="9">CLIP + Motion description encoding</text>
+      </g>
+      
+      <!-- Temporal Diffusion -->
+      <g transform="translate(600, 230)">
+        <rect width="640" height="180" rx="10" fill="#08080d" stroke="#a855f7" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#a855f7" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Temporal Diffusion Model</text>
+        
+        <!-- Frame generation visualization -->
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Generating 16 frames with temporal consistency:</text>
+        
+        <g transform="translate(20, 60)">
+          <rect x="0" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.0s"/>
+          </rect>
+          <text x="32" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="32" y="60" text-anchor="middle" fill="#555566" font-size="8">F1</text>
+          <rect x="75" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.2s"/>
+          </rect>
+          <text x="107" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="107" y="60" text-anchor="middle" fill="#555566" font-size="8">F2</text>
+          <rect x="150" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.4s"/>
+          </rect>
+          <text x="182" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="182" y="60" text-anchor="middle" fill="#555566" font-size="8">F3</text>
+          <rect x="225" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.6000000000000001s"/>
+          </rect>
+          <text x="257" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="257" y="60" text-anchor="middle" fill="#555566" font-size="8">F4</text>
+          <rect x="300" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="0.8s"/>
+          </rect>
+          <text x="332" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="332" y="60" text-anchor="middle" fill="#555566" font-size="8">F5</text>
+          <rect x="375" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="1.0s"/>
+          </rect>
+          <text x="407" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="407" y="60" text-anchor="middle" fill="#555566" font-size="8">F6</text>
+          <rect x="450" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="1.2000000000000002s"/>
+          </rect>
+          <text x="482" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="482" y="60" text-anchor="middle" fill="#555566" font-size="8">F7</text>
+          <rect x="525" y="0" width="65" height="45" rx="4" fill="#0a0a12" stroke="#2a2a3a" stroke-width="1">
+            <animate attributeName="stroke" values="#2a2a3a;#a855f7;#2a2a3a" dur="2s" repeatCount="indefinite" begin="1.4000000000000001s"/>
+          </rect>
+          <text x="557" y="28" text-anchor="middle" font-size="16">🦋</text>
+          <text x="557" y="60" text-anchor="middle" fill="#555566" font-size="8">F8</text>
+        </g>
+        
+        <text x="20" y="140" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Motion vectors: Smooth landing trajectory</text>
+        <text x="20" y="160" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">Temporal attention: Cross-frame consistency</text>
+        <text x="20" y="175" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Motion coherence: 94%</text>
+      </g>
+      
+      <!-- Frame Interpolation -->
+      <g transform="translate(600, 430)">
+        <rect width="640" height="80" rx="10" fill="#08080d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="25" text-anchor="middle" fill="#22c55e" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. Output Processing</text>
+        <text x="20" y="50" fill="#8888a0" font-family="SF Pro Text, sans-serif" font-size="10">16 frames @ 256×256 • 4 fps • Duration: 4 seconds</text>
+        <text x="20" y="70" fill="#22c55e" font-family="SF Pro Text, sans-serif" font-size="10">✓ Video generated successfully • Style coherence: 97%</text>
+      </g>
+    </g>
+
+  </g>
+  
+  <!-- Footer -->
+  <rect x="0" y="865" width="1600" height="35" fill="#13131f"/>
+  <text x="800" y="888" text-anchor="middle" fill="#555566" font-family="SF Pro Text, sans-serif" font-size="11">
+    Xoron-Dev • Unified Multimodal AI • 400+ Special Tokens • MoE Architecture • github.com/nigfuapp-web/Xoron-Dev
+  </text>
+
+</svg>

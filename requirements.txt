@@ -1,0 +1,51 @@
+# Xoron-Dev Requirements
+
+## Core ML frameworks
+torch
+torchvision
+torchaudio
+
+## Transformers and datasets
+transformers
+datasets
+accelerate
+sentencepiece
+
+## Image processing
+Pillow
+timm
+opencv-python-headless
+
+## Audio processing (required for voice ASR/TTS)
+soundfile
+librosa
+## Video processing
+yt-dlp  # For downloading videos from URLs including YouTube
+
+## Model serialization
+safetensors
+
+## ONNX export
+onnx
+onnxruntime
+# onnxruntime-gpu  # For GPU inference (uncomment if using GPU)
+
+## Quantization support
+bitsandbytes  # For 4-bit/8-bit quantization
+optimum  # For ONNX optimization
+
+## GGUF export
+llama-cpp-python
+
+## Progress bars and utilities
+tqdm
+numpy
+
+## HTTP requests (for downloading)
+requests
+
+## HuggingFace Hub
+huggingface_hub
+
+## Jinja2 for chat templates
+jinja2

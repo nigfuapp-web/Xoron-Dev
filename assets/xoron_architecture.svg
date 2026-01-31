@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1200" width="1920" height="1200">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="grad_blue" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#4f8ff7"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="grad_purple" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="grad_green" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="grad_orange" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="grad_pink" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#f472b6"/>
+      <stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <linearGradient id="grad_cyan" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="grad_red" x1="85.4%" y1="14.6%" x2="14.6%" y2="85.4%">
+      <stop offset="0%" stop-color="#f87171"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    
+    <!-- Filters -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="glow_blue" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+      <feFlood flood-color="#3b82f6" flood-opacity="0.4"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glow_purple" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+      <feFlood flood-color="#8b5cf6" flood-opacity="0.4"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- Arrow marker -->
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#505060"/>
+    </marker>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1920" height="1200" fill="#0a0a0f"/>
+  
+  <!-- Grid pattern for depth -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#151520" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1920" height="1200" fill="url(#grid)" opacity="0.5"/>
+
+
+  <!-- Title -->
+  <text x="960" y="50" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="36" font-weight="bold">
+    <tspan fill="#3b82f6">XORON</tspan><tspan fill="#ffffff">-DEV</tspan>
+  </text>
+  <text x="960" y="80" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
+    Unified Multimodal AI Architecture
+  </text>
+
+
+  <!-- Section Label: Encoders -->
+  <text x="100" y="130" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold" letter-spacing="2">INPUT ENCODERS</text>
+  <line x1="100" y1="140" x2="350" y2="140" stroke="#2a2a3a" stroke-width="1"/>
+
+    <rect x="98" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_blue)" stroke-width="2" opacity="0.3"/>
+    <rect x="100" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_blue)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="102" y="162" width="216" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
+    <text x="210" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">👁️ Vision Encoder</text>
+    <text x="210" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">SigLIP-SO400M</text>
+    <text x="210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384×384 → 64 tokens</text>
+    <rect x="348" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
+    <rect x="350" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="352" y="162" width="216" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
+    <text x="460" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Encoder</text>
+    <text x="460" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Temporal Processing</text>
+    <text x="460" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Up to 32 frames</text>
+    <rect x="598" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
+    <rect x="600" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="602" y="162" width="216" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
+    <text x="710" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎤 Audio Encoder</text>
+    <text x="710" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Conformer ASR</text>
+    <text x="710" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16kHz • 80 mel bins</text>
+    <rect x="848" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_orange)" stroke-width="2" opacity="0.3"/>
+    <rect x="850" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_orange)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="852" y="162" width="216" height="30" rx="10" fill="url(#grad_orange)" opacity="0.15"/>
+    <text x="960" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📝 Text Tokenizer</text>
+    <text x="960" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Qwen2.5 Vocabulary</text>
+    <text x="960" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">151,643 tokens</text>
+    <rect x="1098" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_pink)" stroke-width="2" opacity="0.3"/>
+    <rect x="1100" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_pink)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="1102" y="162" width="216" height="30" rx="10" fill="url(#grad_pink)" opacity="0.15"/>
+    <text x="1210" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🏷️ Special Tokens</text>
+    <text x="1210" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">400+ Structured Tokens</text>
+    <text x="1210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">CoT • Tools • Code</text>
+    <line x1="210" y1="245" x2="210" y2="295" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <line x1="460" y1="245" x2="460" y2="295" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <line x1="710" y1="245" x2="710" y2="295" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Multimodal Projector -->
+    <rect x="100" y="305" width="720" height="70" rx="16" fill="#12121a" stroke="url(#grad_cyan)" stroke-width="2" filter="url(#shadow)"/>
+    <text x="460" y="335" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="20" font-weight="bold">🔗 Multimodal Projectors</text>
+    <text x="460" y="357" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="normal">Perceiver Resampler • Spatial Pooling • C-Abstractor</text>
+
+    <line x1="960" y1="245" x2="960" y2="415" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <line x1="1210" y1="245" x2="1210" y2="415" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <line x1="460" y1="375" x2="460" y2="415" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Cross-Attention Fusion -->
+    <rect x="100" y="425" width="1720" height="70" rx="16" fill="#12121a" stroke="url(#grad_red)" stroke-width="2" filter="url(#shadow)"/>
+    <text x="960" y="455" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="20" font-weight="bold">🔀 Cross-Attention Fusion</text>
+    <text x="960" y="477" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="normal">4 Layers • 8 Heads • Flash Attention Enabled</text>
+
+    <line x1="960" y1="495" x2="960" y2="525" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- MoE LLM Backbone Container -->
+    <rect x="100" y="535" width="1720" height="280" rx="20" fill="#12121a" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+    <text x="960" y="570" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="24" font-weight="bold">🧠 MoE LLM Backbone</text>
+    <text x="960" y="595" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">12 Transformer Layers • 1024 Hidden Dim • 16 Attention Heads • 128K Context Length</text>
+
+
+  <!-- Transformer Layer -->
+    <rect x="130" y="615" width="380" height="180" rx="12" fill="#1a1a25" stroke="#3b82f6" stroke-width="1"/>
+    <text x="320" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">Transformer Layer</text>
+  
+  <!-- Self-Attention -->
+    <rect x="145" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
+    <text x="230" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Self-Attention</text>
+    <text x="230" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Sliding Window: 4096</text>
+  
+  <!-- FFN -->
+    <rect x="325" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
+    <text x="410" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Feed-Forward</text>
+    <text x="410" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">MoE every 2nd layer</text>
+  
+  <!-- RMSNorm -->
+    <rect x="145" y="720" width="350" height="35" rx="8" fill="#0f0f15"/>
+    <text x="320" y="743" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="normal">RMSNorm + Residual Connections</text>
+  
+  <!-- Flash Attention Badge -->
+    <rect x="145" y="765" width="130" height="22" rx="6" fill="#06b6d4"/>
+    <text x="210" y="780" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="bold">⚡ Flash Attention</text>
+
+
+  <!-- MoE Layer -->
+    <rect x="550" y="615" width="380" height="180" rx="12" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1"/>
+    <text x="740" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎯 Mixture of Experts</text>
+  
+  <!-- Router -->
+    <rect x="565" y="655" width="100" height="85" rx="8" fill="#0f0f15"/>
+    <text x="615" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Router</text>
+    <text x="615" y="695" text-anchor="middle" fill="#f59e0b" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Top-2</text>
+    <text x="615" y="711" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Routing</text>
+    <text x="615" y="727" text-anchor="middle" fill="#10b981" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Aux Loss</text>
+  
+  <!-- Expert Grid -->
+
+    <rect x="680" y="655" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="702" y="682" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E1</text>
+    <rect x="731" y="655" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="753" y="682" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E2</text>
+    <rect x="782" y="655" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="804" y="682" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E3</text>
+    <rect x="833" y="655" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="855" y="682" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E4</text>
+    <rect x="680" y="706" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="702" y="733" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E5</text>
+    <rect x="731" y="706" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="753" y="733" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E6</text>
+    <rect x="782" y="706" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="804" y="733" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E7</text>
+    <rect x="833" y="706" width="45" height="45" rx="6" fill="#3b82f6"/>
+    <text x="855" y="733" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold">E8</text>
+
+  <!-- Shared Expert -->
+    <rect x="680" y="762" width="198" height="28" rx="6" fill="#10b981"/>
+    <text x="779" y="780" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="bold">Shared Expert (DeepSeek)</text>
+
+
+  <!-- LoRA Section -->
+    <rect x="970" y="615" width="380" height="180" rx="12" fill="#1a1a25" stroke="#10b981" stroke-width="1"/>
+    <text x="1160" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔧 LoRA+ Fine-tuning</text>
+  
+  <!-- rsLoRA -->
+    <rect x="985" y="655" width="170" height="100" rx="8" fill="#0f0f15"/>
+    <text x="1070" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">rsLoRA</text>
+    <text x="1070" y="697" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">r=32, α=64</text>
+    <text x="1070" y="715" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Rank-Stabilized</text>
+    <text x="1070" y="735" text-anchor="middle" fill="#f59e0b" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">B learns 16× faster</text>
+  
+  <!-- Target Modules -->
+    <rect x="1165" y="655" width="170" height="100" rx="8" fill="#0f0f15"/>
+    <text x="1250" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">Target Modules</text>
+    <text x="1250" y="697" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">q, k, v, o_proj</text>
+    <text x="1250" y="715" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">gate, up, down</text>
+    <text x="1250" y="735" text-anchor="middle" fill="#10b981" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">7 modules total</text>
+
+
+  <!-- Section Label: Outputs -->
+  <text x="100" y="850" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="bold" letter-spacing="2">OUTPUT GENERATORS</text>
+  <line x1="100" y1="860" x2="350" y2="860" stroke="#2a2a3a" stroke-width="1"/>
+
+    <line x1="960" y1="815" x2="960" y2="840" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <rect x="338" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_orange)" stroke-width="2" opacity="0.3"/>
+    <rect x="340" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_orange)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="342" y="867" width="276" height="30" rx="10" fill="url(#grad_orange)" opacity="0.15"/>
+    <text x="480" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">📝 Text Generation</text>
+    <text x="480" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">LM Head + Sampling</text>
+    <text x="480" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Chain-of-Thought • Tools • Code</text>
+    <rect x="658" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_blue)" stroke-width="2" opacity="0.3"/>
+    <rect x="660" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_blue)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="662" y="867" width="276" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
+    <text x="800" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎨 Image Generator</text>
+    <text x="800" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">MobileDiffusion</text>
+    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">256×256 • CFG=7.5 • 20 steps</text>
+    <rect x="978" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
+    <rect x="980" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="982" y="867" width="276" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
+    <text x="1120" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Generator</text>
+    <text x="1120" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Temporal Diffusion</text>
+    <text x="1120" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16 frames • 256×256</text>
+    <rect x="1298" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
+    <rect x="1300" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
+    <rect x="1302" y="867" width="276" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
+    <text x="1440" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔊 Audio Decoder</text>
+    <text x="1440" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Neural TTS</text>
+    <text x="1440" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">13 emotions • 256 speakers</text>
+    <path d="M960,825 Q720,805 480,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <path d="M960,825 Q880,805 800,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <path d="M960,825 Q1040,805 1120,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <path d="M960,825 Q1200,805 1440,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Stats Box -->
+    <rect x="1700" y="865" width="180" height="90" rx="12" fill="#12121a" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
+    <text x="1790" y="887" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">📊 Model Stats</text>
+    <text x="1790" y="909" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">~2B Parameters</text>
+    <text x="1790" y="925" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">128K Context</text>
+    <text x="1790" y="941" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">6 MoE Layers</text>
+
+
+  <!-- Footer -->
+  <text x="960" y="1170" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12">
+    Xoron-Dev • State-of-the-Art Multimodal AI • github.com/nigfuapp-web/Xoron-Dev
+  </text>
+
+</svg>
