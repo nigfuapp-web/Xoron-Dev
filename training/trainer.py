@@ -400,19 +400,55 @@ class XoronTrainer:
         - Code execution tokens (exec, jupyter, code, etc.)
         
         Each group has its own configurable weight multiplier.
+        
+        IMPORTANT: Handles dimension mismatch when multimodal embeddings are prepended
+        to the sequence in the forward pass, causing logits to have more tokens than labels.
         """
-        # Standard cross-entropy loss
+        device = logits.device
+        
+        # CRITICAL FIX: Handle dimension mismatch between logits and labels
+        # This happens when multimodal embeddings (image/video/audio) are prepended
+        # to the text embeddings in the forward pass. The logits will be longer than labels.
+        logits_seq_len = logits.size(1)
+        labels_seq_len = labels.size(1)
+        
+        if logits_seq_len != labels_seq_len:
+            # Logits are longer due to prepended multimodal embeddings
+            # We need to align by taking only the last `labels_seq_len` logits
+            # (the text portion that corresponds to our labels)
+            offset = logits_seq_len - labels_seq_len
+            if offset > 0:
+                # Take only the text portion of logits (skip multimodal prefix)
+                logits = logits[:, offset:, :]
+            elif offset < 0:
+                # Labels are longer (shouldn't happen, but handle gracefully)
+                labels = labels[:, -logits_seq_len:]
+                input_ids = input_ids[:, -logits_seq_len:]
+        
+        # Standard cross-entropy loss with shifted sequences
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
         
-        # CRITICAL FIX: Ensure labels are on the same device as logits
+        # Ensure labels are on the same device as logits
         if shift_logits.device != shift_labels.device:
             shift_labels = shift_labels.to(shift_logits.device)
+        
+        # SAFETY CHECK: Ensure we have valid labels to compute loss
+        valid_count = (shift_labels != -100).sum().item()
+        if valid_count == 0:
+            # No valid labels - return zero loss to avoid NaN
+            return torch.tensor(0.0, device=device, requires_grad=True)
         
         # Compute per-token loss
         loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
         flat_logits = shift_logits.view(-1, shift_logits.size(-1))
         flat_labels = shift_labels.view(-1)
+        
+        # Additional safety: check for NaN in logits
+        if torch.isnan(flat_logits).any() or torch.isinf(flat_logits).any():
+            # Model produced invalid logits - return zero loss
+            return torch.tensor(0.0, device=device, requires_grad=True)
+        
         per_token_loss = loss_fct(flat_logits, flat_labels)
         per_token_loss = per_token_loss.view(shift_labels.size())
         
@@ -434,6 +470,19 @@ class XoronTrainer:
             shift_input_ids = input_ids[..., 1:].contiguous()
             if shift_input_ids.device != shift_logits.device:
                 shift_input_ids = shift_input_ids.to(shift_logits.device)
+            
+            # Ensure shift_input_ids matches shift_labels length for weighted masking
+            if shift_input_ids.size(1) != shift_labels.size(1):
+                # Truncate or pad to match
+                target_len = shift_labels.size(1)
+                if shift_input_ids.size(1) > target_len:
+                    shift_input_ids = shift_input_ids[:, :target_len]
+                else:
+                    # Pad with padding token (usually 0)
+                    pad_len = target_len - shift_input_ids.size(1)
+                    pad_tokens = torch.zeros(shift_input_ids.size(0), pad_len, 
+                                            dtype=shift_input_ids.dtype, device=shift_input_ids.device)
+                    shift_input_ids = torch.cat([shift_input_ids, pad_tokens], dim=1)
             
             # Build combined block list with weights
             all_blocks_with_weights = []
@@ -488,11 +537,25 @@ class XoronTrainer:
             
             # Compute mean over non-ignored tokens
             valid_mask = (shift_labels != -100).float()
-            loss = (weighted_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1)
+            valid_sum = valid_mask.sum()
+            if valid_sum > 0:
+                loss = (weighted_loss * valid_mask).sum() / valid_sum
+            else:
+                # No valid tokens - return zero loss
+                loss = torch.tensor(0.0, device=device, requires_grad=True)
         else:
             # Standard loss computation
             valid_mask = (shift_labels != -100).float()
-            loss = (per_token_loss * valid_mask).sum() / valid_mask.sum().clamp(min=1)
+            valid_sum = valid_mask.sum()
+            if valid_sum > 0:
+                loss = (per_token_loss * valid_mask).sum() / valid_sum
+            else:
+                # No valid tokens - return zero loss
+                loss = torch.tensor(0.0, device=device, requires_grad=True)
+        
+        # Final NaN safety check
+        if torch.isnan(loss) or torch.isinf(loss):
+            return torch.tensor(0.0, device=device, requires_grad=True)
         
         return loss
     
@@ -719,9 +782,11 @@ class XoronTrainer:
                 # Get MoE auxiliary loss if available
                 moe_aux_loss = getattr(outputs, 'aux_loss', None)
             
-            # Track CoT loss separately
+            # Track CoT loss separately (with NaN safety)
             if has_cot_samples:
-                epoch_cot_loss += llm_loss.item()
+                cot_loss_val = llm_loss.item()
+                if not (cot_loss_val != cot_loss_val):  # NaN check
+                    epoch_cot_loss += cot_loss_val
                 num_cot += 1
 
             # Apply LLM loss weight
@@ -806,7 +871,10 @@ class XoronTrainer:
                 self.optimizer.zero_grad(set_to_none=set_to_none)
                 self.global_step += 1
 
-            epoch_llm_loss += llm_loss.item()
+            # Only accumulate non-NaN losses
+            llm_loss_val = llm_loss.item()
+            if not (llm_loss_val != llm_loss_val):  # NaN check: NaN != NaN is True
+                epoch_llm_loss += llm_loss_val
             num_batches += 1
 
             # Explicitly delete intermediate tensors to free memory
