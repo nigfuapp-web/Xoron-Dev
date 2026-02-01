@@ -978,9 +978,23 @@ class TrueStreamingDataset(IterableDataset):
         Args:
             clear_state: If True, completely clear streaming state (restart from beginning of all datasets)
                         If False (default), keep dataset_positions to continue from where we left off
+                        
+        Note: For eval datasets created with create_train_eval_datasets(), this will restore
+        to the fixed eval positions (not interfering with training's advancing positions).
         """
         print(f"\n🔄 Resetting dataset for new epoch...")
-        if clear_state:
+        
+        # Check if this is an eval dataset with fixed positions
+        # Eval datasets always reset to their fixed positions for consistent validation
+        if hasattr(self, '_eval_fixed_positions') and self._eval_fixed_positions:
+            self._streaming_state = {
+                "epoch": self._streaming_state.get("epoch", 0) + 1,
+                "unique_samples": 0,
+                "total_yields": 0,
+                "dataset_positions": self._eval_fixed_positions.copy(),  # Restore to FIXED positions
+            }
+            print(f"   📊 Eval dataset: restored to fixed held-out positions")
+        elif clear_state:
             # Full reset - start from beginning of all datasets
             self._streaming_state = {
                 "epoch": self._streaming_state.get("epoch", 0) + 1,
@@ -1103,18 +1117,28 @@ def create_train_eval_datasets(
         video_size=video_size,
     )
     
-    # Set initial skip positions for eval dataset
-    # This ensures eval samples come AFTER training samples in each dataset stream
-    skip_positions = {}
+    # Set FIXED skip positions for eval dataset
+    # Eval always starts at position max_per_dataset_train in each dataset
+    # This ensures:
+    # 1. Eval samples are AFTER training samples (held-out data)
+    # 2. Eval uses the SAME samples every epoch (consistent validation)
+    # 3. Eval doesn't interfere with training's streaming positions
+    eval_skip_positions = {}
     for dtype, configs in dataset_configs.items():
         if configs:
             for cfg in configs:
-                # Eval starts after max_per_dataset_train samples
-                skip_positions[cfg["name"]] = max_per_dataset_train
+                # Eval always starts after max_per_dataset_train samples
+                eval_skip_positions[cfg["name"]] = max_per_dataset_train
     
-    eval_dataset._streaming_state["dataset_positions"] = skip_positions
+    eval_dataset._streaming_state["dataset_positions"] = eval_skip_positions.copy()
+    
+    # Store the fixed eval positions so reset() can restore them
+    # This is separate from training - training advances, eval stays fixed
+    eval_dataset._eval_fixed_positions = eval_skip_positions.copy()
     
     print(f"   ✅ Train dataset: {train_dataset.total_datasets} dataset sources")
-    print(f"   ✅ Eval dataset: {eval_dataset.total_datasets} dataset sources (skipping first {max_per_dataset_train} samples each)")
+    print(f"   ✅ Eval dataset: {eval_dataset.total_datasets} dataset sources")
+    print(f"      → Eval uses FIXED held-out samples (positions {max_per_dataset_train}-{max_per_dataset_train + max_per_dataset_eval - 1} per dataset)")
+    print(f"      → Training advances each epoch, eval stays consistent")
     
     return train_dataset, eval_dataset
