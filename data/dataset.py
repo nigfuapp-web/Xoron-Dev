@@ -789,11 +789,13 @@ class TrueStreamingDataset(IterableDataset):
                 try:
                     raw_sample = next(source["iterator"])
                     
-                    # Process and format the sample
+                    # Process and format the sample ONCE from streaming
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
                     if processed is not None:
-                        # Yield the same sample multiple times for stronger learning signal
+                        # Yield the SAME processed sample multiple times
+                        # Sample is loaded from stream once, processed once, yielded sample_repeat times
+                        # This is memory efficient - same tensors are reused
                         for repeat_idx in range(self.sample_repeat):
                             yield processed
                             total_yields += 1

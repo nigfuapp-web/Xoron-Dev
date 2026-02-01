@@ -855,6 +855,21 @@ def run_build_and_train(
         print("\n✅ Build complete! (skipping training)")
         return
 
+    # Convert model to half precision for memory efficiency
+    # This cuts model memory usage in half (fp32 -> fp16/bf16)
+    if training_config.device == "cuda" and torch.cuda.is_available():
+        if training_config.bf16:
+            print("\n🔧 Converting model to bfloat16 for memory efficiency...")
+            model = model.to(torch.bfloat16)
+            print("   ✅ Model converted to bfloat16 (2x memory savings)")
+        elif training_config.fp16:
+            print("\n🔧 Converting model to float16 for memory efficiency...")
+            model = model.half()
+            print("   ✅ Model converted to float16 (2x memory savings)")
+        
+        # Clear cache after conversion
+        clear_cuda_cache()
+
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
         model, tokenizer, xoron_config, training_config, dataset_configs
@@ -987,6 +1002,21 @@ def run_hf_training(
     # Save model before training (only if not resuming)
     if not resume_from:
         save_model(model, tokenizer, training_config)
+
+    # Convert model to half precision for memory efficiency
+    # This cuts model memory usage in half (fp32 -> fp16/bf16)
+    if training_config.device == "cuda" and torch.cuda.is_available():
+        if training_config.bf16:
+            print("\n🔧 Converting model to bfloat16 for memory efficiency...")
+            model = model.to(torch.bfloat16)
+            print("   ✅ Model converted to bfloat16 (2x memory savings)")
+        elif training_config.fp16:
+            print("\n🔧 Converting model to float16 for memory efficiency...")
+            model = model.half()
+            print("   ✅ Model converted to float16 (2x memory savings)")
+        
+        # Clear cache after conversion
+        clear_cuda_cache()
 
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
