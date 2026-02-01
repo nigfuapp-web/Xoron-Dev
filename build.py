@@ -678,12 +678,13 @@ def save_model(model, tokenizer, training_config):
         print(f"   - {f} ({size:.1f} MB)")
 
 
-def setup_training(model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities: str = 'all'):
+def setup_training(model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities: str = 'all', resume_streaming_state: str = None):
     """Setup training components.
     
     Args:
         active_modalities: Which modalities are active ('all', 'text', 'image', 'video', 'audio')
             Inactive modalities use minimal tensors to save RAM (~27MB per batch for text-only)
+        resume_streaming_state: Path to streaming_state.json to resume from (optional)
     """
     print("\n" + "=" * 60)
     print("⚙️ TRAINING SETUP")
@@ -732,7 +733,13 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         voice_processor=voice_proc,
         max_video_frames=xoron_config.max_video_frames,
         video_size=xoron_config.generation_video_size,
+        resume_state_path=resume_streaming_state,
     )
+    
+    # Set auto-save path for streaming state (saved alongside checkpoints)
+    streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
+    train_dataset.set_state_save_path(streaming_state_path)
+    print(f"   💾 Streaming state will be saved to: {streaming_state_path}")
 
     # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
     collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
@@ -879,9 +886,19 @@ def run_build_and_train(
         # Clear cache after conversion
         clear_cuda_cache()
 
+    # Check for streaming state to resume from
+    resume_streaming_state = None
+    if resume_training:
+        streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
+        if os.path.exists(streaming_state_path):
+            resume_streaming_state = streaming_state_path
+            print(f"\n📂 Found streaming state to resume from: {streaming_state_path}")
+
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
-        model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities=active_modalities
+        model, tokenizer, xoron_config, training_config, dataset_configs, 
+        active_modalities=active_modalities,
+        resume_streaming_state=resume_streaming_state
     )
 
     # Create trainer with resume support
@@ -1028,9 +1045,19 @@ def run_hf_training(
         # Clear cache after conversion
         clear_cuda_cache()
 
+    # Check for streaming state to resume from
+    resume_streaming_state = None
+    if resume_from:
+        streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
+        if os.path.exists(streaming_state_path):
+            resume_streaming_state = streaming_state_path
+            print(f"\n📂 Found streaming state to resume from: {streaming_state_path}")
+
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
-        model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities=active_modalities
+        model, tokenizer, xoron_config, training_config, dataset_configs, 
+        active_modalities=active_modalities,
+        resume_streaming_state=resume_streaming_state
     )
 
     # Create trainer with resume support

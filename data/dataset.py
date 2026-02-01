@@ -1,6 +1,7 @@
 """Streaming dataset for multimodal training."""
 
 import gc
+import json
 import os
 import random
 import time
@@ -23,6 +24,7 @@ class TrueStreamingDataset(IterableDataset):
     - Streams until max_per_epoch samples are yielded per epoch
     - Works with both HuggingFace streaming datasets and local JSONL files
     - Samples are formatted using format_functions before being returned
+    - Supports resuming from saved streaming state (skip already-seen samples)
     """
 
     def __init__(
@@ -39,6 +41,7 @@ class TrueStreamingDataset(IterableDataset):
         voice_processor=None,
         max_video_frames: int = 32,
         video_size: int = 256,
+        resume_state_path: str = None,
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -57,6 +60,19 @@ class TrueStreamingDataset(IterableDataset):
 
         # Dataset sources list - will be populated in _init_iterators
         self._dataset_sources = []
+        
+        # Streaming state for resume support
+        self._streaming_state = {
+            "epoch": 0,
+            "unique_samples": 0,
+            "total_yields": 0,
+            "dataset_positions": {},  # dataset_name -> samples_consumed
+        }
+        self._state_save_path = None
+        
+        # Load resume state if provided
+        if resume_state_path and os.path.exists(resume_state_path):
+            self._load_streaming_state(resume_state_path)
         
         # Initialize dataset sources
         self._init_iterators()
@@ -142,6 +158,77 @@ class TrueStreamingDataset(IterableDataset):
                     print(f"   ✅ {cfg['name']} (HF streaming)")
         
         print(f"\n📊 {len(self._dataset_sources)} dataset sources initialized", flush=True)
+    
+    def _load_streaming_state(self, path: str):
+        """Load streaming state from JSON file for resuming."""
+        try:
+            with open(path, 'r') as f:
+                state = json.load(f)
+            self._streaming_state = state
+            print(f"\n📂 Loaded streaming state from {path}")
+            print(f"   Epoch: {state.get('epoch', 0)}")
+            print(f"   Unique samples seen: {state.get('unique_samples', 0)}")
+            print(f"   Datasets with progress: {len(state.get('dataset_positions', {}))}")
+        except Exception as e:
+            print(f"   ⚠️ Could not load streaming state: {e}")
+    
+    def save_streaming_state(self, path: str):
+        """Save current streaming state to JSON file for resuming later."""
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w') as f:
+                json.dump(self._streaming_state, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"   ⚠️ Could not save streaming state: {e}")
+            return False
+    
+    def get_streaming_state(self) -> dict:
+        """Get current streaming state for external saving."""
+        return self._streaming_state.copy()
+    
+    def set_state_save_path(self, path: str):
+        """Set path for auto-saving streaming state during iteration."""
+        self._state_save_path = path
+    
+    def _skip_to_position(self, iterator, dataset_name: str, is_local: bool, local_path: str = None):
+        """Skip iterator to saved position for resuming."""
+        skip_count = self._streaming_state.get("dataset_positions", {}).get(dataset_name, 0)
+        
+        if skip_count == 0:
+            return iterator, 0
+        
+        print(f"   ⏩ Skipping {skip_count} samples in {dataset_name}...", end="", flush=True)
+        skipped = 0
+        
+        if is_local and local_path:
+            # For local JSONL, create new iterator starting from line number
+            return self._create_local_iterator_from_line(local_path, skip_count), skip_count
+        else:
+            # For HF streaming, skip samples (this iterates through them)
+            try:
+                for _ in range(skip_count):
+                    next(iterator)
+                    skipped += 1
+            except StopIteration:
+                pass
+        
+        print(f" done ({skipped} skipped)", flush=True)
+        return iterator, skipped
+    
+    def _create_local_iterator_from_line(self, path: str, start_line: int):
+        """Create a streaming iterator for a local JSONL file starting from a specific line."""
+        with open(path, 'r', encoding='utf-8') as f:
+            # Skip to start line
+            for _ in range(start_line):
+                f.readline()
+            # Yield remaining lines
+            for line in f:
+                if line.strip():
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
     
     def _get_local_path(self, cfg):
         """Get the full path for a local dataset."""
@@ -738,22 +825,46 @@ class TrueStreamingDataset(IterableDataset):
         
         Example: max_per_epoch=10000, sample_repeat=4 → 10000 unique samples × 4 = 40000 total yields
         """
-        unique_samples = 0
-        total_yields = 0
+        # Check if resuming from saved state
+        resume_unique = self._streaming_state.get("unique_samples", 0)
+        resume_yields = self._streaming_state.get("total_yields", 0)
+        has_resume_state = resume_unique > 0
+        
+        unique_samples = resume_unique
+        total_yields = resume_yields
         
         # Create iterators for all sources with per-dataset counters
         active_sources = []
         for source in self._dataset_sources:
+            dataset_name = source["name"]
+            saved_count = self._streaming_state.get("dataset_positions", {}).get(dataset_name, 0)
+            
             if source["is_local"]:
-                iterator = self._create_local_iterator(source["local_path"])
+                # For local files, skip directly to line number (efficient)
+                if saved_count > 0:
+                    iterator = self._create_local_iterator_from_line(source["local_path"], saved_count)
+                    print(f"   ⏩ {dataset_name}: resuming from line {saved_count}")
+                else:
+                    iterator = self._create_local_iterator(source["local_path"])
             else:
+                # For HF streaming, need to skip through samples
                 iterator = iter(source["hf_dataset"])
+                if saved_count > 0:
+                    print(f"   ⏩ {dataset_name}: skipping {saved_count} samples...", end="", flush=True)
+                    skipped = 0
+                    try:
+                        for _ in range(saved_count):
+                            next(iterator)
+                            skipped += 1
+                    except StopIteration:
+                        pass
+                    print(f" done", flush=True)
             
             active_sources.append({
                 **source,
                 "iterator": iterator,
                 "exhausted": False,
-                "count": 0,  # Track unique samples from this dataset
+                "count": saved_count,  # Start from saved count
             })
         
         # Track stats by category
@@ -762,7 +873,11 @@ class TrueStreamingDataset(IterableDataset):
         
         total_expected = self.max_per_epoch * self.sample_repeat
         repeat_info = f" × {self.sample_repeat} repeat = {total_expected:,} total" if self.sample_repeat > 1 else ""
-        print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
+        
+        if has_resume_state:
+            print(f"\n🔄 Resuming streaming iteration from {unique_samples:,} unique samples...", flush=True)
+        else:
+            print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
         print(f"   📊 Max {self.max_per_dataset} unique per dataset", flush=True)
         
         # Round-robin through sources - count UNIQUE samples toward max_per_epoch
@@ -808,9 +923,17 @@ class TrueStreamingDataset(IterableDataset):
                         type_counts[dtype] = type_counts.get(dtype, 0) + 1
                         dataset_counts[source["name"]] = source["count"]
                         
-                        # Log progress every 500 unique samples
+                        # Update streaming state for resume support
+                        self._streaming_state["unique_samples"] = unique_samples
+                        self._streaming_state["total_yields"] = total_yields
+                        self._streaming_state["dataset_positions"][source["name"]] = source["count"]
+                        
+                        # Log progress and save state every 500 unique samples
                         if unique_samples % 500 == 0:
                             print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} unique samples ({total_yields:,} total yields)", flush=True)
+                            # Auto-save state if path is set
+                            if self._state_save_path:
+                                self.save_streaming_state(self._state_save_path)
                 
                 except StopIteration:
                     source["exhausted"] = True
@@ -831,14 +954,31 @@ class TrueStreamingDataset(IterableDataset):
         for dtype, count in sorted(type_counts.items()):
             print(f"      {dtype}: {count} unique samples", flush=True)
         
+        # Save final state
+        if self._state_save_path:
+            self._streaming_state["epoch"] = self._streaming_state.get("epoch", 0) + 1
+            self.save_streaming_state(self._state_save_path)
+            print(f"   💾 Streaming state saved to {self._state_save_path}")
+        
         gc.collect()
 
     def __len__(self):
         """Return total yields (unique samples × repeat) as the effective length."""
         return self.max_per_epoch * self.sample_repeat
 
-    def reset(self):
-        """Reset dataset for new epoch - reinitialize all sources."""
+    def reset(self, clear_state: bool = False):
+        """Reset dataset for new epoch - reinitialize all sources.
+        
+        Args:
+            clear_state: If True, also clear the streaming state (start fresh)
+        """
         print(f"\n🔄 Resetting dataset for new epoch...")
+        if clear_state:
+            self._streaming_state = {
+                "epoch": self._streaming_state.get("epoch", 0),
+                "unique_samples": 0,
+                "total_yields": 0,
+                "dataset_positions": {},
+            }
         self._init_iterators()
         gc.collect()
