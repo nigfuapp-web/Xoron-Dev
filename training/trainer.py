@@ -901,7 +901,13 @@ class XoronTrainer:
             # Also save special tokens mapping
             with open(os.path.join(checkpoint_path, "special_tokens.json"), "w") as f:
                 json.dump(SPECIAL_TOKENS, f, indent=2)
-            print(f"   💾 Checkpoint saved: epoch {epoch + 1}")
+        
+        # Save streaming state for dataset resume
+        if hasattr(self.train_dataset, 'save_streaming_state'):
+            streaming_state_path = os.path.join(checkpoint_path, "streaming_state.json")
+            self.train_dataset.save_streaming_state(streaming_state_path)
+        
+        print(f"   💾 Checkpoint saved: epoch {epoch + 1}")
 
         # Track best loss but don't save separate best model (saves disk space)
         if loss < self.best_loss:
@@ -909,7 +915,7 @@ class XoronTrainer:
             print(f"   ⭐ New best loss: {loss:.4f}")
 
     def _save_final_model(self):
-        """Save the final trained model with tokenizer and chat template."""
+        """Save the final trained model with tokenizer, chat template, and streaming state."""
         print(f"\n💾 Saving final model to {self.config.final_model_dir}...")
         os.makedirs(self.config.final_model_dir, exist_ok=True)
 
@@ -935,5 +941,11 @@ class XoronTrainer:
             with open(os.path.join(self.config.final_model_dir, "special_tokens.json"), "w") as f:
                 json.dump(SPECIAL_TOKENS, f, indent=2)
             print(f"   💾 Tokenizer and chat template saved")
+        
+        # Save streaming state for dataset resume (useful if continuing training later)
+        if hasattr(self.train_dataset, 'save_streaming_state'):
+            streaming_state_path = os.path.join(self.config.final_model_dir, "streaming_state.json")
+            self.train_dataset.save_streaming_state(streaming_state_path)
+            print(f"   💾 Streaming state saved")
         
         print(f"✅ Final model saved!")
