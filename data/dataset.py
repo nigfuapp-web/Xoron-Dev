@@ -1010,7 +1010,6 @@ def create_train_eval_datasets(
     max_length: int = 1024,
     max_per_epoch_train: int = 6600,
     max_per_dataset_train: int = 100,
-    max_per_epoch_eval: int = 500,
     max_per_dataset_eval: int = 10,
     sample_repeat: int = 4,
     voice_processor=None,
@@ -1027,6 +1026,7 @@ def create_train_eval_datasets(
     Both datasets stream from the same sources but:
     - Eval uses skip_initial to start AFTER where train ends
     - Each dataset contributes equal samples to eval (fair evaluation across all modalities)
+    - Total eval samples = num_datasets * max_per_dataset_eval (no artificial cap)
     
     Args:
         dataset_configs: Dataset configurations by type
@@ -1037,7 +1037,6 @@ def create_train_eval_datasets(
         max_length: Max sequence length
         max_per_epoch_train: Total train samples per epoch
         max_per_dataset_train: Samples per dataset for training (e.g., 100)
-        max_per_epoch_eval: Total eval samples per epoch  
         max_per_dataset_eval: Samples per dataset for eval (e.g., 10)
         sample_repeat: How many times to repeat each sample in training
         voice_processor: Voice processor instance
@@ -1050,6 +1049,7 @@ def create_train_eval_datasets(
     Example:
         # Training: 100 samples from each dataset
         # Eval: 10 samples from each dataset (held out, not seen during training)
+        # If you have 66 datasets: eval = 66 * 10 = 660 samples
         train_dataset, eval_dataset = create_train_eval_datasets(
             dataset_configs=configs,
             format_functions=formatters,
@@ -1058,13 +1058,16 @@ def create_train_eval_datasets(
             image_processor=image_processor,
             max_per_epoch_train=6600,
             max_per_dataset_train=100,  # 100 per dataset for train
-            max_per_epoch_eval=500,
             max_per_dataset_eval=10,    # 10 per dataset for eval (separate samples)
         )
     """
+    # Count total datasets to calculate dynamic eval size
+    total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
+    max_per_epoch_eval = total_datasets * max_per_dataset_eval
+    
     print("\n📊 Creating train and eval datasets with per-dataset sampling...")
-    print(f"   Train: {max_per_dataset_train} samples/dataset, {max_per_epoch_train} total/epoch")
-    print(f"   Eval:  {max_per_dataset_eval} samples/dataset, {max_per_epoch_eval} total/epoch")
+    print(f"   Train: {max_per_dataset_train} samples/dataset, {max_per_epoch_train} max total/epoch")
+    print(f"   Eval:  {max_per_dataset_eval} samples/dataset × {total_datasets} datasets = {max_per_epoch_eval} total")
     
     # Create train dataset - starts from beginning of each dataset stream
     train_dataset = TrueStreamingDataset(
@@ -1084,7 +1087,7 @@ def create_train_eval_datasets(
     
     # Create eval dataset with skip_initial positions
     # This makes eval start AFTER the training samples, ensuring held-out data
-    # We set the streaming state to skip the first N samples that training uses
+    # max_per_epoch for eval = total_datasets * max_per_dataset_eval (no cap)
     eval_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -1092,7 +1095,7 @@ def create_train_eval_datasets(
         tokens=tokens,
         image_processor=image_processor,
         max_length=max_length,
-        max_per_epoch=max_per_epoch_eval,
+        max_per_epoch=max_per_epoch_eval,  # Dynamic: num_datasets * samples_per_dataset
         max_per_dataset=max_per_dataset_eval,
         sample_repeat=1,  # No repeat for eval - just evaluate once per sample
         voice_processor=voice_processor,

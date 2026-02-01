@@ -90,8 +90,8 @@ class TrainingConfig:
     
     # Evaluation/validation settings
     # Eval pulls samples SEPARATELY from each dataset for proper validation
+    # Total eval = num_active_datasets * max_per_dataset_eval (no cap)
     max_per_dataset_eval: int = 10  # Samples per dataset for eval (e.g., 10 from each dataset)
-    max_eval_per_epoch: int = 500  # Total max eval samples per epoch
 
     # Device settings
     device: str = field(default_factory=lambda: "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
@@ -163,8 +163,7 @@ class TrainingConfig:
         print(f"   Enabled: {self.use_lora_plus}")
         print(f"   LR Ratio (B/A): {self.lora_plus_lr_ratio}x")
         print(f"\n📊 Evaluation Settings:")
-        print(f"   Max per dataset (eval): {self.max_per_dataset_eval}")
-        print(f"   Max eval per epoch: {self.max_eval_per_epoch}")
+        print(f"   Samples per dataset (eval): {self.max_per_dataset_eval}")
 
         if TORCH_AVAILABLE and torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
@@ -209,7 +208,6 @@ class TrainingConfig:
             'logging_steps': self.logging_steps,
             'eval_steps': self.eval_steps,
             'max_per_dataset_eval': self.max_per_dataset_eval,
-            'max_eval_per_epoch': self.max_eval_per_epoch,
             'device': self.device,
             'fp16': self.fp16,
             'bf16': self.bf16,
