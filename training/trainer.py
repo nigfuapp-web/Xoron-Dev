@@ -26,6 +26,10 @@ from training.utils import (
     train_video_diffusion_step,
     train_voice_asr_step,
     train_voice_tts_step,
+    eval_image_diffusion_step,
+    eval_video_diffusion_step,
+    eval_voice_asr_step,
+    eval_voice_tts_step,
 )
 from config.special_tokens import (
     SPECIAL_TOKENS, 
@@ -52,6 +56,7 @@ class XoronTrainer:
     - Configurable loss weights per modality
     - BF16/FP16 mixed precision
     - Gradient checkpointing
+    - Validation/evaluation at end of each epoch with per-modality losses
     """
 
     def __init__(
@@ -65,9 +70,11 @@ class XoronTrainer:
         collate_fn,
         resume_from: str = None,
         tokenizer=None,
+        eval_dataset=None,
     ):
         self.model = model
         self.train_dataset = train_dataset
+        self.eval_dataset = eval_dataset
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.config = config
@@ -660,7 +667,27 @@ class XoronTrainer:
                 collate_fn=self.collate_fn
             )
 
-            epoch_loss = self._train_epoch(train_loader, epoch, batch_times, training_start_time)
+            # Run training epoch
+            train_losses = self._train_epoch(train_loader, epoch, batch_times, training_start_time)
+
+            # Run validation at end of each epoch if eval_dataset is provided
+            eval_losses = None
+            if self.eval_dataset is not None:
+                # Reset eval dataset for fresh iteration
+                if hasattr(self.eval_dataset, 'reset'):
+                    self.eval_dataset.reset(clear_state=True)
+                
+                eval_loader = DataLoader(
+                    self.eval_dataset,
+                    batch_size=self.config.batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    collate_fn=self.collate_fn
+                )
+                eval_losses = self._eval_epoch(eval_loader, epoch)
+
+            # Print comprehensive epoch summary with training and validation losses
+            self._print_epoch_summary(epoch, train_losses, eval_losses, training_start_time)
 
             # Aggressive memory cleanup before saving checkpoint
             if torch.cuda.is_available():
@@ -672,7 +699,8 @@ class XoronTrainer:
             # Force Python garbage collection
             gc.collect()
 
-            # Save checkpoint
+            # Save checkpoint (use LLM loss for tracking best model)
+            epoch_loss = train_losses['llm']
             if (epoch + 1) % 1 == 0:
                 self._save_checkpoint(epoch, epoch_loss)
                 
@@ -897,7 +925,7 @@ class XoronTrainer:
                 torch.cuda.empty_cache()
                 gc.collect()  # Also run garbage collection
 
-        # Print epoch summary with all component losses
+        # Calculate average losses
         avg_llm = epoch_llm_loss / max(num_valid_batches, 1)  # Use valid batches for average
         avg_cot = epoch_cot_loss / max(num_cot, 1) if num_cot > 0 else 0.0
         avg_img = epoch_img_diff_loss / max(num_img_diff, 1) if num_img_diff > 0 else 0.0
@@ -909,26 +937,257 @@ class XoronTrainer:
         
         # Calculate learning efficiency
         valid_pct = (num_valid_batches / max(num_batches, 1)) * 100
+
+        # Return all losses as a dictionary for comprehensive tracking
+        train_losses = {
+            'llm': avg_llm,
+            'cot': avg_cot,
+            'img': avg_img,
+            'vid': avg_vid,
+            'asr': avg_asr,
+            'tts': avg_tts,
+            'valid_pct': valid_pct,
+            'num_valid_batches': num_valid_batches,
+            'num_batches': num_batches,
+            'num_cot': num_cot,
+            'num_img_diff': num_img_diff,
+            'num_vid_diff': num_vid_diff,
+            'num_asr': num_asr,
+            'num_tts': num_tts,
+            'elapsed_hours': elapsed_hours,
+        }
+
+        return train_losses
+
+    def _eval_epoch(self, eval_loader, epoch):
+        """Run validation/evaluation for one epoch without updating weights.
         
-        print(f"\n{'='*50}")
+        Args:
+            eval_loader: DataLoader for evaluation data
+            epoch: Current epoch number
+            
+        Returns:
+            Dictionary containing all validation losses
+        """
+        self.model.eval()
+        
+        eval_llm_loss = 0.0
+        eval_cot_loss = 0.0
+        eval_img_diff_loss = 0.0
+        eval_vid_diff_loss = 0.0
+        eval_asr_loss = 0.0
+        eval_tts_loss = 0.0
+        num_batches = 0
+        num_valid_batches = 0
+        num_cot = 0
+        num_img_diff = 0
+        num_vid_diff = 0
+        num_asr = 0
+        num_tts = 0
+
+        print(f"\n🔍 Running validation for epoch {epoch + 1}...", flush=True)
+
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(eval_loader):
+                device = self.config.device
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch["attention_mask"].to(device)
+                labels = batch["labels"].to(device)
+                pixel_values = batch["pixel_values"].to(device)
+                video_frames = batch["video_frames"].to(device)
+                audio_features = batch["audio_features"].to(device)
+                sample_types = batch.get("sample_type", ["text"] * len(input_ids))
+
+                has_cot_samples = any(t == 'chain_of_thought' for t in sample_types)
+
+                try:
+                    # Forward pass with mixed precision
+                    if self.use_amp:
+                        with autocast(device_type='cuda', dtype=self.amp_dtype):
+                            outputs = self.model(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                pixel_values=pixel_values,
+                                video_frames=video_frames,
+                                audio_features=audio_features,
+                                labels=labels,
+                            )
+                            
+                            logits = getattr(outputs, 'logits', None)
+                            if has_cot_samples and logits is not None:
+                                llm_loss = self._compute_cot_weighted_loss(
+                                    logits, labels, input_ids, sample_types
+                                )
+                            else:
+                                llm_loss = getattr(outputs, 'loss', None)
+                                if llm_loss is None:
+                                    llm_loss = torch.tensor(0.0, device=device)
+                    else:
+                        outputs = self.model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            pixel_values=pixel_values,
+                            video_frames=video_frames,
+                            audio_features=audio_features,
+                            labels=labels,
+                        )
+                        
+                        logits = getattr(outputs, 'logits', None)
+                        if has_cot_samples and logits is not None:
+                            llm_loss = self._compute_cot_weighted_loss(
+                                logits, labels, input_ids, sample_types
+                            )
+                        else:
+                            llm_loss = getattr(outputs, 'loss', None)
+                            if llm_loss is None:
+                                llm_loss = torch.tensor(0.0, device=device)
+
+                    # Track CoT loss separately
+                    if has_cot_samples:
+                        cot_loss_val = llm_loss.item()
+                        if not (cot_loss_val != cot_loss_val):
+                            eval_cot_loss += cot_loss_val
+                        num_cot += 1
+
+                    # Get text embeddings for modality-specific eval
+                    text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
+
+                    # Image diffusion eval
+                    if any(t in ['image_generation', 'image_editing'] for t in sample_types):
+                        img_diff_loss = eval_image_diffusion_step(
+                            self.model.generator, pixel_values, text_embeds, self.img_gen_size,
+                            sample_types=sample_types
+                        )
+                        if img_diff_loss is not None:
+                            eval_img_diff_loss += img_diff_loss.item()
+                            num_img_diff += 1
+
+                    # Video diffusion eval
+                    video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
+                    if any(t in video_sample_types for t in sample_types):
+                        vid_diff_loss = eval_video_diffusion_step(
+                            self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
+                            sample_types=sample_types
+                        )
+                        if vid_diff_loss is not None:
+                            eval_vid_diff_loss += vid_diff_loss.item()
+                            num_vid_diff += 1
+
+                    # ASR eval
+                    if any(t == 'voice_asr' for t in sample_types):
+                        asr_loss = eval_voice_asr_step(
+                            self.model.audio_encoder, audio_features, text_embeds,
+                            sample_types=sample_types
+                        )
+                        if asr_loss is not None:
+                            eval_asr_loss += asr_loss.item()
+                            num_asr += 1
+
+                    # TTS eval
+                    if any(t == 'voice_tts' for t in sample_types):
+                        tts_loss = eval_voice_tts_step(
+                            self.model.audio_decoder, text_embeds, audio_features,
+                            sample_types=sample_types
+                        )
+                        if tts_loss is not None:
+                            eval_tts_loss += tts_loss.item()
+                            num_tts += 1
+
+                    # Track valid LLM loss
+                    llm_loss_val = llm_loss.item()
+                    if not (llm_loss_val != llm_loss_val):
+                        eval_llm_loss += llm_loss_val
+                        num_valid_batches += 1
+                    num_batches += 1
+
+                except Exception as e:
+                    num_batches += 1
+                    continue
+
+                # Periodic logging
+                if (batch_idx + 1) % 500 == 0:
+                    print(f"   🔍 Eval batch {batch_idx + 1} completed", flush=True)
+
+                # Clear cache periodically
+                if batch_idx % self.config.empty_cache_freq == 0 and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        # Calculate average validation losses
+        avg_llm = eval_llm_loss / max(num_valid_batches, 1)
+        avg_cot = eval_cot_loss / max(num_cot, 1) if num_cot > 0 else 0.0
+        avg_img = eval_img_diff_loss / max(num_img_diff, 1) if num_img_diff > 0 else 0.0
+        avg_vid = eval_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
+        avg_asr = eval_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
+        avg_tts = eval_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
+
+        # Return model to training mode
+        self.model.train()
+
+        eval_losses = {
+            'llm': avg_llm,
+            'cot': avg_cot,
+            'img': avg_img,
+            'vid': avg_vid,
+            'asr': avg_asr,
+            'tts': avg_tts,
+            'num_valid_batches': num_valid_batches,
+            'num_batches': num_batches,
+            'num_cot': num_cot,
+            'num_img_diff': num_img_diff,
+            'num_vid_diff': num_vid_diff,
+            'num_asr': num_asr,
+            'num_tts': num_tts,
+        }
+
+        return eval_losses
+
+    def _print_epoch_summary(self, epoch, train_losses, eval_losses=None, training_start_time=None):
+        """Print comprehensive epoch summary with both training and validation losses."""
+        elapsed = time.time() - training_start_time if training_start_time else 0
+        elapsed_hours = elapsed / 3600
+        
+        print(f"\n{'='*60}")
         print(f"📊 EPOCH {epoch + 1}/{self.config.num_epochs} SUMMARY")
-        print(f"{'='*50}")
-        print(f"   📝 LLM Loss:              {avg_llm:.4f} ({num_valid_batches}/{num_batches} valid batches)")
-        print(f"   🧠 Chain-of-Thought Loss: {avg_cot:.4f} ({num_cot} batches)")
-        print(f"   🖼️ Image Diffusion Loss:  {avg_img:.4f} ({num_img_diff} batches)")
-        print(f"   🎬 Video Diffusion Loss:  {avg_vid:.4f} ({num_vid_diff} batches)")
-        print(f"   🎤 ASR Loss:              {avg_asr:.4f} ({num_asr} batches)")
-        print(f"   🔊 TTS Loss:              {avg_tts:.4f} ({num_tts} batches)")
-        print(f"{'='*50}")
-        print(f"   📈 Learning efficiency: {valid_pct:.1f}% of batches contributed to learning")
+        print(f"{'='*60}")
+        
+        # LLM Loss
+        print(f"   📝 LLM Loss:                      {train_losses['llm']:.4f} ({train_losses['num_valid_batches']}/{train_losses['num_batches']} valid batches)")
+        if eval_losses:
+            print(f"   📝 LLM Validation Loss:           {eval_losses['llm']:.4f} ({eval_losses['num_valid_batches']}/{eval_losses['num_batches']} valid batches)")
+        
+        # Chain-of-Thought Loss
+        print(f"   🧠 Chain-of-Thought Loss:         {train_losses['cot']:.4f} ({train_losses['num_cot']} batches)")
+        if eval_losses:
+            print(f"   🧠 Chain-of-Thought Validation Loss: {eval_losses['cot']:.4f} ({eval_losses['num_cot']} batches)")
+        
+        # Image Diffusion Loss
+        print(f"   🖼️ Image Diffusion Loss:          {train_losses['img']:.4f} ({train_losses['num_img_diff']} batches)")
+        if eval_losses:
+            print(f"   🖼️ Image Diffusion Validation Loss: {eval_losses['img']:.4f} ({eval_losses['num_img_diff']} batches)")
+        
+        # Video Diffusion Loss
+        print(f"   🎬 Video Diffusion Loss:          {train_losses['vid']:.4f} ({train_losses['num_vid_diff']} batches)")
+        if eval_losses:
+            print(f"   🎬 Video Diffusion Validation Loss: {eval_losses['vid']:.4f} ({eval_losses['num_vid_diff']} batches)")
+        
+        # ASR Loss
+        print(f"   🎤 ASR Loss:                      {train_losses['asr']:.4f} ({train_losses['num_asr']} batches)")
+        if eval_losses:
+            print(f"   🎤 ASR Validation Loss:           {eval_losses['asr']:.4f} ({eval_losses['num_asr']} batches)")
+        
+        # TTS Loss
+        print(f"   🔊 TTS Loss:                      {train_losses['tts']:.4f} ({train_losses['num_tts']} batches)")
+        if eval_losses:
+            print(f"   🔊 TTS Validation Loss:           {eval_losses['tts']:.4f} ({eval_losses['num_tts']} batches)")
+        
+        print(f"{'='*60}")
+        print(f"   📈 Learning efficiency: {train_losses['valid_pct']:.1f}% of batches contributed to learning")
         print(f"   ⏱️ Elapsed: {elapsed_hours:.2f}h")
-        print(f"{'='*50}\n")
+        print(f"{'='*60}\n")
         
         # Warn if learning efficiency is too low
-        if valid_pct < 50:
-            print(f"   ⚠️ WARNING: Low learning efficiency ({valid_pct:.1f}%). Check your data pipeline!")
-
-        return avg_llm
+        if train_losses['valid_pct'] < 50:
+            print(f"   ⚠️ WARNING: Low learning efficiency ({train_losses['valid_pct']:.1f}%). Check your data pipeline!")
 
     def _save_checkpoint(self, epoch, loss):
         """Save a training checkpoint with full training state and tokenizer.

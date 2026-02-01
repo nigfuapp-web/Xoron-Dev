@@ -556,3 +556,332 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=No
         # Log the exception for debugging
         print(f"      ⚠️ TTS training error: {type(e).__name__}: {str(e)[:100]}")
         return None
+
+
+# ============================================================================
+# EVALUATION FUNCTIONS
+# These are inference-only versions without gradient computation
+# ============================================================================
+
+def eval_image_diffusion_step(generator, images, text_context, target_size=256, sample_types=None, mask=None):
+    """Evaluate image diffusion: compute loss without gradient tracking.
+    
+    Args:
+        generator: Image diffusion generator model
+        images: Input images (B, C, H, W)
+        text_context: Text embeddings for conditioning
+        target_size: Target image size for generation
+        sample_types: List of sample types for filtering
+        mask: Optional mask for inpainting/editing tasks
+        
+    Returns:
+        Loss tensor (detached) or None if evaluation fails
+    """
+    if generator is None or images is None:
+        return None
+    try:
+        if not isinstance(images, torch.Tensor):
+            return None
+        if images.numel() == 0:
+            return None
+
+        gen_device = next(generator.parameters()).device
+        images = images.to(gen_device)
+        
+        if text_context is not None:
+            text_context = text_context.to(gen_device)
+
+        if images.dim() != 4:
+            return None
+
+        # Filter by sample type if provided
+        if sample_types is not None:
+            type_mask = torch.tensor([t in ['image_generation', 'image_editing'] for t in sample_types], device=gen_device)
+            if not type_mask.any():
+                return None
+            images = images[type_mask]
+            if text_context is not None and text_context.dim() >= 2:
+                text_context = text_context[type_mask]
+
+        # Filter non-zero images
+        valid_mask = images.abs().sum(dim=(1, 2, 3)) > 1e-6
+        num_valid = valid_mask.sum().item()
+        
+        if num_valid == 0:
+            return None
+
+        images = images[valid_mask]
+        if text_context is not None and text_context.dim() >= 2:
+            text_context = text_context[valid_mask]
+
+        # Resize if needed
+        if images.shape[2] != target_size or images.shape[3] != target_size:
+            images = F.interpolate(images, size=(target_size, target_size), mode='bilinear', align_corners=False)
+
+        # Normalize to [-1, 1] for diffusion
+        if images.max() > 1.0:
+            images = images / 127.5 - 1.0
+        elif images.min() >= 0:
+            images = images * 2 - 1
+
+        # Use generator's training_step for consistent loss calculation
+        if hasattr(generator, 'training_step'):
+            with torch.no_grad():
+                losses = generator.training_step(images, text_context)
+                loss = losses['total_loss']
+                return loss.detach()
+
+        # Fallback to manual diffusion loss
+        with torch.no_grad():
+            z, mean, logvar = generator.encode_image(images)
+            
+            batch_size = z.shape[0]
+            timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
+            noise = torch.randn_like(z)
+            
+            if hasattr(generator, 'add_noise'):
+                noisy_z = generator.add_noise(z, noise, timesteps)
+            else:
+                alpha_t = generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1)
+                noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
+            
+            noise_pred = generator.unet(noisy_z, timesteps, text_context)
+            diff_loss = F.mse_loss(noise_pred, noise)
+            
+            return diff_loss.detach()
+
+    except Exception as e:
+        return None
+
+
+def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
+    """Evaluate video diffusion: compute loss without gradient tracking.
+    
+    Args:
+        video_generator: Video diffusion generator model
+        video_frames: Input video frames (B, T, C, H, W)
+        text_context: Text embeddings for conditioning
+        target_size: Target frame size
+        sample_types: List of sample types for filtering
+        
+    Returns:
+        Loss tensor (detached) or None if evaluation fails
+    """
+    if video_generator is None or video_frames is None:
+        return None
+    try:
+        if not isinstance(video_frames, torch.Tensor):
+            return None
+        if video_frames.numel() == 0:
+            return None
+
+        gen_device = next(video_generator.parameters()).device
+        video_frames = video_frames.to(gen_device)
+        
+        if text_context is not None:
+            text_context = text_context.to(gen_device)
+
+        if video_frames.dim() != 5:
+            return None
+
+        # Filter by sample type
+        video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
+        if sample_types is not None:
+            type_mask = torch.tensor([t in video_sample_types for t in sample_types], device=gen_device)
+            if not type_mask.any():
+                return None
+            video_frames = video_frames[type_mask]
+            if text_context is not None and text_context.dim() >= 2:
+                text_context = text_context[type_mask]
+
+        # Filter non-zero videos
+        valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6
+        num_valid = valid_mask.sum().item()
+        
+        if num_valid == 0:
+            return None
+
+        video_frames = video_frames[valid_mask]
+        if text_context is not None and text_context.dim() >= 2:
+            text_context = text_context[valid_mask]
+
+        # Resize if needed
+        current_h, current_w = video_frames.shape[3], video_frames.shape[4]
+        if current_h != target_size or current_w != target_size:
+            b, t, c, h, w = video_frames.shape
+            video_frames = video_frames.view(b * t, c, h, w)
+            video_frames = F.interpolate(video_frames, size=(target_size, target_size), mode='bilinear', align_corners=False)
+            video_frames = video_frames.view(b, t, c, target_size, target_size)
+
+        # Normalize to [-1, 1]
+        if video_frames.max() > 1.0:
+            video_frames_norm = video_frames / 127.5 - 1.0
+        elif video_frames.min() >= 0:
+            video_frames_norm = video_frames * 2 - 1
+        else:
+            video_frames_norm = video_frames
+
+        first_frame = None
+        if video_frames_norm.shape[1] > 1:
+            first_frame = (video_frames_norm[:, 0] + 1) / 2
+
+        # Use generator's training_step for consistent loss calculation
+        if hasattr(video_generator, 'training_step'):
+            with torch.no_grad():
+                video_frames_5d = video_frames_norm.permute(0, 2, 1, 3, 4)  # B, C, T, H, W
+                losses = video_generator.training_step(video_frames_5d, text_context, first_frame)
+                loss = losses['total_loss']
+                return loss.detach()
+
+        # Fallback to manual video diffusion loss
+        with torch.no_grad():
+            video_frames_5d = video_frames_norm.permute(0, 2, 1, 3, 4)
+            z, mean, logvar = video_generator.encode_video(video_frames_5d)
+            
+            batch_size = z.shape[0]
+            timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
+            noise = torch.randn_like(z)
+            
+            if hasattr(video_generator, 'add_noise'):
+                noisy_z = video_generator.add_noise(z, noise, timesteps)
+            else:
+                alpha_t = video_generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1)
+                noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
+            
+            first_frame_latent = z[:, :, 0] if first_frame is not None else None
+            noise_pred = video_generator.unet(noisy_z, timesteps, text_context, first_frame_latent)
+            diff_loss = F.mse_loss(noise_pred, noise)
+            
+            return diff_loss.detach()
+
+    except Exception as e:
+        return None
+
+
+def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types=None):
+    """Evaluate ASR: compute audio-text alignment loss without gradient tracking.
+    
+    Args:
+        audio_encoder: Audio encoder model
+        audio_features: Batch of audio mel spectrograms (B, mel_bins, time)
+        text_embeds: Text embeddings (B, seq_len, hidden_dim)
+        sample_types: List of sample types for filtering
+        
+    Returns:
+        Loss tensor (detached) or None if evaluation fails
+    """
+    if audio_encoder is None or audio_features is None:
+        return None
+    try:
+        if not isinstance(audio_features, torch.Tensor):
+            return None
+        if audio_features.numel() == 0:
+            return None
+
+        enc_device = next(audio_encoder.parameters()).device
+        enc_dtype = next(audio_encoder.parameters()).dtype
+        audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
+        text_embeds = text_embeds.to(device=enc_device, dtype=enc_dtype)
+
+        if audio_features.dim() != 3:
+            return None
+
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor([t == 'voice_asr' for t in sample_types], device=enc_device)
+            if not type_mask.any():
+                return None
+            audio_features = audio_features[type_mask]
+            text_embeds = text_embeds[type_mask]
+
+        # Filter valid audio
+        valid_mask = audio_features.abs().sum(dim=(1, 2)) > 1e-6
+        num_valid = valid_mask.sum().item()
+        
+        if num_valid == 0:
+            return None
+
+        audio_features = audio_features[valid_mask]
+        text_embeds = text_embeds[valid_mask]
+
+        with torch.no_grad():
+            # For single sample, use MSE loss
+            if audio_features.shape[0] < 2:
+                audio_embeds = audio_encoder(audio_features)
+                audio_pooled = audio_embeds.mean(dim=1)
+                text_pooled = text_embeds.mean(dim=1)
+                if audio_pooled.shape[-1] != text_pooled.shape[-1]:
+                    min_dim = min(audio_pooled.shape[-1], text_pooled.shape[-1])
+                    audio_pooled = audio_pooled[..., :min_dim]
+                    text_pooled = text_pooled[..., :min_dim]
+                loss = F.mse_loss(audio_pooled, text_pooled)
+                return loss.detach()
+
+            # Contrastive loss for multiple samples
+            audio_embeds = audio_encoder(audio_features)
+            audio_pooled = audio_embeds.mean(dim=1)
+            text_pooled = text_embeds.mean(dim=1)
+            audio_pooled = F.normalize(audio_pooled, dim=-1)
+            text_pooled = F.normalize(text_pooled, dim=-1)
+            similarity = torch.matmul(audio_pooled, text_pooled.T)
+            labels = torch.arange(similarity.shape[0], device=enc_device)
+            loss = F.cross_entropy(similarity, labels)
+            return loss.detach()
+
+    except Exception as e:
+        return None
+
+
+def eval_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=None):
+    """Evaluate TTS: compute text-to-audio loss without gradient tracking.
+    
+    Args:
+        audio_decoder: Audio decoder model
+        text_embeds: Text embeddings (B, seq_len, hidden_dim)
+        target_mel: Target mel spectrograms (B, mel_bins, time)
+        sample_types: List of sample types for filtering
+        
+    Returns:
+        Loss tensor (detached) or None if evaluation fails
+    """
+    if audio_decoder is None or target_mel is None:
+        return None
+    try:
+        if not isinstance(target_mel, torch.Tensor):
+            return None
+        if target_mel.numel() == 0:
+            return None
+
+        dec_device = next(audio_decoder.parameters()).device
+        dec_dtype = next(audio_decoder.parameters()).dtype
+        target_mel = target_mel.to(device=dec_device, dtype=dec_dtype)
+        text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
+
+        if target_mel.dim() != 3:
+            return None
+
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], device=dec_device)
+            if not type_mask.any():
+                return None
+            target_mel = target_mel[type_mask]
+            text_embeds = text_embeds[type_mask]
+
+        # Filter valid mel spectrograms
+        valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6
+        num_valid = valid_mask.sum().item()
+        
+        if num_valid == 0:
+            return None
+
+        target_mel = target_mel[valid_mask]
+        text_embeds = text_embeds[valid_mask]
+
+        with torch.no_grad():
+            pred_mel, durations = audio_decoder(text_embeds, target_length=target_mel.shape[-1])
+            mel_loss = F.mse_loss(pred_mel, target_mel)
+            return mel_loss.detach()
+
+    except Exception as e:
+        return None
