@@ -729,6 +729,7 @@ class XoronTrainer:
         epoch_vid_diff_loss = 0.0
         epoch_asr_loss = 0.0
         epoch_tts_loss = 0.0
+        epoch_moe_aux_loss = 0.0  # MoE auxiliary loss (load balancing)
         num_batches = 0
         num_valid_batches = 0  # Track batches with valid loss for learning
         num_cot = 0
@@ -736,6 +737,7 @@ class XoronTrainer:
         num_vid_diff = 0
         num_asr = 0
         num_tts = 0
+        num_moe = 0  # Batches with MoE aux loss
         total_batches = len(train_loader)
 
         for batch_idx, batch in enumerate(train_loader):
@@ -820,6 +822,11 @@ class XoronTrainer:
             # Add MoE auxiliary loss if available (SOTA: proper MoE training)
             if moe_aux_loss is not None and moe_aux_loss.item() > 0:
                 total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss
+                # Track MoE aux loss
+                moe_loss_val = moe_aux_loss.item()
+                if not (moe_loss_val != moe_loss_val):  # NaN check
+                    epoch_moe_aux_loss += moe_loss_val
+                    num_moe += 1
 
             # Train diffusion models based on sample type
             text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
@@ -933,6 +940,7 @@ class XoronTrainer:
         avg_vid = epoch_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
         avg_asr = epoch_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
         avg_tts = epoch_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
+        avg_moe = epoch_moe_aux_loss / max(num_moe, 1) if num_moe > 0 else 0.0
         elapsed = time.time() - training_start_time
         elapsed_hours = elapsed / 3600
         
@@ -947,6 +955,7 @@ class XoronTrainer:
             'vid': avg_vid,
             'asr': avg_asr,
             'tts': avg_tts,
+            'moe_aux': avg_moe,
             'valid_pct': valid_pct,
             'num_valid_batches': num_valid_batches,
             'num_batches': num_batches,
@@ -955,6 +964,7 @@ class XoronTrainer:
             'num_vid_diff': num_vid_diff,
             'num_asr': num_asr,
             'num_tts': num_tts,
+            'num_moe': num_moe,
             'elapsed_hours': elapsed_hours,
         }
 
@@ -968,7 +978,7 @@ class XoronTrainer:
             epoch: Current epoch number
             
         Returns:
-            Dictionary containing all validation losses
+            Dictionary containing all validation losses including MoE metrics
         """
         self.model.eval()
         
@@ -978,6 +988,7 @@ class XoronTrainer:
         eval_vid_diff_loss = 0.0
         eval_asr_loss = 0.0
         eval_tts_loss = 0.0
+        eval_moe_aux_loss = 0.0  # MoE auxiliary loss (load balancing)
         num_batches = 0
         num_valid_batches = 0
         num_cot = 0
@@ -985,6 +996,7 @@ class XoronTrainer:
         num_vid_diff = 0
         num_asr = 0
         num_tts = 0
+        num_moe = 0  # Batches with MoE aux loss
 
         print(f"\n🔍 Running validation for epoch {epoch + 1}...", flush=True)
 
@@ -1042,6 +1054,14 @@ class XoronTrainer:
                             llm_loss = getattr(outputs, 'loss', None)
                             if llm_loss is None:
                                 llm_loss = torch.tensor(0.0, device=device)
+
+                    # Track MoE auxiliary loss (load balancing)
+                    moe_aux_loss = getattr(outputs, 'aux_loss', None)
+                    if moe_aux_loss is not None:
+                        moe_loss_val = moe_aux_loss.item()
+                        if not (moe_loss_val != moe_loss_val) and moe_loss_val > 0:
+                            eval_moe_aux_loss += moe_loss_val
+                            num_moe += 1
 
                     # Track CoT loss separately
                     if has_cot_samples:
@@ -1120,6 +1140,7 @@ class XoronTrainer:
         avg_vid = eval_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
         avg_asr = eval_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
         avg_tts = eval_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
+        avg_moe = eval_moe_aux_loss / max(num_moe, 1) if num_moe > 0 else 0.0
 
         # Return model to training mode
         self.model.train()
@@ -1131,6 +1152,7 @@ class XoronTrainer:
             'vid': avg_vid,
             'asr': avg_asr,
             'tts': avg_tts,
+            'moe_aux': avg_moe,
             'num_valid_batches': num_valid_batches,
             'num_batches': num_batches,
             'num_cot': num_cot,
@@ -1138,6 +1160,7 @@ class XoronTrainer:
             'num_vid_diff': num_vid_diff,
             'num_asr': num_asr,
             'num_tts': num_tts,
+            'num_moe': num_moe,
         }
 
         return eval_losses
@@ -1180,6 +1203,11 @@ class XoronTrainer:
         print(f"   🔊 TTS Loss:                      {train_losses['tts']:.4f} ({train_losses['num_tts']} batches)")
         if eval_losses:
             print(f"   🔊 TTS Validation Loss:           {eval_losses['tts']:.4f} ({eval_losses['num_tts']} batches)")
+        
+        # MoE Auxiliary Loss (load balancing)
+        print(f"   ⚡ MoE Aux Loss:                   {train_losses['moe_aux']:.4f} ({train_losses['num_moe']} batches)")
+        if eval_losses:
+            print(f"   ⚡ MoE Aux Validation Loss:        {eval_losses['moe_aux']:.4f} ({eval_losses['num_moe']} batches)")
         
         print(f"{'='*60}")
         print(f"   📈 Learning efficiency: {train_losses['valid_pct']:.1f}% of batches contributed to learning")
