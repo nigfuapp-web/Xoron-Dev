@@ -433,21 +433,14 @@ class XoronTrainer:
         if shift_logits.device != shift_labels.device:
             shift_labels = shift_labels.to(shift_logits.device)
         
-        # SAFETY CHECK: Ensure we have valid labels to compute loss
-        valid_count = (shift_labels != -100).sum().item()
-        if valid_count == 0:
-            # No valid labels - return zero loss to avoid NaN
-            return torch.tensor(0.0, device=device, requires_grad=True)
+        # Ensure labels are long dtype for CrossEntropyLoss (critical!)
+        if shift_labels.dtype != torch.long:
+            shift_labels = shift_labels.long()
         
-        # Compute per-token loss
+        # Compute per-token loss - CrossEntropyLoss handles ignore_index internally
         loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
         flat_logits = shift_logits.view(-1, shift_logits.size(-1))
         flat_labels = shift_labels.view(-1)
-        
-        # Additional safety: check for NaN in logits
-        if torch.isnan(flat_logits).any() or torch.isinf(flat_logits).any():
-            # Model produced invalid logits - return zero loss
-            return torch.tensor(0.0, device=device, requires_grad=True)
         
         per_token_loss = loss_fct(flat_logits, flat_labels)
         per_token_loss = per_token_loss.view(shift_labels.size())
@@ -850,17 +843,16 @@ class XoronTrainer:
                     num_tts += 1
 
             # Backward pass (supports both FP16 with scaler and BF16 without)
-            # Skip backward if total_loss is zero or invalid (no valid data in batch)
             loss_value = total_loss.item()
-            should_backward = loss_value > 0 and not (loss_value != loss_value)  # Not zero and not NaN
+            is_valid_loss = not (loss_value != loss_value) and not (loss_value == float('inf'))  # Not NaN and not Inf
             
-            if should_backward:
+            if is_valid_loss:
                 if self.scaler is not None:
                     self.scaler.scale(total_loss / self.config.gradient_accumulation_steps).backward()
                 else:
                     (total_loss / self.config.gradient_accumulation_steps).backward()
                 num_valid_batches += 1
-            # else: Skip backward for zero/invalid loss (no valid data to learn from)
+            # else: Skip backward for NaN/Inf loss only
 
             # Optimizer step with gradient clipping from config
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:

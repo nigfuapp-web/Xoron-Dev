@@ -960,27 +960,25 @@ class MoELlamaForCausalLM(nn.Module):
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
-            # Safety check: ensure we have valid labels to avoid NaN loss
-            valid_count = (shift_labels != -100).sum().item()
-            if valid_count > 0:
-                # Flatten for cross-entropy
-                loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-                loss = loss_fct(
-                    shift_logits.view(-1, shift_logits.size(-1)), 
-                    shift_labels.view(-1)
-                )
-                
-                # NaN safety check
-                if torch.isnan(loss) or torch.isinf(loss):
-                    loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
-                
-                # Add auxiliary loss from MoE routing
-                if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
-                    if aux_loss is not None and not torch.isnan(aux_loss) and not torch.isinf(aux_loss):
-                        loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
-            else:
-                # No valid labels - return zero loss
+            # Ensure labels are long dtype for CrossEntropyLoss (critical!)
+            if shift_labels.dtype != torch.long:
+                shift_labels = shift_labels.long()
+            
+            # Standard loss computation - CrossEntropyLoss handles ignore_index internally
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)), 
+                shift_labels.view(-1)
+            )
+            
+            # NaN/Inf safety check - only replace if actually invalid
+            if torch.isnan(loss) or torch.isinf(loss):
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+            
+            # Add auxiliary loss from MoE routing
+            if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
+                if aux_loss is not None and not torch.isnan(aux_loss) and not torch.isinf(aux_loss):
+                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
 
         if not return_dict:
             output = (logits, outputs.past_key_values, outputs.hidden_states, outputs.attentions, aux_loss)
