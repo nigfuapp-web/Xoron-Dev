@@ -706,6 +706,7 @@ class XoronTrainer:
         epoch_asr_loss = 0.0
         epoch_tts_loss = 0.0
         num_batches = 0
+        num_valid_batches = 0  # Track batches with valid loss for learning
         num_cot = 0
         num_img_diff = 0
         num_vid_diff = 0
@@ -849,10 +850,17 @@ class XoronTrainer:
                     num_tts += 1
 
             # Backward pass (supports both FP16 with scaler and BF16 without)
-            if self.scaler is not None:
-                self.scaler.scale(total_loss / self.config.gradient_accumulation_steps).backward()
-            else:
-                (total_loss / self.config.gradient_accumulation_steps).backward()
+            # Skip backward if total_loss is zero or invalid (no valid data in batch)
+            loss_value = total_loss.item()
+            should_backward = loss_value > 0 and not (loss_value != loss_value)  # Not zero and not NaN
+            
+            if should_backward:
+                if self.scaler is not None:
+                    self.scaler.scale(total_loss / self.config.gradient_accumulation_steps).backward()
+                else:
+                    (total_loss / self.config.gradient_accumulation_steps).backward()
+                num_valid_batches += 1
+            # else: Skip backward for zero/invalid loss (no valid data to learn from)
 
             # Optimizer step with gradient clipping from config
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
@@ -896,7 +904,7 @@ class XoronTrainer:
                 gc.collect()  # Also run garbage collection
 
         # Print epoch summary with all component losses
-        avg_llm = epoch_llm_loss / max(num_batches, 1)
+        avg_llm = epoch_llm_loss / max(num_valid_batches, 1)  # Use valid batches for average
         avg_cot = epoch_cot_loss / max(num_cot, 1) if num_cot > 0 else 0.0
         avg_img = epoch_img_diff_loss / max(num_img_diff, 1) if num_img_diff > 0 else 0.0
         avg_vid = epoch_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
@@ -905,18 +913,26 @@ class XoronTrainer:
         elapsed = time.time() - training_start_time
         elapsed_hours = elapsed / 3600
         
+        # Calculate learning efficiency
+        valid_pct = (num_valid_batches / max(num_batches, 1)) * 100
+        
         print(f"\n{'='*50}")
         print(f"📊 EPOCH {epoch + 1}/{self.config.num_epochs} SUMMARY")
         print(f"{'='*50}")
-        print(f"   📝 LLM Loss:              {avg_llm:.4f} ({num_batches} batches)")
+        print(f"   📝 LLM Loss:              {avg_llm:.4f} ({num_valid_batches}/{num_batches} valid batches)")
         print(f"   🧠 Chain-of-Thought Loss: {avg_cot:.4f} ({num_cot} batches)")
         print(f"   🖼️ Image Diffusion Loss:  {avg_img:.4f} ({num_img_diff} batches)")
         print(f"   🎬 Video Diffusion Loss:  {avg_vid:.4f} ({num_vid_diff} batches)")
         print(f"   🎤 ASR Loss:              {avg_asr:.4f} ({num_asr} batches)")
         print(f"   🔊 TTS Loss:              {avg_tts:.4f} ({num_tts} batches)")
         print(f"{'='*50}")
+        print(f"   📈 Learning efficiency: {valid_pct:.1f}% of batches contributed to learning")
         print(f"   ⏱️ Elapsed: {elapsed_hours:.2f}h")
         print(f"{'='*50}\n")
+        
+        # Warn if learning efficiency is too low
+        if valid_pct < 50:
+            print(f"   ⚠️ WARNING: Low learning efficiency ({valid_pct:.1f}%). Check your data pipeline!")
 
         return avg_llm
 
