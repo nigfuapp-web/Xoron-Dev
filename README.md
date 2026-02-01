@@ -186,10 +186,12 @@ Xoron-Dev/
 │
 ├── 📁 training/             # Training utilities
 │   ├── trainer.py           # XoronTrainer with weighted loss
-│   └── training_steps.py    # Per-modality training steps
+│   └── utils.py             # Per-modality training steps & utilities
 │
 ├── 📁 data/                 # Data processing
-│   └── formatters.py        # Dataset formatters with special tokens
+│   ├── dataset.py           # Multimodal streaming dataset
+│   ├── formatters.py        # Dataset formatters with special tokens
+│   └── processors.py        # Data preprocessing utilities
 │
 ├── 📁 synth/                # Synthetic dataset generation
 │   ├── unique_generator.py  # Main dataset generator

@@ -22,7 +22,7 @@ class TestTrainingConfig(unittest.TestCase):
         config = self.TrainingConfig()
         
         self.assertEqual(config.batch_size, 1)
-        self.assertEqual(config.gradient_accumulation_steps, 64)
+        self.assertEqual(config.gradient_accumulation_steps, 128)
         self.assertEqual(config.learning_rate, 2e-4)
         self.assertEqual(config.num_epochs, 2)
         
@@ -56,7 +56,7 @@ class TestTrainingConfig(unittest.TestCase):
         self.assertEqual(config.video_diffusion_loss_weight, 0.1)
         self.assertEqual(config.asr_loss_weight, 0.1)
         self.assertEqual(config.tts_loss_weight, 0.1)
-        self.assertEqual(config.moe_aux_loss_weight, 0.01)
+        self.assertEqual(config.moe_aux_loss_weight, 0.02)
         
     def test_cot_loss_weight(self):
         """Test chain-of-thought loss weight."""
@@ -83,8 +83,10 @@ class TestTrainingConfig(unittest.TestCase):
         """Test memory optimization configuration."""
         config = self.TrainingConfig()
         
-        self.assertEqual(config.empty_cache_freq, 10)
+        self.assertEqual(config.empty_cache_freq, 5)
         self.assertTrue(config.gradient_checkpointing)
+        self.assertTrue(config.use_8bit_optimizer)
+        self.assertTrue(config.set_to_none)
         
     def test_precision_settings(self):
         """Test precision configuration."""
