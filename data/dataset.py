@@ -35,6 +35,7 @@ class TrueStreamingDataset(IterableDataset):
         max_length: int = 1024,
         max_per_epoch: int = 12000,
         max_per_dataset: int = 500,
+        sample_repeat: int = 1,
         voice_processor=None,
         max_video_frames: int = 32,
         video_size: int = 256,
@@ -43,6 +44,7 @@ class TrueStreamingDataset(IterableDataset):
         self.max_length = max_length
         self.max_per_epoch = max_per_epoch
         self.max_per_dataset = max_per_dataset
+        self.sample_repeat = max(1, sample_repeat)  # At least 1
         self.tokens = tokens
         self.format_functions = format_functions
         self.dataset_configs = dataset_configs
@@ -732,8 +734,10 @@ class TrueStreamingDataset(IterableDataset):
         - Media is processed on-demand and immediately returned
         - Samples are formatted using format_functions before yielding
         - Each dataset is capped at max_per_dataset to prevent domination
+        - Each sample is yielded sample_repeat times for stronger learning signal
         """
         samples_yielded = 0
+        unique_samples = 0
         
         # Create iterators for all sources with per-dataset counters
         active_sources = []
@@ -747,14 +751,15 @@ class TrueStreamingDataset(IterableDataset):
                 **source,
                 "iterator": iterator,
                 "exhausted": False,
-                "count": 0,  # Track samples from this dataset
+                "count": 0,  # Track unique samples from this dataset
             })
         
         # Track stats by category
         type_counts = {}
         dataset_counts = {}
         
-        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples, {self.max_per_dataset} per dataset)...", flush=True)
+        repeat_info = f", {self.sample_repeat}x repeat" if self.sample_repeat > 1 else ""
+        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples, {self.max_per_dataset} per dataset{repeat_info})...", flush=True)
         
         # Round-robin through sources
         while samples_yielded < self.max_per_epoch and active_sources:
@@ -784,8 +789,15 @@ class TrueStreamingDataset(IterableDataset):
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
                     if processed is not None:
-                        yield processed
-                        samples_yielded += 1
+                        # Yield the same sample multiple times for stronger learning signal
+                        for repeat_idx in range(self.sample_repeat):
+                            if samples_yielded >= self.max_per_epoch:
+                                break
+                            yield processed
+                            samples_yielded += 1
+                        
+                        # Count as one unique sample from this dataset
+                        unique_samples += 1
                         source["count"] += 1
                         
                         dtype = source["dtype"]
@@ -794,7 +806,7 @@ class TrueStreamingDataset(IterableDataset):
                         
                         # Log progress every 1000 samples
                         if samples_yielded % 1000 == 0:
-                            print(f"   📈 Streamed {samples_yielded}/{self.max_per_epoch} samples", flush=True)
+                            print(f"   📈 Streamed {samples_yielded}/{self.max_per_epoch} samples ({unique_samples} unique)", flush=True)
                 
                 except StopIteration:
                     source["exhausted"] = True
@@ -809,10 +821,10 @@ class TrueStreamingDataset(IterableDataset):
                     del active_sources[idx]
         
         # Print final stats
-        print(f"\n✅ Epoch complete: {samples_yielded} samples streamed", flush=True)
+        print(f"\n✅ Epoch complete: {samples_yielded} samples streamed ({unique_samples} unique, {self.sample_repeat}x repeat)", flush=True)
         print(f"   📊 By category:", flush=True)
         for dtype, count in sorted(type_counts.items()):
-            print(f"      {dtype}: {count} samples", flush=True)
+            print(f"      {dtype}: {count} unique samples", flush=True)
         
         gc.collect()
 

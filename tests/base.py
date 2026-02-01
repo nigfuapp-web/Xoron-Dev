@@ -159,6 +159,7 @@ def create_mock_training_config(**overrides):
         'final_model_dir': './test-final',
         'max_per_epoch': 1000,
         'max_per_dataset': 100,
+        'sample_repeat': 2,
         'batch_size': 2,
         'gradient_accumulation_steps': 4,
         'learning_rate': 1e-4,
