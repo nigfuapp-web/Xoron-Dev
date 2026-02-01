@@ -216,8 +216,10 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
             return None
 
         gen_device = next(generator.parameters()).device
-        images = images.to(gen_device).float()
-        text_context = text_context.to(gen_device)
+        gen_dtype = next(generator.parameters()).dtype
+        # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
+        images = images.to(device=gen_device, dtype=gen_dtype)
+        text_context = text_context.to(device=gen_device, dtype=gen_dtype)
 
         if images.dim() != 4 or images.shape[1] != 3:
             return None
@@ -321,8 +323,10 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
             return None
 
         gen_device = next(video_generator.parameters()).device
-        video_frames = video_frames.to(gen_device).float()
-        text_context = text_context.to(gen_device)
+        gen_dtype = next(video_generator.parameters()).dtype
+        # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
+        video_frames = video_frames.to(device=gen_device, dtype=gen_dtype)
+        text_context = text_context.to(device=gen_device, dtype=gen_dtype)
 
         # Filter by sample type if provided
         video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
@@ -439,8 +443,10 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
             return None
 
         enc_device = next(audio_encoder.parameters()).device
-        audio_features = audio_features.to(enc_device).float()
-        text_embeds = text_embeds.to(enc_device)
+        enc_dtype = next(audio_encoder.parameters()).dtype
+        # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
+        audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
+        text_embeds = text_embeds.to(device=enc_device, dtype=enc_dtype)
 
         if audio_features.dim() != 3:
             return None
@@ -514,8 +520,10 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=No
             return None
 
         dec_device = next(audio_decoder.parameters()).device
-        target_mel = target_mel.to(dec_device).float()
-        text_embeds = text_embeds.to(dec_device)
+        dec_dtype = next(audio_decoder.parameters()).dtype
+        # Match input dtype to model dtype to avoid "mat1 and mat2 must have the same dtype" errors
+        target_mel = target_mel.to(device=dec_device, dtype=dec_dtype)
+        text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
 
         if target_mel.dim() != 3:
             return None
