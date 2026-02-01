@@ -735,15 +735,25 @@ class TrueStreamingDataset(IterableDataset):
             raw_audio_data = self._extract_audio_data(raw_sample, dtype)
             
             # Create sample metadata (small, serializable data only for formatting)
+            # Note: Conversation fields can be very large (100k+ chars) but are essential for training
             sample_metadata = {}
+            # Fields that can have large content but are essential for training
+            essential_text_fields = {
+                "conversations", "conversation", "messages", "dialog", "dialogue", 
+                "turns", "data", "chat", "translated_problem", "translated_solution"
+            }
             for k, v in raw_sample.items():
                 if k in ["image", "video", "frames", "jpg", "jpeg", "png",
                         "source_img", "target_img", "audio", "speech", "waveform"]:
                     continue
                 if isinstance(v, (str, int, float, bool, type(None))):
                     sample_metadata[k] = v
-                elif isinstance(v, (list, dict)) and len(str(v)) < 10000:
-                    sample_metadata[k] = v
+                elif isinstance(v, (list, dict)):
+                    # Allow larger content for essential text fields (up to 500KB)
+                    # Other fields still have 10KB limit to avoid memory issues
+                    max_size = 500000 if k in essential_text_fields else 10000
+                    if len(str(v)) < max_size:
+                        sample_metadata[k] = v
             
             # Format the sample text using the appropriate format function
             format_fn = self.format_functions.get(dtype)

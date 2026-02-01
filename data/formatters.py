@@ -554,9 +554,29 @@ class MultimodalFormatter:
     def format_code_sample(self, sample: Dict) -> Optional[Dict]:
         """Handle multiple code dataset formats with language detection."""
         try:
-            # Get language hint if available
-            language_hint = self._safe_get(sample, ['language', 'lang', 'programming_language'])
+            # Get language hint if available - check target_language for Swift-Code-Edit style datasets
+            language_hint = self._safe_get(sample, ['language', 'lang', 'programming_language', 'target_language'])
             filename = self._safe_get(sample, ['filename', 'file_name', 'path'])
+            
+            # Swift-Code-Edit format: translated_problem + translated_solution + messages
+            # This dataset has problem description in translated_problem and solution in translated_solution
+            if "translated_problem" in sample and "translated_solution" in sample:
+                problem = sample["translated_problem"]
+                solution = sample["translated_solution"]
+                target_lang = sample.get("target_language", "swift").lower()
+                
+                # Clean up the solution - remove markdown code blocks if present
+                solution_clean = solution
+                if solution_clean.startswith("```"):
+                    lines = solution_clean.split("\n")
+                    # Skip first line (```lang) and last line (```)
+                    if len(lines) > 2:
+                        solution_clean = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+                
+                user_content = problem
+                assistant = self._format_code_with_language(solution_clean, target_lang, filename)
+                text = self._format_simple_qa(user_content, assistant)
+                return {"text": text, "type": "code", "language": target_lang}
             
             # Try messages/conversations format first
             messages = self._safe_get(sample, ['messages', 'conversations'])
@@ -577,17 +597,40 @@ class MultimodalFormatter:
                 text = self._format_simple_qa(user, assistant)
                 return {"text": text, "type": "code", "language": language_hint or self._detect_language(output, filename)}
 
-            # HumanEval format
+            # HumanEval format - detect language from task_id or use language_hint
             if "instruction" in sample and "canonical_solution" in sample:
                 inst = sample["instruction"]
                 solution = sample["canonical_solution"]
                 docstring = sample.get("docstring", "")
                 prompt = sample.get("prompt", "")
+                declaration = sample.get("declaration", "")
+                
+                # Detect language from task_id (e.g., "Python/0", "CPP/1", "JavaScript/2", "Rust/3", "Go/4", "Java/5")
+                task_id = sample.get("task_id", "")
+                detected_lang = language_hint
+                if not detected_lang and task_id:
+                    lang_prefix = task_id.split("/")[0].lower() if "/" in task_id else ""
+                    lang_map = {
+                        "python": "python",
+                        "cpp": "cpp",
+                        "javascript": "javascript", 
+                        "js": "javascript",
+                        "rust": "rust",
+                        "go": "go",
+                        "java": "java",
+                    }
+                    detected_lang = lang_map.get(lang_prefix, "python")
+                
                 user_content = f"{inst}\n\n{docstring}" if docstring else inst
-                code_content = f"{prompt}{solution}" if prompt else solution
-                assistant = self._format_code_with_language(code_content, language_hint or 'python', filename)
+                # Include declaration for non-Python languages
+                if declaration and detected_lang != "python":
+                    code_content = f"{declaration}{solution}"
+                else:
+                    code_content = f"{prompt}{solution}" if prompt else solution
+                    
+                assistant = self._format_code_with_language(code_content, detected_lang or 'python', filename)
                 text = self._format_simple_qa(user_content, assistant)
-                return {"text": text, "type": "code", "language": "python"}
+                return {"text": text, "type": "code", "language": detected_lang or "python"}
 
             # Raw code content
             content = self._safe_get(sample, ['content', 'code', 'source_code', 'text'])
