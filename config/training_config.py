@@ -86,9 +86,9 @@ class TrainingConfig:
     # Checkpointing
     save_steps: int = 500
     logging_steps: int = 50
-    eval_steps: int = 1000  # Evaluation frequency
     
     # Evaluation/validation settings
+    # Eval runs at END of each epoch (not at step intervals)
     # Eval pulls samples SEPARATELY from each dataset for proper validation
     # Total eval = num_active_datasets * max_per_dataset_eval (no cap)
     max_per_dataset_eval: int = 10  # Samples per dataset for eval (e.g., 10 from each dataset)
@@ -206,7 +206,6 @@ class TrainingConfig:
             'cfg_dropout_rate': self.cfg_dropout_rate,
             'save_steps': self.save_steps,
             'logging_steps': self.logging_steps,
-            'eval_steps': self.eval_steps,
             'max_per_dataset_eval': self.max_per_dataset_eval,
             'device': self.device,
             'fp16': self.fp16,
