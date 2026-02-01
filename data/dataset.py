@@ -726,18 +726,20 @@ class TrueStreamingDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
         """
-        Iterate through all datasets in round-robin fashion until max_per_epoch.
+        Iterate through all datasets in round-robin fashion until max_per_epoch UNIQUE samples.
         
         This is memory-efficient because:
         - Only one sample is processed at a time
         - No samples are stored in memory
         - Media is processed on-demand and immediately returned
         - Samples are formatted using format_functions before yielding
-        - Each dataset is capped at max_per_dataset to prevent domination
-        - Each sample is yielded sample_repeat times for stronger learning signal
+        - Each dataset is capped at max_per_dataset UNIQUE samples to prevent domination
+        - Each unique sample is yielded sample_repeat times for stronger learning signal
+        
+        Example: max_per_epoch=10000, sample_repeat=4 → 10000 unique samples × 4 = 40000 total yields
         """
-        samples_yielded = 0
         unique_samples = 0
+        total_yields = 0
         
         # Create iterators for all sources with per-dataset counters
         active_sources = []
@@ -758,25 +760,27 @@ class TrueStreamingDataset(IterableDataset):
         type_counts = {}
         dataset_counts = {}
         
-        repeat_info = f", {self.sample_repeat}x repeat" if self.sample_repeat > 1 else ""
-        print(f"\n🚀 Starting streaming iteration (max {self.max_per_epoch} samples, {self.max_per_dataset} per dataset{repeat_info})...", flush=True)
+        total_expected = self.max_per_epoch * self.sample_repeat
+        repeat_info = f" × {self.sample_repeat} repeat = {total_expected:,} total" if self.sample_repeat > 1 else ""
+        print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
+        print(f"   📊 Max {self.max_per_dataset} unique per dataset", flush=True)
         
-        # Round-robin through sources
-        while samples_yielded < self.max_per_epoch and active_sources:
+        # Round-robin through sources - count UNIQUE samples toward max_per_epoch
+        while unique_samples < self.max_per_epoch and active_sources:
             # Shuffle sources each round for variety
             random.shuffle(active_sources)
             
             sources_to_remove = []
             
             for source_idx, source in enumerate(active_sources):
-                if samples_yielded >= self.max_per_epoch:
+                if unique_samples >= self.max_per_epoch:
                     break
                 
                 if source["exhausted"]:
                     sources_to_remove.append(source_idx)
                     continue
                 
-                # Check if this dataset has hit its limit
+                # Check if this dataset has hit its limit (unique samples)
                 if source["count"] >= self.max_per_dataset:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
@@ -791,12 +795,10 @@ class TrueStreamingDataset(IterableDataset):
                     if processed is not None:
                         # Yield the same sample multiple times for stronger learning signal
                         for repeat_idx in range(self.sample_repeat):
-                            if samples_yielded >= self.max_per_epoch:
-                                break
                             yield processed
-                            samples_yielded += 1
+                            total_yields += 1
                         
-                        # Count as one unique sample from this dataset
+                        # Count as one unique sample
                         unique_samples += 1
                         source["count"] += 1
                         
@@ -804,9 +806,9 @@ class TrueStreamingDataset(IterableDataset):
                         type_counts[dtype] = type_counts.get(dtype, 0) + 1
                         dataset_counts[source["name"]] = source["count"]
                         
-                        # Log progress every 1000 samples
-                        if samples_yielded % 1000 == 0:
-                            print(f"   📈 Streamed {samples_yielded}/{self.max_per_epoch} samples ({unique_samples} unique)", flush=True)
+                        # Log progress every 500 unique samples
+                        if unique_samples % 500 == 0:
+                            print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} unique samples ({total_yields:,} total yields)", flush=True)
                 
                 except StopIteration:
                     source["exhausted"] = True
@@ -821,16 +823,17 @@ class TrueStreamingDataset(IterableDataset):
                     del active_sources[idx]
         
         # Print final stats
-        print(f"\n✅ Epoch complete: {samples_yielded} samples streamed ({unique_samples} unique, {self.sample_repeat}x repeat)", flush=True)
-        print(f"   📊 By category:", flush=True)
+        print(f"\n✅ Epoch complete!", flush=True)
+        print(f"   📊 {unique_samples:,} unique samples × {self.sample_repeat} = {total_yields:,} total yields", flush=True)
+        print(f"   📂 By category:", flush=True)
         for dtype, count in sorted(type_counts.items()):
             print(f"      {dtype}: {count} unique samples", flush=True)
         
         gc.collect()
 
     def __len__(self):
-        """Return max_per_epoch as the effective length."""
-        return self.max_per_epoch
+        """Return total yields (unique samples × repeat) as the effective length."""
+        return self.max_per_epoch * self.sample_repeat
 
     def reset(self):
         """Reset dataset for new epoch - reinitialize all sources."""
