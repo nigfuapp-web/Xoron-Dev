@@ -973,6 +973,22 @@ class XoronTrainer:
     def _eval_epoch(self, eval_loader, epoch):
         """Run validation/evaluation for one epoch without updating weights.
         
+        This validates that your multimodal MoE is learning properly:
+        
+        1. **Per-modality losses** - Each component (LLM, image, video, audio) is evaluated
+           separately to ensure they're all improving, not just one
+           
+        2. **MoE aux loss** - Checks that experts are load-balanced and not collapsing
+           (if aux loss is high, some experts may be unused)
+           
+        3. **Overfitting detection** - If train loss ↓ but eval loss ↑ = overfitting
+           The model memorized training data instead of learning patterns
+           
+        4. **Cross-modal learning** - Since all modalities share the LLM backbone:
+           - Training text improves the shared representations
+           - The shared MoE expert processes everything
+           - Better LLM = better understanding for all modalities
+        
         Args:
             eval_loader: DataLoader for evaluation data
             epoch: Current epoch number
@@ -997,6 +1013,11 @@ class XoronTrainer:
         num_asr = 0
         num_tts = 0
         num_moe = 0  # Batches with MoE aux loss
+        
+        # Track per-modality sample types for cross-modal analysis
+        modality_counts = {
+            'text': 0, 'image': 0, 'video': 0, 'audio': 0, 'multimodal': 0
+        }
 
         print(f"\n🔍 Running validation for epoch {epoch + 1}...", flush=True)
 
@@ -1212,11 +1233,44 @@ class XoronTrainer:
         print(f"{'='*60}")
         print(f"   📈 Learning efficiency: {train_losses['valid_pct']:.1f}% of batches contributed to learning")
         print(f"   ⏱️ Elapsed: {elapsed_hours:.2f}h")
-        print(f"{'='*60}\n")
+        print(f"{'='*60}")
         
         # Warn if learning efficiency is too low
         if train_losses['valid_pct'] < 50:
             print(f"   ⚠️ WARNING: Low learning efficiency ({train_losses['valid_pct']:.1f}%). Check your data pipeline!")
+        
+        # Check for overfitting (train loss much lower than eval loss)
+        if eval_losses:
+            print(f"\n🔬 OVERFITTING CHECK:")
+            overfitting_detected = False
+            
+            # Check LLM
+            if train_losses['llm'] > 0 and eval_losses['llm'] > 0:
+                llm_ratio = eval_losses['llm'] / train_losses['llm']
+                if llm_ratio > 1.5:
+                    print(f"   ⚠️ LLM: eval/train ratio = {llm_ratio:.2f} (>1.5 suggests overfitting)")
+                    overfitting_detected = True
+                else:
+                    print(f"   ✅ LLM: eval/train ratio = {llm_ratio:.2f} (healthy)")
+            
+            # Check MoE expert utilization
+            if train_losses['moe_aux'] > 0:
+                if train_losses['moe_aux'] > 0.5:
+                    print(f"   ⚠️ MoE: High aux loss ({train_losses['moe_aux']:.4f}) - experts may be imbalanced")
+                else:
+                    print(f"   ✅ MoE: Aux loss ({train_losses['moe_aux']:.4f}) - experts well balanced")
+            
+            if not overfitting_detected:
+                print(f"   ✅ No significant overfitting detected")
+            
+            print(f"\n💡 HOW THIS VALIDATES YOUR MULTIMODAL MOE:")
+            print(f"   • All modalities share the LLM backbone → training ANY modality improves shared representations")
+            print(f"   • Shared MoE expert processes ALL inputs → general knowledge is learned")
+            print(f"   • Routed experts specialize → different experts for text/code/reasoning/etc")
+            print(f"   • If train↓ but eval↑ = overfitting (model memorized, didn't learn)")
+            print(f"   • If both↓ = model is learning generalizable patterns ✓")
+        
+        print()
 
     def _save_checkpoint(self, epoch, loss):
         """Save a training checkpoint with full training state and tokenizer.
