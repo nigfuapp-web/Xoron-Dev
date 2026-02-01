@@ -999,3 +999,119 @@ class TrueStreamingDataset(IterableDataset):
             }
         self._init_iterators()
         gc.collect()
+
+
+def create_train_eval_datasets(
+    dataset_configs: Dict[str, List[Dict]],
+    format_functions: Dict[str, Callable],
+    tokenizer,
+    tokens: Dict[str, str],
+    image_processor,
+    max_length: int = 1024,
+    max_per_epoch_train: int = 6600,
+    max_per_dataset_train: int = 100,
+    max_per_epoch_eval: int = 500,
+    max_per_dataset_eval: int = 10,
+    sample_repeat: int = 4,
+    voice_processor=None,
+    max_video_frames: int = 32,
+    video_size: int = 256,
+):
+    """
+    Create separate train and eval datasets that sample INDEPENDENTLY from each dataset.
+    
+    This ensures proper validation by:
+    1. Train dataset: pulls max_per_dataset_train samples from each dataset
+    2. Eval dataset: pulls max_per_dataset_eval samples from each dataset (held-out data)
+    
+    Both datasets stream from the same sources but:
+    - Eval uses skip_initial to start AFTER where train ends
+    - Each dataset contributes equal samples to eval (fair evaluation across all modalities)
+    
+    Args:
+        dataset_configs: Dataset configurations by type
+        format_functions: Formatter functions by dataset type
+        tokenizer: Tokenizer instance
+        tokens: Special tokens dict
+        image_processor: Image processor instance
+        max_length: Max sequence length
+        max_per_epoch_train: Total train samples per epoch
+        max_per_dataset_train: Samples per dataset for training (e.g., 100)
+        max_per_epoch_eval: Total eval samples per epoch  
+        max_per_dataset_eval: Samples per dataset for eval (e.g., 10)
+        sample_repeat: How many times to repeat each sample in training
+        voice_processor: Voice processor instance
+        max_video_frames: Max video frames
+        video_size: Video frame size
+        
+    Returns:
+        tuple: (train_dataset, eval_dataset)
+        
+    Example:
+        # Training: 100 samples from each dataset
+        # Eval: 10 samples from each dataset (held out, not seen during training)
+        train_dataset, eval_dataset = create_train_eval_datasets(
+            dataset_configs=configs,
+            format_functions=formatters,
+            tokenizer=tokenizer,
+            tokens=tokens,
+            image_processor=image_processor,
+            max_per_epoch_train=6600,
+            max_per_dataset_train=100,  # 100 per dataset for train
+            max_per_epoch_eval=500,
+            max_per_dataset_eval=10,    # 10 per dataset for eval (separate samples)
+        )
+    """
+    print("\n📊 Creating train and eval datasets with per-dataset sampling...")
+    print(f"   Train: {max_per_dataset_train} samples/dataset, {max_per_epoch_train} total/epoch")
+    print(f"   Eval:  {max_per_dataset_eval} samples/dataset, {max_per_epoch_eval} total/epoch")
+    
+    # Create train dataset - starts from beginning of each dataset stream
+    train_dataset = TrueStreamingDataset(
+        dataset_configs=dataset_configs,
+        format_functions=format_functions,
+        tokenizer=tokenizer,
+        tokens=tokens,
+        image_processor=image_processor,
+        max_length=max_length,
+        max_per_epoch=max_per_epoch_train,
+        max_per_dataset=max_per_dataset_train,
+        sample_repeat=sample_repeat,
+        voice_processor=voice_processor,
+        max_video_frames=max_video_frames,
+        video_size=video_size,
+    )
+    
+    # Create eval dataset with skip_initial positions
+    # This makes eval start AFTER the training samples, ensuring held-out data
+    # We set the streaming state to skip the first N samples that training uses
+    eval_dataset = TrueStreamingDataset(
+        dataset_configs=dataset_configs,
+        format_functions=format_functions,
+        tokenizer=tokenizer,
+        tokens=tokens,
+        image_processor=image_processor,
+        max_length=max_length,
+        max_per_epoch=max_per_epoch_eval,
+        max_per_dataset=max_per_dataset_eval,
+        sample_repeat=1,  # No repeat for eval - just evaluate once per sample
+        voice_processor=voice_processor,
+        max_video_frames=max_video_frames,
+        video_size=video_size,
+    )
+    
+    # Set initial skip positions for eval dataset
+    # This ensures eval samples come AFTER training samples in each dataset stream
+    skip_positions = {}
+    for dtype, configs in dataset_configs.items():
+        if configs:
+            for cfg in configs:
+                # Eval starts after max_per_dataset_train samples
+                skip_positions[cfg["name"]] = max_per_dataset_train
+    
+    eval_dataset._streaming_state["dataset_positions"] = skip_positions
+    
+    print(f"   ✅ Train dataset: {train_dataset.total_datasets} dataset sources")
+    print(f"   ✅ Eval dataset: {eval_dataset.total_datasets} dataset sources (skipping first {max_per_dataset_train} samples each)")
+    
+    return train_dataset, eval_dataset

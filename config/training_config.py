@@ -89,8 +89,9 @@ class TrainingConfig:
     eval_steps: int = 1000  # Evaluation frequency
     
     # Evaluation/validation settings
-    eval_split_ratio: float = 0.1  # 10% of data for validation
-    max_eval_samples: int = 500  # Max samples per epoch for evaluation (to save time)
+    # Eval pulls samples SEPARATELY from each dataset for proper validation
+    max_per_dataset_eval: int = 10  # Samples per dataset for eval (e.g., 10 from each dataset)
+    max_eval_per_epoch: int = 500  # Total max eval samples per epoch
 
     # Device settings
     device: str = field(default_factory=lambda: "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
@@ -162,8 +163,8 @@ class TrainingConfig:
         print(f"   Enabled: {self.use_lora_plus}")
         print(f"   LR Ratio (B/A): {self.lora_plus_lr_ratio}x")
         print(f"\n📊 Evaluation Settings:")
-        print(f"   Eval split ratio: {self.eval_split_ratio:.1%}")
-        print(f"   Max eval samples: {self.max_eval_samples}")
+        print(f"   Max per dataset (eval): {self.max_per_dataset_eval}")
+        print(f"   Max eval per epoch: {self.max_eval_per_epoch}")
 
         if TORCH_AVAILABLE and torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
@@ -207,8 +208,8 @@ class TrainingConfig:
             'save_steps': self.save_steps,
             'logging_steps': self.logging_steps,
             'eval_steps': self.eval_steps,
-            'eval_split_ratio': self.eval_split_ratio,
-            'max_eval_samples': self.max_eval_samples,
+            'max_per_dataset_eval': self.max_per_dataset_eval,
+            'max_eval_per_epoch': self.max_eval_per_epoch,
             'device': self.device,
             'fp16': self.fp16,
             'bf16': self.bf16,
