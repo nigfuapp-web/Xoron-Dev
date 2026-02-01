@@ -26,16 +26,17 @@ class MoERouter(nn.Module):
     """
 
     def __init__(self, hidden_size: int, num_experts: int, top_k: int = 2, 
-                 noise_std: float = 1.0, capacity_factor: float = 1.25):
+                 noise_std: float = 0.1, capacity_factor: float = 1.25):  # REDUCED noise from 1.0 to 0.1
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         self.noise_std = noise_std
         self.capacity_factor = capacity_factor
         
-        # Router gate with better initialization
+        # Router gate with better initialization for stability
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
-        nn.init.kaiming_uniform_(self.gate.weight, a=0.01)
+        # Use smaller init for stable routing
+        nn.init.normal_(self.gate.weight, mean=0.0, std=0.02)
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = hidden_states.shape
@@ -77,6 +78,17 @@ class MoEExpert(nn.Module):
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
         self.act_fn = nn.SiLU()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        
+        # Proper initialization for training stability
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with proper scaling for stability."""
+        # Use smaller init to prevent gradient explosion
+        for module in [self.gate_proj, self.up_proj]:
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        # Down projection with even smaller init (output layer)
+        nn.init.normal_(self.down_proj.weight, mean=0.0, std=0.01)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # SwiGLU: SiLU(gate) * up
@@ -103,6 +115,15 @@ class SharedExpert(nn.Module):
         
         # Learnable gate for shared expert contribution
         self.shared_gate = nn.Parameter(torch.ones(1) * 0.5)
+        
+        # Proper initialization for training stability
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights with proper scaling for stability."""
+        for module in [self.gate_proj, self.up_proj]:
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.down_proj.weight, mean=0.0, std=0.01)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = self.act_fn(self.gate_proj(x))

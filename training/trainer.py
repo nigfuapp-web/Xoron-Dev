@@ -894,19 +894,41 @@ class XoronTrainer:
 
             # Optimizer step with gradient clipping from config
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
+                # Check for NaN/Inf gradients before optimizer step
+                has_nan_grad = False
                 if self.scaler is not None:
                     self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                
+                # Check all gradients for NaN/Inf
+                for name, param in self.model.named_parameters():
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            has_nan_grad = True
+                            # Zero out bad gradients to prevent corruption
+                            param.grad.zero_()
+                
+                if has_nan_grad:
+                    # Skip this optimizer step entirely - bad gradients
+                    if batch_idx % 100 == 0:
+                        print(f"   ⚠️ Skipping optimizer step {self.global_step} due to NaN/Inf gradients")
+                    self.optimizer.zero_grad(set_to_none=getattr(self.config, 'set_to_none', True))
+                    if self.scaler is not None:
+                        self.scaler.update()  # Still update scaler to adjust scale factor
                 else:
+                    # Safe to proceed with optimizer step
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                    self.optimizer.step()
+                    
+                    if self.scaler is not None:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
 
-                self.scheduler.step()
-                # Use set_to_none=True to save memory (doesn't store zero tensors)
-                set_to_none = getattr(self.config, 'set_to_none', True)
-                self.optimizer.zero_grad(set_to_none=set_to_none)
+                    self.scheduler.step()
+                    # Use set_to_none=True to save memory (doesn't store zero tensors)
+                    set_to_none = getattr(self.config, 'set_to_none', True)
+                    self.optimizer.zero_grad(set_to_none=set_to_none)
+                
                 self.global_step += 1
 
             # Only accumulate non-NaN losses

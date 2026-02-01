@@ -55,16 +55,16 @@ class TrainingConfig:
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
     gradient_accumulation_steps: int = 128
-    learning_rate: float = 2e-4
+    learning_rate: float = 5e-5  # REDUCED: was 2e-4, too high for MoE + LoRA stability
     weight_decay: float = 0.01
     num_epochs: int = 2
-    warmup_ratio: float = 0.03
+    warmup_ratio: float = 0.05  # INCREASED: longer warmup for stability
     max_seq_length: int = 1024
-    max_grad_norm: float = 1.0  # Gradient clipping
+    max_grad_norm: float = 0.5  # REDUCED: tighter clipping for MoE stability (was 1.0)
     
     # LoRA+ settings (different LR for A and B matrices)
     use_lora_plus: bool = True
-    lora_plus_lr_ratio: float = 16.0  # B matrix learns 16x faster than A
+    lora_plus_lr_ratio: float = 4.0  # REDUCED: was 16.0, too aggressive for stability
     
     # Chain-of-thought training settings
     cot_loss_weight: float = 1.5  # Higher weight for reasoning tokens
