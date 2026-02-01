@@ -834,26 +834,29 @@ class TrueStreamingDataset(IterableDataset):
         total_yields = resume_yields
         
         # Create iterators for all sources with per-dataset counters
+        # IMPORTANT: We track TWO separate things:
+        # 1. stream_position: cumulative position in data stream (for resuming across epochs)
+        # 2. epoch_count: samples used THIS epoch (resets each epoch, capped at max_per_dataset)
         active_sources = []
         for source in self._dataset_sources:
             dataset_name = source["name"]
-            saved_count = self._streaming_state.get("dataset_positions", {}).get(dataset_name, 0)
+            stream_position = self._streaming_state.get("dataset_positions", {}).get(dataset_name, 0)
             
             if source["is_local"]:
                 # For local files, skip directly to line number (efficient)
-                if saved_count > 0:
-                    iterator = self._create_local_iterator_from_line(source["local_path"], saved_count)
-                    print(f"   ⏩ {dataset_name}: resuming from line {saved_count}")
+                if stream_position > 0:
+                    iterator = self._create_local_iterator_from_line(source["local_path"], stream_position)
+                    print(f"   ⏩ {dataset_name}: resuming from line {stream_position}")
                 else:
                     iterator = self._create_local_iterator(source["local_path"])
             else:
                 # For HF streaming, need to skip through samples
                 iterator = iter(source["hf_dataset"])
-                if saved_count > 0:
-                    print(f"   ⏩ {dataset_name}: skipping {saved_count} samples...", end="", flush=True)
+                if stream_position > 0:
+                    print(f"   ⏩ {dataset_name}: skipping {stream_position} samples...", end="", flush=True)
                     skipped = 0
                     try:
-                        for _ in range(saved_count):
+                        for _ in range(stream_position):
                             next(iterator)
                             skipped += 1
                     except StopIteration:
@@ -864,7 +867,8 @@ class TrueStreamingDataset(IterableDataset):
                 **source,
                 "iterator": iterator,
                 "exhausted": False,
-                "count": saved_count,  # Start from saved count
+                "epoch_count": 0,  # Per-epoch count (resets each epoch)
+                "stream_position": stream_position,  # Cumulative position in data stream
             })
         
         # Track stats by category
@@ -895,8 +899,8 @@ class TrueStreamingDataset(IterableDataset):
                     sources_to_remove.append(source_idx)
                     continue
                 
-                # Check if this dataset has hit its limit (unique samples)
-                if source["count"] >= self.max_per_dataset:
+                # Check if this dataset has hit its PER-EPOCH limit
+                if source["epoch_count"] >= self.max_per_dataset:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
                     continue
@@ -917,16 +921,18 @@ class TrueStreamingDataset(IterableDataset):
                         
                         # Count as one unique sample
                         unique_samples += 1
-                        source["count"] += 1
+                        source["epoch_count"] += 1  # Per-epoch count (for limit check)
+                        source["stream_position"] += 1  # Cumulative position (for resume)
                         
                         dtype = source["dtype"]
                         type_counts[dtype] = type_counts.get(dtype, 0) + 1
-                        dataset_counts[source["name"]] = source["count"]
+                        dataset_counts[source["name"]] = source["epoch_count"]
                         
                         # Update streaming state for resume support
+                        # Save the STREAM POSITION (cumulative) so next epoch continues from here
                         self._streaming_state["unique_samples"] = unique_samples
                         self._streaming_state["total_yields"] = total_yields
-                        self._streaming_state["dataset_positions"][source["name"]] = source["count"]
+                        self._streaming_state["dataset_positions"][source["name"]] = source["stream_position"]
                         
                         # Log progress and save state every 500 unique samples
                         if unique_samples % 500 == 0:
@@ -970,15 +976,26 @@ class TrueStreamingDataset(IterableDataset):
         """Reset dataset for new epoch - reinitialize all sources.
         
         Args:
-            clear_state: If True, also clear the streaming state (start fresh)
+            clear_state: If True, completely clear streaming state (restart from beginning of all datasets)
+                        If False (default), keep dataset_positions to continue from where we left off
         """
         print(f"\n🔄 Resetting dataset for new epoch...")
         if clear_state:
+            # Full reset - start from beginning of all datasets
             self._streaming_state = {
-                "epoch": self._streaming_state.get("epoch", 0),
+                "epoch": self._streaming_state.get("epoch", 0) + 1,
                 "unique_samples": 0,
                 "total_yields": 0,
-                "dataset_positions": {},
+                "dataset_positions": {},  # Clear positions to restart from beginning
+            }
+        else:
+            # Epoch reset - keep stream positions but reset epoch counters
+            # This allows each epoch to get NEW data (continuing from where last epoch left off)
+            self._streaming_state = {
+                "epoch": self._streaming_state.get("epoch", 0) + 1,
+                "unique_samples": 0,  # Reset for this epoch
+                "total_yields": 0,    # Reset for this epoch
+                "dataset_positions": self._streaming_state.get("dataset_positions", {}),  # KEEP positions!
             }
         self._init_iterators()
         gc.collect()

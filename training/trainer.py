@@ -646,9 +646,10 @@ class XoronTrainer:
             print(f"{'='*60}")
 
             # Reset dataset for new epoch (except first epoch)
-            # clear_state=True ensures we iterate through ALL data again, not resume from where we left off
+            # clear_state=False (default) keeps stream positions so each epoch gets NEW data
+            # continuing from where the previous epoch left off in the dataset
             if epoch > self.start_epoch:
-                self.train_dataset.reset(clear_state=True)
+                self.train_dataset.reset(clear_state=False)
             
             # Create DataLoader for this epoch (IterableDataset requires fresh DataLoader per epoch)
             train_loader = DataLoader(
