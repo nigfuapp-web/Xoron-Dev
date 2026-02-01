@@ -673,9 +673,10 @@ class XoronTrainer:
             # Run validation at end of each epoch if eval_dataset is provided
             eval_losses = None
             if self.eval_dataset is not None:
-                # Reset eval dataset for fresh iteration
+                # Reset eval dataset for new epoch - advances to NEW samples (not clear_state)
+                # Both train and eval get fresh samples each epoch
                 if hasattr(self.eval_dataset, 'reset'):
-                    self.eval_dataset.reset(clear_state=True)
+                    self.eval_dataset.reset(clear_state=False)  # Keep positions, advance to new samples
                 
                 eval_loader = DataLoader(
                     self.eval_dataset,

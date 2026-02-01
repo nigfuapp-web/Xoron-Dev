@@ -979,22 +979,12 @@ class TrueStreamingDataset(IterableDataset):
             clear_state: If True, completely clear streaming state (restart from beginning of all datasets)
                         If False (default), keep dataset_positions to continue from where we left off
                         
-        Note: For eval datasets created with create_train_eval_datasets(), this will restore
-        to the fixed eval positions (not interfering with training's advancing positions).
+        Both training and eval datasets advance each epoch to get NEW samples.
+        They have separate position tracking so they don't interfere with each other.
         """
         print(f"\n🔄 Resetting dataset for new epoch...")
         
-        # Check if this is an eval dataset with fixed positions
-        # Eval datasets always reset to their fixed positions for consistent validation
-        if hasattr(self, '_eval_fixed_positions') and self._eval_fixed_positions:
-            self._streaming_state = {
-                "epoch": self._streaming_state.get("epoch", 0) + 1,
-                "unique_samples": 0,
-                "total_yields": 0,
-                "dataset_positions": self._eval_fixed_positions.copy(),  # Restore to FIXED positions
-            }
-            print(f"   📊 Eval dataset: restored to fixed held-out positions")
-        elif clear_state:
+        if clear_state:
             # Full reset - start from beginning of all datasets
             self._streaming_state = {
                 "epoch": self._streaming_state.get("epoch", 0) + 1,
@@ -1099,8 +1089,8 @@ def create_train_eval_datasets(
         video_size=video_size,
     )
     
-    # Create eval dataset with skip_initial positions
-    # This makes eval start AFTER the training samples, ensuring held-out data
+    # Create eval dataset - starts AFTER training samples in the stream
+    # Both train and eval advance each epoch to get NEW samples
     # max_per_epoch for eval = total_datasets * max_per_dataset_eval (no cap)
     eval_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
@@ -1117,28 +1107,22 @@ def create_train_eval_datasets(
         video_size=video_size,
     )
     
-    # Set FIXED skip positions for eval dataset
-    # Eval always starts at position max_per_dataset_train in each dataset
-    # This ensures:
-    # 1. Eval samples are AFTER training samples (held-out data)
-    # 2. Eval uses the SAME samples every epoch (consistent validation)
-    # 3. Eval doesn't interfere with training's streaming positions
+    # Set initial skip positions for eval dataset
+    # Eval starts AFTER training's initial samples, then BOTH advance each epoch
+    # Epoch 1: Train 0-99, Eval 100-109
+    # Epoch 2: Train 100-199, Eval 110-119 (both advanced by their respective amounts)
     eval_skip_positions = {}
     for dtype, configs in dataset_configs.items():
         if configs:
             for cfg in configs:
-                # Eval always starts after max_per_dataset_train samples
+                # Eval starts after max_per_dataset_train samples
                 eval_skip_positions[cfg["name"]] = max_per_dataset_train
     
     eval_dataset._streaming_state["dataset_positions"] = eval_skip_positions.copy()
     
-    # Store the fixed eval positions so reset() can restore them
-    # This is separate from training - training advances, eval stays fixed
-    eval_dataset._eval_fixed_positions = eval_skip_positions.copy()
-    
     print(f"   ✅ Train dataset: {train_dataset.total_datasets} dataset sources")
     print(f"   ✅ Eval dataset: {eval_dataset.total_datasets} dataset sources")
-    print(f"      → Eval uses FIXED held-out samples (positions {max_per_dataset_train}-{max_per_dataset_train + max_per_dataset_eval - 1} per dataset)")
-    print(f"      → Training advances each epoch, eval stays consistent")
+    print(f"      → Epoch 1: Train samples 0-{max_per_dataset_train-1}, Eval samples {max_per_dataset_train}-{max_per_dataset_train + max_per_dataset_eval - 1}")
+    print(f"      → Both advance each epoch - NEW samples every epoch!")
     
     return train_dataset, eval_dataset
