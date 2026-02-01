@@ -78,7 +78,18 @@ class XoronTrainer:
         # Mixed precision setup (prefer BF16 if available)
         self.use_amp = config.fp16 or getattr(config, 'bf16', False)
         self.amp_dtype = torch.bfloat16 if getattr(config, 'bf16', False) else torch.float16
-        self.scaler = GradScaler() if config.fp16 and not getattr(config, 'bf16', False) and config.device == "cuda" else None
+        
+        # Check if model is already in half precision (fp16/bf16)
+        # If so, we don't need GradScaler - it's only for mixed precision with fp32 weights
+        model_dtype = next(model.parameters()).dtype
+        model_is_half = model_dtype in (torch.float16, torch.bfloat16)
+        
+        # Only use GradScaler if: fp16 enabled, not bf16, CUDA available, AND model is fp32
+        # GradScaler is incompatible with models already in fp16 (causes "Attempting to unscale FP16 gradients" error)
+        self.scaler = GradScaler() if config.fp16 and not getattr(config, 'bf16', False) and config.device == "cuda" and not model_is_half else None
+        
+        if model_is_half:
+            print(f"   📝 Model is {model_dtype}, GradScaler disabled (not needed)")
         
         self.global_step = 0
         self.start_epoch = 0
