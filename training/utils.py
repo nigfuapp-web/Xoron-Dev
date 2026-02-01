@@ -16,8 +16,23 @@ except ImportError:
     pass
 
 
-def create_collate_fn(video_frames: int, video_size: int):
-    """Create a collate function with the specified video configuration."""
+def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all'):
+    """Create a collate function with the specified video configuration.
+    
+    Args:
+        video_frames: Number of video frames
+        video_size: Size of video frames
+        active_modalities: Which modalities are active for training.
+            'all' - full multimodal (default)
+            'text' - text only, minimal tensors for image/video/audio (~27MB RAM savings per batch)
+            'image' - image + text, minimal tensors for video/audio
+            'video' - video + image + text, minimal tensors for audio
+            'audio' - audio + text, minimal tensors for image/video
+    """
+    # Determine which modalities need full tensors
+    need_image = active_modalities in ('all', 'image', 'video')
+    need_video = active_modalities in ('all', 'video')
+    need_audio = active_modalities in ('all', 'audio')
 
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         """Collate function for multimodal batches."""
@@ -25,63 +40,74 @@ def create_collate_fn(video_frames: int, video_size: int):
             input_ids = torch.stack([b["input_ids"] for b in batch])
             attention_mask = torch.stack([b["attention_mask"] for b in batch])
             labels = torch.stack([b["labels"] for b in batch])
-
-            # Handle pixel_values (384x384 for SigLIP 2)
-            vision_size = 384  # SigLIP SO400M default
-            pixel_values_list = []
-            for b in batch:
-                pv = b["pixel_values"]
-                if pv is not None and isinstance(pv, torch.Tensor):
-                    if pv.dim() == 3:
-                        if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
-                            pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
-                        pixel_values_list.append(pv)
+            batch_size = len(batch)
+            sample_types = [b.get("sample_type", "text") for b in batch]
+            
+            # Handle pixel_values - use minimal tensor if not needed
+            if need_image:
+                vision_size = 384  # SigLIP SO400M default
+                pixel_values_list = []
+                for b in batch:
+                    pv = b["pixel_values"]
+                    if pv is not None and isinstance(pv, torch.Tensor):
+                        if pv.dim() == 3:
+                            if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
+                                pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
+                            pixel_values_list.append(pv)
+                        else:
+                            pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
                     else:
                         pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
-                else:
-                    pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
-            pixel_values = torch.stack(pixel_values_list)
+                pixel_values = torch.stack(pixel_values_list)
+            else:
+                # Minimal 1x1 tensor to save memory
+                pixel_values = torch.zeros(batch_size, 3, 1, 1)
 
-            # Handle video_frames
-            video_frames_list = []
-            for b in batch:
-                vf = b["video_frames"]
-                if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
-                    video_frames_list.append(vf)
-                else:
-                    video_frames_list.append(torch.zeros(video_frames, 3, video_size, video_size))
-            video_frames_tensor = torch.stack(video_frames_list)
+            # Handle video_frames - use minimal tensor if not needed
+            if need_video:
+                video_frames_list = []
+                for b in batch:
+                    vf = b["video_frames"]
+                    if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
+                        video_frames_list.append(vf)
+                    else:
+                        video_frames_list.append(torch.zeros(video_frames, 3, video_size, video_size))
+                video_frames_tensor = torch.stack(video_frames_list)
+            else:
+                # Minimal tensor to save memory (~25MB savings per batch)
+                video_frames_tensor = torch.zeros(batch_size, 1, 3, 1, 1)
 
-            # Handle audio_features
-            audio_features_list = []
-            max_audio_len = 1000
-            target_mel_bins = 80
-            for b in batch:
-                af = b["audio_features"]
-                if af is not None and isinstance(af, torch.Tensor) and af.dim() == 2:
-                    # Handle different number of mel bins by interpolating
-                    if af.shape[0] != target_mel_bins:
-                        # Interpolate mel bins to target size
-                        af = F.interpolate(
-                            af.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims
-                            size=(target_mel_bins, af.shape[1]),
-                            mode='bilinear',
-                            align_corners=False
-                        ).squeeze(0).squeeze(0)
-                    
-                    # Handle time dimension
-                    if af.shape[1] != max_audio_len:
-                        if af.shape[1] > max_audio_len:
-                            af = af[:, :max_audio_len]
-                        else:
-                            pad = torch.zeros(target_mel_bins, max_audio_len - af.shape[1])
-                            af = torch.cat([af, pad], dim=1)
-                    audio_features_list.append(af)
-                else:
-                    audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
-            audio_features = torch.stack(audio_features_list)
-
-            sample_types = [b.get("sample_type", "text") for b in batch]
+            # Handle audio_features - use minimal tensor if not needed
+            if need_audio:
+                audio_features_list = []
+                max_audio_len = 1000
+                target_mel_bins = 80
+                for b in batch:
+                    af = b["audio_features"]
+                    if af is not None and isinstance(af, torch.Tensor) and af.dim() == 2:
+                        # Handle different number of mel bins by interpolating
+                        if af.shape[0] != target_mel_bins:
+                            af = F.interpolate(
+                                af.unsqueeze(0).unsqueeze(0),
+                                size=(target_mel_bins, af.shape[1]),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                        
+                        # Handle time dimension
+                        if af.shape[1] != max_audio_len:
+                            if af.shape[1] > max_audio_len:
+                                af = af[:, :max_audio_len]
+                            else:
+                                pad = torch.zeros(target_mel_bins, max_audio_len - af.shape[1])
+                                af = torch.cat([af, pad], dim=1)
+                        audio_features_list.append(af)
+                    else:
+                        audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                audio_features = torch.stack(audio_features_list)
+            else:
+                # Minimal tensor to save memory
+                audio_features = torch.zeros(batch_size, 1, 1)
 
             return {
                 "input_ids": input_ids,
@@ -94,14 +120,20 @@ def create_collate_fn(video_frames: int, video_size: int):
             }
         except Exception:
             batch_size = len(batch)
-            vision_size = 384  # SigLIP SO400M default
+            # Fallback with appropriate tensor sizes based on active modalities
+            vision_size = 384 if need_image else 1
+            vf_count = video_frames if need_video else 1
+            vf_size = video_size if need_video else 1
+            af_bins = 80 if need_audio else 1
+            af_len = 1000 if need_audio else 1
+            
             return {
                 "input_ids": torch.stack([b["input_ids"] for b in batch]),
                 "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
                 "labels": torch.stack([b["labels"] for b in batch]),
                 "pixel_values": torch.zeros(batch_size, 3, vision_size, vision_size),
-                "video_frames": torch.zeros(batch_size, video_frames, 3, video_size, video_size),
-                "audio_features": torch.zeros(batch_size, 80, 1000),
+                "video_frames": torch.zeros(batch_size, vf_count, 3, vf_size, vf_size),
+                "audio_features": torch.zeros(batch_size, af_bins, af_len),
                 "sample_type": ["text"] * batch_size,
             }
 

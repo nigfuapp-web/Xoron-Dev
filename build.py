@@ -678,11 +678,19 @@ def save_model(model, tokenizer, training_config):
         print(f"   - {f} ({size:.1f} MB)")
 
 
-def setup_training(model, tokenizer, xoron_config, training_config, dataset_configs):
-    """Setup training components."""
+def setup_training(model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities: str = 'all'):
+    """Setup training components.
+    
+    Args:
+        active_modalities: Which modalities are active ('all', 'text', 'image', 'video', 'audio')
+            Inactive modalities use minimal tensors to save RAM (~27MB per batch for text-only)
+    """
     print("\n" + "=" * 60)
     print("⚙️ TRAINING SETUP")
     print("=" * 60)
+    
+    if active_modalities != 'all':
+        print(f"   📝 {active_modalities.upper()} mode: using minimal tensors for inactive modalities")
 
     # Load image processor section
     print("\n" + "-" * 40)
@@ -726,8 +734,8 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         video_size=xoron_config.generation_video_size,
     )
 
-    # Create collate function
-    collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size)
+    # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
+    collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
 
     # Calculate training steps
     estimated_samples = min(training_config.max_per_epoch, len(train_dataset))
@@ -797,6 +805,7 @@ def run_build_and_train(
     onnx_quant_bits: int = 4,
     gguf_quant_type: str = 'q4_k_m',
     run_test_after: bool = False,
+    active_modalities: str = 'all',
 ):
     """
     Run the build and training process.
@@ -872,7 +881,7 @@ def run_build_and_train(
 
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
-        model, tokenizer, xoron_config, training_config, dataset_configs
+        model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities=active_modalities
     )
 
     # Create trainer with resume support
@@ -925,6 +934,7 @@ def run_hf_training(
     onnx_quant_bits: int = 4,
     gguf_quant_type: str = 'q4_k_m',
     run_test_after: bool = False,
+    active_modalities: str = 'all',
 ):
     """
     Load model from HuggingFace and run training.
@@ -1020,7 +1030,7 @@ def run_hf_training(
 
     # Setup training with filtered dataset configs
     train_dataset, optimizer, scheduler, collate_fn = setup_training(
-        model, tokenizer, xoron_config, training_config, dataset_configs
+        model, tokenizer, xoron_config, training_config, dataset_configs, active_modalities=active_modalities
     )
 
     # Create trainer with resume support
@@ -1187,6 +1197,7 @@ def run_new_build_workflow():
     print("\nWould you like to filter datasets by modality?")
     use_filter = get_input("Filter datasets? (y/n)", "n")
     
+    mode = 'all'
     if use_filter.lower() in ('y', 'yes'):
         mode = select_finetune_mode_menu()
         if mode != 'all':
@@ -1203,6 +1214,7 @@ def run_new_build_workflow():
             xoron_config,
             training_config,
             dataset_configs,
+            active_modalities=mode,
         )
 
 
@@ -1226,6 +1238,7 @@ def run_continue_training_workflow():
     print("\nWould you like to filter datasets by modality?")
     use_filter = get_input("Filter datasets? (y/n)", "n")
     
+    mode = 'all'
     if use_filter.lower() in ('y', 'yes'):
         mode = select_finetune_mode_menu()
         if mode != 'all':
@@ -1243,6 +1256,7 @@ def run_continue_training_workflow():
             dataset_configs,
             checkpoint_path=checkpoint_path,
             resume_training=True,
+            active_modalities=mode,
         )
 
 
@@ -1312,6 +1326,7 @@ def run_finetune_workflow():
             resume_training=False,  # Fresh training state for fine-tuning
             freeze_components=freeze_components,
             train_only_components=train_only_components,
+            active_modalities=mode,
         )
 
 
@@ -1558,6 +1573,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
+            active_modalities=effective_mode or 'all',
         )
         return
     
@@ -1577,6 +1593,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
+            active_modalities=effective_mode or 'all',
         )
         return
     
@@ -1596,6 +1613,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
+            active_modalities=effective_mode or 'all',
         )
         return
     
@@ -1616,6 +1634,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
+            active_modalities=effective_mode or 'all',
         )
         return
     
@@ -1638,6 +1657,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
+            active_modalities=effective_mode or 'all',
         )
         return
     
