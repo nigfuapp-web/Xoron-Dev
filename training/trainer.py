@@ -9,7 +9,6 @@ Features:
 - Gradient checkpointing support
 - MoE auxiliary loss tracking
 - Proper gradient clipping from config
-- Deep NaN/Inf debugging
 """
 
 import os
@@ -40,17 +39,6 @@ from config.special_tokens import (
     get_anti_hallucination_block_tokens,
     get_code_execution_block_tokens,
     get_flat_weighted_block_tokens,
-)
-from utils.debug import (
-    NaNDebugger, 
-    debug_full_forward, 
-    add_nan_hooks, 
-    remove_hooks,
-    WeightCorruptionTracker,
-    check_weights_detailed,
-    check_gradients_detailed,
-    diagnose_corruption_source,
-    GradientNormTracker,
 )
 
 
@@ -166,23 +154,6 @@ class XoronTrainer:
         
         # Gradient clipping from config
         self.max_grad_norm = getattr(config, 'max_grad_norm', 1.0)
-        
-        # AGGRESSIVE WEIGHT CORRUPTION TRACKING - checks AFTER every optimizer step
-        # This is critical for pinpointing exactly when/where NaN/Inf corruption occurs
-        self.corruption_tracker = WeightCorruptionTracker(
-            model=model,
-            verbose=True,  # Set to False after debugging
-            check_freq=1,  # Check every optimizer step (set higher for speed after debugging)
-        )
-        print(f"   🔬 WeightCorruptionTracker initialized - checking weights after EVERY optimizer step")
-        
-        # GRADIENT NORM TRACKING - records gradient norms to identify spikes before corruption
-        self.grad_norm_tracker = GradientNormTracker(
-            model=model,
-            track_embeddings=True,
-            track_layers=True,
-        )
-        print(f"   📈 GradientNormTracker initialized - recording gradient norms for spike detection")
         
         # Enable gradient checkpointing if configured
         if getattr(config, 'gradient_checkpointing', False):
@@ -1112,46 +1083,23 @@ class XoronTrainer:
                     # BF16 or FP32 - no scaling needed
                     scaled_loss.backward()
                 
-                # ═══════════════════════════════════════════════════════════════════
-                # POST-BACKWARD CHECK: Did backward() itself cause weight corruption?
-                # This can happen with extreme gradients in FP16
-                # ═══════════════════════════════════════════════════════════════════
-                post_bw_healthy = self.corruption_tracker.check_and_report(
-                    step=self.global_step,
-                    batch_idx=batch_idx,
-                    phase="POST_BACKWARD"
-                )
-                if not post_bw_healthy:
-                    print(f"\n🚨 BACKWARD PASS CORRUPTED WEIGHTS at batch {batch_idx}!")
-                    print(f"   Loss value was: {loss_value}")
-                    print(f"   This is unusual - backward() shouldn't modify weights.")
-                    print(f"   This may indicate numerical overflow in gradient computation.\n")
-                
-                # ═══════════════════════════════════════════════════════════════════
-                # RECORD GRADIENT NORMS - track for spike detection
-                # ═══════════════════════════════════════════════════════════════════
-                grad_norms = self.grad_norm_tracker.record(
-                    step=self.global_step,
-                    batch_idx=batch_idx,
-                    loss=loss_value
-                )
-                
-                # Check for gradient spike (possible precursor to corruption)
-                is_spike, spike_details = self.grad_norm_tracker.check_spike(threshold_multiplier=10.0)
-                if is_spike:
-                    print(f"\n⚠️ GRADIENT SPIKE DETECTED at step {self.global_step}, batch {batch_idx}!")
-                    print(f"   Current norm: {spike_details['current_norm']:.4f}")
-                    print(f"   Avg recent: {spike_details['avg_recent']:.4f}")
-                    print(f"   Multiplier: {spike_details['multiplier']:.2f}x")
-                    print(f"   This may lead to weight corruption! Watch next step closely.\n")
-                
-                # Log gradient norms periodically
-                if batch_idx % 100 == 0:
-                    print(f"   📊 Grad norms - total: {grad_norms['total']:.4f}, embed: {grad_norms['embed']:.4f}")
-                
                 # Clip gradients immediately after each backward to prevent accumulation explosion
                 # This is critical for FP16 stability with gradient accumulation
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                
+                # Log gradient norms periodically (every 1000 batches)
+                if (batch_idx + 1) % 1000 == 0:
+                    total_norm = 0.0
+                    embed_norm = 0.0
+                    for name, param in self.model.named_parameters():
+                        if param.grad is not None:
+                            grad_norm = param.grad.data.float().norm(2).item()
+                            total_norm += grad_norm ** 2
+                            if 'embed' in name.lower():
+                                embed_norm += grad_norm ** 2
+                    total_norm = total_norm ** 0.5
+                    embed_norm = embed_norm ** 0.5
+                    print(f"   📊 Grad norms - total: {total_norm:.4f}, embed: {embed_norm:.4f}")
                 
                 num_valid_batches += 1
             else:
@@ -1265,20 +1213,6 @@ class XoronTrainer:
                     # Safe to proceed with optimizer step
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     
-                    # ═══════════════════════════════════════════════════════════════════
-                    # AGGRESSIVE PRE-OPTIMIZER GRADIENT CHECK
-                    # ═══════════════════════════════════════════════════════════════════
-                    grad_healthy, grad_details = self.corruption_tracker.check_gradients(
-                        step=self.global_step, batch_idx=batch_idx
-                    )
-                    if not grad_healthy:
-                        print(f"\n{'='*70}")
-                        print(f"🚨 PRE-OPTIMIZER: GRADIENT CORRUPTION at step {self.global_step}, batch {batch_idx}")
-                        print(f"   Corrupted gradients: {grad_details['corrupted_count']}/{grad_details['total_grads']}")
-                        for cg in grad_details['corrupted_grads'][:5]:
-                            print(f"   - {cg['name']}: nan={cg['nan_count']}, inf={cg['inf_count']}, abs_max={cg['grad_abs_max']}")
-                        print(f"{'='*70}\n")
-                    
                     if self.scaler is not None:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
@@ -1295,75 +1229,6 @@ class XoronTrainer:
                                 self.steps_since_scale_change = 0
                                 if old_scale != self.manual_loss_scale:
                                     print(f"   📈 Increased loss scale: {old_scale} → {self.manual_loss_scale}")
-
-                    # ═══════════════════════════════════════════════════════════════════
-                    # AGGRESSIVE POST-OPTIMIZER WEIGHT CHECK - THE CRITICAL CHECK!
-                    # This pinpoints exactly WHEN corruption occurs (after which step)
-                    # ═══════════════════════════════════════════════════════════════════
-                    weights_healthy = self.corruption_tracker.check_and_report(
-                        step=self.global_step,
-                        batch_idx=batch_idx,
-                        phase="POST_OPTIMIZER_STEP"
-                    )
-                    
-                    if not weights_healthy:
-                        # Corruption detected! Get detailed diagnosis
-                        print(f"\n{'#'*70}")
-                        print(f"# CORRUPTION DIAGNOSIS - Attempting to identify root cause")
-                        print(f"{'#'*70}")
-                        
-                        # CRITICAL: Print gradient norm history leading up to corruption
-                        print(f"\n📈 GRADIENT NORM HISTORY LEADING TO CORRUPTION:")
-                        self.grad_norm_tracker.print_history(last_n=30)
-                        
-                        # Try to diagnose what caused it
-                        try:
-                            diagnosis = diagnose_corruption_source(self.model, input_ids)
-                            print(f"\n📊 DIAGNOSIS RESULTS:")
-                            if diagnosis['suspected_causes']:
-                                print(f"   Suspected causes:")
-                                for cause in diagnosis['suspected_causes']:
-                                    print(f"      • {cause}")
-                            if diagnosis['embedding_issues']:
-                                print(f"   Embedding issues:")
-                                for issue in diagnosis['embedding_issues']:
-                                    print(f"      • {issue}")
-                            if diagnosis['layer_issues']:
-                                print(f"   Layer issues:")
-                                for issue in diagnosis['layer_issues']:
-                                    print(f"      • {issue}")
-                            if diagnosis['recommendations']:
-                                print(f"\n💡 RECOMMENDATIONS:")
-                                for rec in diagnosis['recommendations']:
-                                    print(f"      • {rec}")
-                        except Exception as e:
-                            print(f"   Diagnosis failed: {e}")
-                        
-                        # Print the batch that caused corruption
-                        print(f"\n🔍 BATCH DETAILS AT CORRUPTION:")
-                        print(f"   input_ids shape: {input_ids.shape}")
-                        print(f"   input_ids range: [{input_ids.min().item()}, {input_ids.max().item()}]")
-                        print(f"   unique tokens: {input_ids.unique().numel()}")
-                        if labels is not None:
-                            print(f"   labels shape: {labels.shape}")
-                            print(f"   labels range: [{labels.min().item()}, {labels.max().item()}]")
-                        
-                        print(f"\n{'#'*70}")
-                        print(f"# TRAINING CANNOT CONTINUE - Weights corrupted at step {self.global_step}")
-                        print(f"# Last healthy step: {self.corruption_tracker.last_healthy_step}")
-                        print(f"# Batch that caused corruption: {batch_idx}")
-                        print(f"{'#'*70}\n")
-                        
-                        raise RuntimeError(
-                            f"Weight corruption detected AFTER optimizer step {self.global_step}, batch {batch_idx}. "
-                            f"Last healthy step was {self.corruption_tracker.last_healthy_step}. "
-                            f"This means the optimizer step itself caused the corruption. "
-                            f"Likely causes:\n"
-                            f"1. Gradient explosion despite clipping (try lower max_grad_norm: 0.1)\n"
-                            f"2. Learning rate too high (try 10x lower)\n"
-                            f"3. FP16 overflow in optimizer states (try bf16 or fp32)\n"
-                            f"4. Bad batch data with extreme values\n"
-                        )
 
                     self.scheduler.step()
                     # Use set_to_none=True to save memory (doesn't store zero tensors)
