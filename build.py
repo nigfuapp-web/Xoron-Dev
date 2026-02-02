@@ -786,7 +786,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
 
     print(f"\n📊 Training Configuration:")
     print(f"   Max samples per epoch: {training_config.max_per_epoch}")
-    print(f"   Eval samples per epoch: {eval_max_per_epoch}")
+    print(f"   Eval samples per epoch: {eval_samples_per_dataset}")
     print(f"   Estimated steps/epoch: {steps_per_epoch}")
     print(f"   Total steps: {total_steps}")
     print(f"   FP16: {training_config.fp16}")
