@@ -481,10 +481,12 @@ class XoronMultimodalModel(nn.Module):
 
         outputs = self.llm(inputs_embeds=text_embeds, attention_mask=attention_mask, labels=labels)
 
-        # Always return both loss and logits (logits needed for CoT weighted loss)
+        # Always return loss, logits, and aux_loss (all needed for proper training)
+        # aux_loss is the MoE routing auxiliary loss for load balancing
         return MultimodalModelOutput(
             loss=outputs.loss if hasattr(outputs, 'loss') else None,
-            logits=outputs.logits if hasattr(outputs, 'logits') else None
+            logits=outputs.logits if hasattr(outputs, 'logits') else None,
+            aux_loss=outputs.aux_loss if hasattr(outputs, 'aux_loss') else None,
         )
 
     @torch.no_grad()

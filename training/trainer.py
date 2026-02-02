@@ -396,6 +396,7 @@ class XoronTrainer:
         labels: torch.Tensor,
         input_ids: torch.Tensor,
         sample_types: List[str],
+        model_loss: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Compute loss with higher weight for important token groups.
@@ -410,159 +411,174 @@ class XoronTrainer:
         
         IMPORTANT: Handles dimension mismatch when multimodal embeddings are prepended
         to the sequence in the forward pass, causing logits to have more tokens than labels.
+        
+        If weighted loss computation fails, falls back to model_loss if provided.
         """
         device = logits.device
         
-        # CRITICAL FIX: Handle dimension mismatch between logits and labels
-        # This happens when multimodal embeddings (image/video/audio) are prepended
-        # to the text embeddings in the forward pass. The logits will be longer than labels.
-        logits_seq_len = logits.size(1)
-        labels_seq_len = labels.size(1)
-        
-        if logits_seq_len != labels_seq_len:
-            # Logits are longer due to prepended multimodal embeddings
-            # We need to align by taking only the last `labels_seq_len` logits
-            # (the text portion that corresponds to our labels)
-            offset = logits_seq_len - labels_seq_len
-            if offset > 0:
-                # Take only the text portion of logits (skip multimodal prefix)
-                logits = logits[:, offset:, :]
-            elif offset < 0:
-                # Labels are longer (shouldn't happen, but handle gracefully)
-                labels = labels[:, -logits_seq_len:]
-                input_ids = input_ids[:, -logits_seq_len:]
-        
-        # Standard cross-entropy loss with shifted sequences
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        
-        # Ensure labels are on the same device as logits
-        if shift_logits.device != shift_labels.device:
-            shift_labels = shift_labels.to(shift_logits.device)
-        
-        # Ensure labels are long dtype for CrossEntropyLoss (critical!)
-        if shift_labels.dtype != torch.long:
-            shift_labels = shift_labels.long()
-        
-        # Compute per-token loss - CrossEntropyLoss handles ignore_index internally
-        loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
-        flat_logits = shift_logits.view(-1, shift_logits.size(-1))
-        flat_labels = shift_labels.view(-1)
-        
-        per_token_loss = loss_fct(flat_logits, flat_labels)
-        per_token_loss = per_token_loss.view(shift_labels.size())
-        
-        # Check if we should apply weighted loss
-        # Apply to CoT samples, tool use samples, and agentic samples
-        weighted_sample_types = {'chain_of_thought', 'tool_use', 'agentic', 'code_execution', 
-                                  'shell_execution', 'jupyter', 'anti_hallucination'}
-        has_weighted_samples = any(t in weighted_sample_types for t in sample_types)
-        
-        # Check if we have any block IDs to weight
-        has_block_ids = (self.reasoning_block_ids or self.tool_block_ids or 
-                        self.anti_hallucination_block_ids or self.code_exec_block_ids)
-        
-        if has_weighted_samples and has_block_ids:
-            # Create weight mask on the same device as per_token_loss
-            weight_mask = torch.ones_like(per_token_loss)
+        try:
+            # CRITICAL FIX: Handle dimension mismatch between logits and labels
+            # This happens when multimodal embeddings (image/video/audio) are prepended
+            # to the text embeddings in the forward pass. The logits will be longer than labels.
+            logits_seq_len = logits.size(1)
+            labels_seq_len = labels.size(1)
             
-            # Move input_ids to same device as logits for consistency
-            shift_input_ids = input_ids[..., 1:].contiguous()
-            if shift_input_ids.device != shift_logits.device:
-                shift_input_ids = shift_input_ids.to(shift_logits.device)
+            if logits_seq_len != labels_seq_len:
+                # Logits are longer due to prepended multimodal embeddings
+                # We need to align by taking only the last `labels_seq_len` logits
+                # (the text portion that corresponds to our labels)
+                offset = logits_seq_len - labels_seq_len
+                if offset > 0:
+                    # Take only the text portion of logits (skip multimodal prefix)
+                    logits = logits[:, offset:, :]
+                elif offset < 0:
+                    # Labels are longer (shouldn't happen, but handle gracefully)
+                    labels = labels[:, -logits_seq_len:]
+                    input_ids = input_ids[:, -logits_seq_len:]
             
-            # Ensure shift_input_ids matches shift_labels length for weighted masking
-            if shift_input_ids.size(1) != shift_labels.size(1):
-                # Truncate or pad to match
-                target_len = shift_labels.size(1)
-                if shift_input_ids.size(1) > target_len:
-                    shift_input_ids = shift_input_ids[:, :target_len]
+            # Standard cross-entropy loss with shifted sequences
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            # Ensure labels are on the same device as logits
+            if shift_logits.device != shift_labels.device:
+                shift_labels = shift_labels.to(shift_logits.device)
+            
+            # Ensure labels are long dtype for CrossEntropyLoss (critical!)
+            if shift_labels.dtype != torch.long:
+                shift_labels = shift_labels.long()
+            
+            # Compute per-token loss - CrossEntropyLoss handles ignore_index internally
+            loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
+            flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+            flat_labels = shift_labels.view(-1)
+            
+            per_token_loss = loss_fct(flat_logits, flat_labels)
+            per_token_loss = per_token_loss.view(shift_labels.size())
+            
+            # Check if we should apply weighted loss
+            # Apply to CoT samples, tool use samples, and agentic samples
+            weighted_sample_types = {'chain_of_thought', 'tool_use', 'agentic', 'code_execution', 
+                                      'shell_execution', 'jupyter', 'anti_hallucination'}
+            has_weighted_samples = any(t in weighted_sample_types for t in sample_types)
+            
+            # Check if we have any block IDs to weight
+            has_block_ids = (self.reasoning_block_ids or self.tool_block_ids or 
+                            self.anti_hallucination_block_ids or self.code_exec_block_ids)
+            
+            if has_weighted_samples and has_block_ids:
+                # Create weight mask on the same device as per_token_loss
+                weight_mask = torch.ones_like(per_token_loss)
+                
+                # Move input_ids to same device as logits for consistency
+                shift_input_ids = input_ids[..., 1:].contiguous()
+                if shift_input_ids.device != shift_logits.device:
+                    shift_input_ids = shift_input_ids.to(shift_logits.device)
+                
+                # Ensure shift_input_ids matches shift_labels length for weighted masking
+                if shift_input_ids.size(1) != shift_labels.size(1):
+                    # Truncate or pad to match
+                    target_len = shift_labels.size(1)
+                    if shift_input_ids.size(1) > target_len:
+                        shift_input_ids = shift_input_ids[:, :target_len]
+                    else:
+                        # Pad with padding token (usually 0)
+                        pad_len = target_len - shift_input_ids.size(1)
+                        pad_tokens = torch.zeros(shift_input_ids.size(0), pad_len, 
+                                                dtype=shift_input_ids.dtype, device=shift_input_ids.device)
+                        shift_input_ids = torch.cat([shift_input_ids, pad_tokens], dim=1)
+                
+                # Build combined block list with weights
+                all_blocks_with_weights = []
+                for block_name, start_id, end_id in self.reasoning_block_ids:
+                    all_blocks_with_weights.append((block_name, start_id, end_id, self.cot_loss_weight))
+                for block_name, start_id, end_id in self.tool_block_ids:
+                    all_blocks_with_weights.append((block_name, start_id, end_id, self.tool_loss_weight))
+                for block_name, start_id, end_id in self.anti_hallucination_block_ids:
+                    all_blocks_with_weights.append((block_name, start_id, end_id, self.anti_hallucination_loss_weight))
+                for block_name, start_id, end_id in self.code_exec_block_ids:
+                    all_blocks_with_weights.append((block_name, start_id, end_id, self.code_exec_loss_weight))
+                
+                for batch_idx in range(shift_input_ids.size(0)):
+                    sample_type = sample_types[batch_idx]
+                    if sample_type not in weighted_sample_types:
+                        continue
+                    
+                    seq = shift_input_ids[batch_idx]
+                    
+                    # Track which blocks we're inside and their weights
+                    in_blocks = {}  # block_name -> weight
+                    
+                    for pos in range(seq.size(0)):
+                        token_id = seq[pos].item()
+                        
+                        # Check all block types
+                        for block_name, start_id, end_id, weight in all_blocks_with_weights:
+                            # Check for start token
+                            if isinstance(start_id, list):
+                                is_start = token_id in start_id
+                            else:
+                                is_start = token_id == start_id
+                            
+                            # Check for end token
+                            if isinstance(end_id, list):
+                                is_end = token_id in end_id
+                            else:
+                                is_end = token_id == end_id
+                            
+                            if is_start:
+                                in_blocks[block_name] = weight
+                            elif is_end:
+                                in_blocks.pop(block_name, None)
+                        
+                        # Apply the maximum weight from all active blocks
+                        if in_blocks:
+                            max_weight = max(in_blocks.values())
+                            weight_mask[batch_idx, pos] = max_weight
+                
+                # Apply weights
+                weighted_loss = per_token_loss * weight_mask
+                
+                # Compute mean over non-ignored tokens
+                valid_mask = (shift_labels != -100).float()
+                valid_sum = valid_mask.sum()
+                if valid_sum > 0:
+                    loss = (weighted_loss * valid_mask).sum() / valid_sum
                 else:
-                    # Pad with padding token (usually 0)
-                    pad_len = target_len - shift_input_ids.size(1)
-                    pad_tokens = torch.zeros(shift_input_ids.size(0), pad_len, 
-                                            dtype=shift_input_ids.dtype, device=shift_input_ids.device)
-                    shift_input_ids = torch.cat([shift_input_ids, pad_tokens], dim=1)
-            
-            # Build combined block list with weights
-            all_blocks_with_weights = []
-            for block_name, start_id, end_id in self.reasoning_block_ids:
-                all_blocks_with_weights.append((block_name, start_id, end_id, self.cot_loss_weight))
-            for block_name, start_id, end_id in self.tool_block_ids:
-                all_blocks_with_weights.append((block_name, start_id, end_id, self.tool_loss_weight))
-            for block_name, start_id, end_id in self.anti_hallucination_block_ids:
-                all_blocks_with_weights.append((block_name, start_id, end_id, self.anti_hallucination_loss_weight))
-            for block_name, start_id, end_id in self.code_exec_block_ids:
-                all_blocks_with_weights.append((block_name, start_id, end_id, self.code_exec_loss_weight))
-            
-            for batch_idx in range(shift_input_ids.size(0)):
-                sample_type = sample_types[batch_idx]
-                if sample_type not in weighted_sample_types:
-                    continue
-                
-                seq = shift_input_ids[batch_idx]
-                
-                # Track which blocks we're inside and their weights
-                in_blocks = {}  # block_name -> weight
-                
-                for pos in range(seq.size(0)):
-                    token_id = seq[pos].item()
-                    
-                    # Check all block types
-                    for block_name, start_id, end_id, weight in all_blocks_with_weights:
-                        # Check for start token
-                        if isinstance(start_id, list):
-                            is_start = token_id in start_id
-                        else:
-                            is_start = token_id == start_id
-                        
-                        # Check for end token
-                        if isinstance(end_id, list):
-                            is_end = token_id in end_id
-                        else:
-                            is_end = token_id == end_id
-                        
-                        if is_start:
-                            in_blocks[block_name] = weight
-                        elif is_end:
-                            in_blocks.pop(block_name, None)
-                    
-                    # Apply the maximum weight from all active blocks
-                    if in_blocks:
-                        max_weight = max(in_blocks.values())
-                        weight_mask[batch_idx, pos] = max_weight
-            
-            # Apply weights
-            weighted_loss = per_token_loss * weight_mask
-            
-            # Compute mean over non-ignored tokens
-            valid_mask = (shift_labels != -100).float()
-            valid_sum = valid_mask.sum()
-            if valid_sum > 0:
-                loss = (weighted_loss * valid_mask).sum() / valid_sum
+                    # No valid tokens - fall back to model loss if available
+                    if model_loss is not None:
+                        return model_loss
+                    loss = torch.tensor(0.0, device=device, requires_grad=True)
             else:
-                # No valid tokens - return zero loss
-                loss = torch.tensor(0.0, device=device, requires_grad=True)
-        else:
-            # Standard loss computation
-            valid_mask = (shift_labels != -100).float()
-            valid_sum = valid_mask.sum()
-            if valid_sum > 0:
-                loss = (per_token_loss * valid_mask).sum() / valid_sum
-            else:
-                # No valid tokens - return zero loss
-                loss = torch.tensor(0.0, device=device, requires_grad=True)
-        
-        # Final NaN safety check
-        if torch.isnan(loss) or torch.isinf(loss):
+                # Standard loss computation
+                valid_mask = (shift_labels != -100).float()
+                valid_sum = valid_mask.sum()
+                if valid_sum > 0:
+                    loss = (per_token_loss * valid_mask).sum() / valid_sum
+                else:
+                    # No valid tokens - fall back to model loss if available
+                    if model_loss is not None:
+                        return model_loss
+                    loss = torch.tensor(0.0, device=device, requires_grad=True)
+            
+            # Final NaN safety check
+            if torch.isnan(loss) or torch.isinf(loss):
+                if model_loss is not None:
+                    return model_loss
+                return torch.tensor(0.0, device=device, requires_grad=True)
+            
+            return loss
+            
+        except Exception:
+            # If anything goes wrong, fall back to model loss
+            if model_loss is not None:
+                return model_loss
             return torch.tensor(0.0, device=device, requires_grad=True)
-        
-        return loss
     
     # Keep old method name for backward compatibility
-    def _compute_cot_weighted_loss(self, logits, labels, input_ids, sample_types):
+    def _compute_cot_weighted_loss(self, logits, labels, input_ids, sample_types, model_loss=None):
         """Backward compatible alias for _compute_weighted_loss."""
-        return self._compute_weighted_loss(logits, labels, input_ids, sample_types)
+        return self._compute_weighted_loss(logits, labels, input_ids, sample_types, model_loss)
 
     def train(self):
         """Run the full training loop."""
@@ -772,14 +788,18 @@ class XoronTrainer:
                         labels=labels,
                     )
                     
+                    # Get model's computed loss as fallback
+                    model_loss = getattr(outputs, 'loss', None)
+                    
                     # Use weighted loss for CoT samples (safely get logits)
                     logits = getattr(outputs, 'logits', None)
                     if has_cot_samples and logits is not None:
+                        # Pass model_loss as fallback in case weighted loss computation fails
                         llm_loss = self._compute_cot_weighted_loss(
-                            logits, labels, input_ids, sample_types
+                            logits, labels, input_ids, sample_types, model_loss
                         )
                     else:
-                        llm_loss = getattr(outputs, 'loss', None)
+                        llm_loss = model_loss
                         if llm_loss is None:
                             llm_loss = torch.tensor(0.0, device=device)
                     
@@ -795,14 +815,18 @@ class XoronTrainer:
                     labels=labels,
                 )
                 
+                # Get model's computed loss as fallback
+                model_loss = getattr(outputs, 'loss', None)
+                
                 # Use weighted loss for CoT samples (safely get logits)
                 logits = getattr(outputs, 'logits', None)
                 if has_cot_samples and logits is not None:
+                    # Pass model_loss as fallback in case weighted loss computation fails
                     llm_loss = self._compute_cot_weighted_loss(
-                        logits, labels, input_ids, sample_types
+                        logits, labels, input_ids, sample_types, model_loss
                     )
                 else:
-                    llm_loss = getattr(outputs, 'loss', None)
+                    llm_loss = model_loss
                     if llm_loss is None:
                         llm_loss = torch.tensor(0.0, device=device)
                 
@@ -1069,13 +1093,16 @@ class XoronTrainer:
                                 labels=labels,
                             )
                             
+                            # Get model's computed loss as fallback
+                            model_loss = getattr(outputs, 'loss', None)
+                            
                             logits = getattr(outputs, 'logits', None)
                             if has_cot_samples and logits is not None:
                                 llm_loss = self._compute_cot_weighted_loss(
-                                    logits, labels, input_ids, sample_types
+                                    logits, labels, input_ids, sample_types, model_loss
                                 )
                             else:
-                                llm_loss = getattr(outputs, 'loss', None)
+                                llm_loss = model_loss
                                 if llm_loss is None:
                                     llm_loss = torch.tensor(0.0, device=device)
                     else:
@@ -1088,13 +1115,16 @@ class XoronTrainer:
                             labels=labels,
                         )
                         
+                        # Get model's computed loss as fallback
+                        model_loss = getattr(outputs, 'loss', None)
+                        
                         logits = getattr(outputs, 'logits', None)
                         if has_cot_samples and logits is not None:
                             llm_loss = self._compute_cot_weighted_loss(
-                                logits, labels, input_ids, sample_types
+                                logits, labels, input_ids, sample_types, model_loss
                             )
                         else:
-                            llm_loss = getattr(outputs, 'loss', None)
+                            llm_loss = model_loss
                             if llm_loss is None:
                                 llm_loss = torch.tensor(0.0, device=device)
 
