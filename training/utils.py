@@ -18,14 +18,14 @@ except ImportError:
 
 class FP32OptimizerWrapper:
     """
-    Wrapper that maintains FP32 master weights for FP16 models.
+    Wrapper that maintains FP32 master weights for FP16 models ON GPU.
     
     This solves the FP16 optimizer overflow problem by:
-    1. Keeping FP32 copies of all parameters (master weights)
+    1. Keeping FP32 copies of all parameters ON THE SAME DEVICE (GPU)
     2. Running optimizer on FP32 copies (no overflow)
     3. Copying back to FP16 model after each step
     
-    This is the standard "master weights" approach used in mixed precision training.
+    CRITICAL: All copies stay on GPU for speed - no CPU transfers!
     """
     
     def __init__(self, optimizer_class, model, **optimizer_kwargs):
@@ -39,44 +39,58 @@ class FP32OptimizerWrapper:
         self.fp16_params = []
         self.fp32_params = []
         
-        # Create FP32 copies of FP16 parameters
+        # Create FP32 copies of FP16 parameters ON THE SAME DEVICE (GPU)
         for param in model.parameters():
             if param.requires_grad:
                 self.fp16_params.append(param)
-                # Create FP32 copy
-                fp32_param = param.data.float().clone().detach().requires_grad_(True)
+                # Create FP32 copy ON SAME DEVICE as original param
+                fp32_param = param.data.float().clone().detach()
+                fp32_param.requires_grad = True
                 self.fp32_params.append(fp32_param)
         
         # Create optimizer on FP32 params
         self.optimizer = optimizer_class(self.fp32_params, **optimizer_kwargs)
         
-        print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters")
-        print(f"   📝 Optimizer will run on FP32, then copy back to FP16")
+        # Verify device
+        if self.fp32_params:
+            device = self.fp32_params[0].device
+            print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters on {device}")
+        else:
+            print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters")
+        print(f"   📝 Optimizer runs on FP32 (GPU), copies back to FP16")
     
     def zero_grad(self, set_to_none=False):
-        """Zero gradients on FP32 params."""
+        """Zero gradients on both FP16 model and FP32 params."""
+        # Zero FP16 gradients (on model)
+        for fp16_p in self.fp16_params:
+            if fp16_p.grad is not None:
+                if set_to_none:
+                    fp16_p.grad = None
+                else:
+                    fp16_p.grad.zero_()
+        # Zero FP32 gradients
         self.optimizer.zero_grad(set_to_none=set_to_none)
     
     def step(self):
         """
-        1. Copy FP16 gradients to FP32 params
-        2. Run optimizer on FP32
-        3. Copy FP32 params back to FP16 model
+        1. Copy FP16 gradients to FP32 params (GPU→GPU, fast!)
+        2. Run optimizer on FP32 (on GPU)
+        3. Copy FP32 params back to FP16 model (GPU→GPU, fast!)
         """
-        # Copy gradients from FP16 to FP32
+        # Copy gradients from FP16 to FP32 (both on GPU - fast!)
         for fp16_p, fp32_p in zip(self.fp16_params, self.fp32_params):
             if fp16_p.grad is not None:
                 if fp32_p.grad is None:
                     fp32_p.grad = fp16_p.grad.float()
                 else:
-                    fp32_p.grad.copy_(fp16_p.grad.float())
+                    fp32_p.grad.copy_(fp16_p.grad)
         
-        # Run optimizer step on FP32 params
+        # Run optimizer step on FP32 params (on GPU)
         self.optimizer.step()
         
-        # Copy updated FP32 params back to FP16 model
+        # Copy updated FP32 params back to FP16 model (GPU→GPU, fast!)
         for fp16_p, fp32_p in zip(self.fp16_params, self.fp32_params):
-            fp16_p.data.copy_(fp32_p.data.half())
+            fp16_p.data.copy_(fp32_p.data)
     
     def state_dict(self):
         """Return optimizer state dict."""
