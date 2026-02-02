@@ -7,12 +7,17 @@ Features:
 - Expert choice routing option
 - Improved load balancing with auxiliary losses
 - Capacity factor for expert utilization
+- FP16-safe numerical stability (epsilon >= 1e-6)
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
+
+# FP16-safe epsilon (1e-9 underflows to 0 in fp16, causing NaN/Inf)
+# FP16 smallest positive: ~6e-8, so we use 1e-6 for safety margin
+EPS = 1e-6
 
 
 class MoERouter(nn.Module):
@@ -23,6 +28,7 @@ class MoERouter(nn.Module):
     - Noisy top-k gating for exploration
     - Expert capacity limiting
     - Auxiliary load balancing
+    - FP16-safe numerical operations
     """
 
     def __init__(self, hidden_size: int, num_experts: int, top_k: int = 2, 
@@ -44,6 +50,9 @@ class MoERouter(nn.Module):
         num_tokens = hidden_flat.shape[0]
 
         router_logits = self.gate(hidden_flat)
+        
+        # Clamp logits to prevent overflow in softmax (FP16 safe)
+        router_logits = torch.clamp(router_logits, min=-50.0, max=50.0)
 
         # Add noise during training for exploration
         if self.training and self.noise_std > 0:
@@ -58,8 +67,8 @@ class MoERouter(nn.Module):
         # Top-k selection
         top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
         
-        # Normalize top-k probabilities
-        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-9)
+        # Normalize top-k probabilities (FP16-safe epsilon)
+        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + EPS)
 
         return top_k_probs, top_k_indices, router_logits
 
@@ -224,13 +233,18 @@ class MoELayer(nn.Module):
         - Load balancing loss (prevent expert collapse)
         - Router z-loss (prevent logit explosion)
         - Entropy regularization (encourage exploration)
+        
+        All operations use FP16-safe epsilon values to prevent NaN/Inf.
         """
-        router_probs = F.softmax(router_logits, dim=-1)
+        # Clamp logits before softmax to prevent overflow
+        router_logits_clamped = torch.clamp(router_logits, min=-50.0, max=50.0)
+        router_probs = F.softmax(router_logits_clamped, dim=-1)
 
         # 1. Load balancing loss
-        # Fraction of tokens routed to each expert
+        # Fraction of tokens routed to each expert (FP16-safe)
         expert_mask = F.one_hot(top_k_indices, self.num_experts).float()
-        tokens_per_expert = expert_mask.sum(dim=(0, 1)) / (num_tokens * self.num_experts_per_tok + 1e-9)
+        denominator = max(num_tokens * self.num_experts_per_tok, 1)  # Avoid division by zero
+        tokens_per_expert = expert_mask.sum(dim=(0, 1)) / denominator
         
         # Average routing probability for each expert
         avg_probs = router_probs.mean(dim=0)
@@ -238,11 +252,13 @@ class MoELayer(nn.Module):
         # Load balance loss: encourage uniform distribution
         load_balance_loss = self.num_experts * (tokens_per_expert * avg_probs).sum()
 
-        # 2. Router z-loss (prevent logit explosion)
-        z_loss = torch.logsumexp(router_logits, dim=-1).square().mean() * 0.001
+        # 2. Router z-loss (prevent logit explosion) - use clamped logits
+        z_loss = torch.logsumexp(router_logits_clamped, dim=-1).square().mean() * 0.001
 
-        # 3. Entropy regularization (encourage exploration)
-        entropy = -(router_probs * torch.log(router_probs + 1e-9)).sum(dim=-1).mean()
+        # 3. Entropy regularization (encourage exploration) - FP16-safe log
+        # Clamp probs to avoid log(0) which gives -inf
+        router_probs_safe = torch.clamp(router_probs, min=EPS, max=1.0)
+        entropy = -(router_probs_safe * torch.log(router_probs_safe)).sum(dim=-1).mean()
         max_entropy = torch.log(torch.tensor(float(self.num_experts), device=router_probs.device))
         entropy_loss = (max_entropy - entropy) * 0.01
 
@@ -250,7 +266,13 @@ class MoELayer(nn.Module):
         expert_usage = (tokens_per_expert > 0.01).float().mean()
         utilization_loss = (1.0 - expert_usage) * 0.1
 
-        return load_balance_loss + z_loss + entropy_loss + utilization_loss
+        # Combine losses and clamp to prevent extreme values
+        total_aux_loss = load_balance_loss + z_loss + entropy_loss + utilization_loss
+        
+        # Final safety clamp - aux loss should never be huge
+        total_aux_loss = torch.clamp(total_aux_loss, min=0.0, max=100.0)
+        
+        return total_aux_loss
 
 
 class ExpertChoiceMoELayer(nn.Module):
@@ -259,6 +281,7 @@ class ExpertChoiceMoELayer(nn.Module):
     
     Instead of tokens choosing experts, experts choose tokens.
     This ensures perfect load balancing but may drop some tokens.
+    FP16-safe implementation.
     """
     
     def __init__(
@@ -287,8 +310,9 @@ class ExpertChoiceMoELayer(nn.Module):
         hidden_flat = hidden_states.view(-1, hidden_size)
         num_tokens = hidden_flat.shape[0]
         
-        # Compute routing scores
+        # Compute routing scores (clamp for FP16 safety)
         router_logits = self.gate(hidden_flat)  # [num_tokens, num_experts]
+        router_logits = torch.clamp(router_logits, min=-50.0, max=50.0)
         router_probs = F.softmax(router_logits, dim=0)  # Softmax over tokens (expert choice)
         
         # Each expert selects top-k tokens
@@ -313,13 +337,14 @@ class ExpertChoiceMoELayer(nn.Module):
             final_output[top_indices] += top_probs.unsqueeze(-1) * expert_output
             token_counts[top_indices] += top_probs
         
-        # Normalize by total weight
-        token_counts = token_counts.clamp(min=1e-9)
+        # Normalize by total weight (FP16-safe epsilon)
+        token_counts = token_counts.clamp(min=EPS)
         final_output = final_output / token_counts.unsqueeze(-1)
         
         final_output = final_output.view(batch_size, seq_len, hidden_size)
         
-        # Simple aux loss for expert choice
+        # Simple aux loss for expert choice (clamped for safety)
         aux_loss = torch.logsumexp(router_logits, dim=-1).square().mean() * 0.001
+        aux_loss = torch.clamp(aux_loss, min=0.0, max=100.0)
         
         return final_output, aux_loss

@@ -81,7 +81,8 @@ class LoRALinear(nn.Module):
                 # W' = m * (W + BA) / ||W + BA||
                 weight = self.linear.weight + (self.lora_B @ self.lora_A) * self.scaling
                 weight_norm = weight.norm(dim=1, keepdim=True)
-                weight_normalized = weight / (weight_norm + 1e-8)
+                # FP16-safe: use 1e-6 instead of 1e-8 (1e-8 underflows in fp16)
+                weight_normalized = weight / (weight_norm + 1e-6)
                 result = F.linear(x, weight_normalized * self.magnitude.unsqueeze(1))
             else:
                 result = self.linear(x) + lora_out

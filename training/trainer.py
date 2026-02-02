@@ -804,6 +804,14 @@ class XoronTrainer:
             model_loss = getattr(outputs, 'loss', None)
             logits = getattr(outputs, 'logits', None)
             
+            # CRITICAL: Check for NaN/Inf in model outputs BEFORE computing loss
+            # This catches numerical instability early before it corrupts gradients
+            if logits is not None and (torch.isnan(logits).any() or torch.isinf(logits).any()):
+                if batch_idx % 100 == 0:
+                    print(f"   ⚠️ Batch {batch_idx}: NaN/Inf detected in logits, skipping batch")
+                num_batches += 1
+                continue
+            
             # Use weighted loss for special token samples (CoT, tool use, etc.)
             # This gives higher weight to reasoning, tool calling, and anti-hallucination tokens
             if has_weighted_samples and logits is not None:
@@ -814,6 +822,17 @@ class XoronTrainer:
                 llm_loss = model_loss
                 if llm_loss is None:
                     llm_loss = torch.tensor(0.0, device=device, requires_grad=True)
+            
+            # CRITICAL: Check LLM loss for NaN/Inf before proceeding
+            llm_loss_check = llm_loss.item()
+            if llm_loss_check != llm_loss_check or llm_loss_check == float('inf') or llm_loss_check == float('-inf'):
+                if batch_idx % 100 == 0:
+                    print(f"   ⚠️ Batch {batch_idx}: NaN/Inf LLM loss ({llm_loss_check}), skipping batch")
+                num_batches += 1
+                continue
+            
+            # Clamp LLM loss to prevent extreme values (FP16 safety)
+            llm_loss = torch.clamp(llm_loss, min=0.0, max=100.0)
             
             # Get MoE auxiliary loss if available
             moe_aux_loss = getattr(outputs, 'aux_loss', None)
@@ -831,9 +850,11 @@ class XoronTrainer:
             # Add MoE auxiliary loss if available (SOTA: proper MoE training)
             if moe_aux_loss is not None:
                 moe_loss_val = moe_aux_loss.item()
-                # Check for valid loss (not NaN, not Inf)
-                if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf'):
-                    total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss
+                # Check for valid loss (not NaN, not Inf) and reasonable magnitude
+                if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf') and moe_loss_val < 100.0:
+                    # Clamp aux loss for extra safety
+                    moe_aux_loss_clamped = torch.clamp(moe_aux_loss, min=0.0, max=10.0)
+                    total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss_clamped
                     epoch_moe_aux_loss += moe_loss_val
                     num_moe += 1
 
@@ -889,17 +910,27 @@ class XoronTrainer:
                     epoch_tts_loss += tts_loss.item()
                     num_tts += 1
 
+            # CRITICAL: Final loss clamping before backward (FP16 safety)
+            # This prevents gradient explosion from extreme loss values
+            total_loss = torch.clamp(total_loss, min=0.0, max=100.0)
+            
             # Backward pass (supports both FP16 with scaler and BF16 without)
             loss_value = total_loss.item()
-            is_valid_loss = not (loss_value != loss_value) and not (loss_value == float('inf'))  # Not NaN and not Inf
+            is_valid_loss = not (loss_value != loss_value) and not (loss_value == float('inf')) and not (loss_value == float('-inf'))
             
             if is_valid_loss:
+                # Scale loss for gradient accumulation
+                scaled_loss = total_loss / self.config.gradient_accumulation_steps
+                
                 if self.scaler is not None:
-                    self.scaler.scale(total_loss / self.config.gradient_accumulation_steps).backward()
+                    self.scaler.scale(scaled_loss).backward()
                 else:
-                    (total_loss / self.config.gradient_accumulation_steps).backward()
+                    scaled_loss.backward()
                 num_valid_batches += 1
-            # else: Skip backward for NaN/Inf loss only
+            else:
+                # Skip backward for NaN/Inf loss - log warning
+                if batch_idx % 100 == 0:
+                    print(f"   ⚠️ Batch {batch_idx}: Skipping backward due to invalid loss ({loss_value})")
 
             # Optimizer step with gradient clipping from config
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
