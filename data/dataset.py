@@ -784,34 +784,27 @@ class TrueStreamingDataset(IterableDataset):
             labels[attention_mask == 0] = -100  # Mask padding
             
             # Mask everything EXCEPT assistant responses
-            # Find assistant_start and assistant_end token IDs
+            # Use get_vocab() for reliable token ID lookup (encode() can return multiple tokens)
             assistant_start_token = self.tokens.get('assistant_start', '<|assistant|>')
             assistant_end_token = self.tokens.get('assistant_end', '<|/assistant|>')
             
-            try:
-                assistant_start_id = self.tokenizer.encode(assistant_start_token, add_special_tokens=False)
-                assistant_end_id = self.tokenizer.encode(assistant_end_token, add_special_tokens=False)
-                
-                if assistant_start_id and assistant_end_id:
-                    assistant_start_id = assistant_start_id[0] if len(assistant_start_id) == 1 else None
-                    assistant_end_id = assistant_end_id[0] if len(assistant_end_id) == 1 else None
+            vocab = self.tokenizer.get_vocab()
+            assistant_start_id = vocab.get(assistant_start_token)
+            assistant_end_id = vocab.get(assistant_end_token)
+            
+            if assistant_start_id is not None and assistant_end_id is not None:
+                in_assistant = False
+                for i in range(len(input_ids)):
+                    token_id = input_ids[i].item()
                     
-                    if assistant_start_id is not None and assistant_end_id is not None:
-                        # Mask all tokens, then unmask only assistant responses
+                    if token_id == assistant_start_id:
+                        in_assistant = True
+                        labels[i] = -100  # Don't predict the start token itself
+                    elif token_id == assistant_end_id:
                         in_assistant = False
-                        for i in range(len(input_ids)):
-                            token_id = input_ids[i].item()
-                            
-                            if token_id == assistant_start_id:
-                                in_assistant = True
-                                labels[i] = -100  # Don't predict the start token itself
-                            elif token_id == assistant_end_id:
-                                in_assistant = False
-                                # Keep the end token in labels (model should learn to end)
-                            elif not in_assistant:
-                                labels[i] = -100  # Mask non-assistant tokens
-            except Exception:
-                pass  # Fall back to standard labels if tokenization fails
+                        # Keep the end token in labels (model should learn to end)
+                    elif not in_assistant:
+                        labels[i] = -100  # Mask non-assistant tokens
             
             # Process media on-demand
             pixel_values = self._process_image(raw_image_data) if raw_image_data else None
