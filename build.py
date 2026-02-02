@@ -49,6 +49,80 @@ from transformers import AutoTokenizer, CLIPImageProcessor
 CONFIG_FILE = "xoron_config.json"
 
 
+def safe_convert_to_fp16(model):
+    """
+    Safely convert model to FP16, handling potential overflow issues.
+    
+    FP16 has a max value of ~65504. Any value larger becomes inf,
+    and inf * 0 = nan, which corrupts the entire model.
+    
+    This function:
+    1. Checks all params for values > FP16 max
+    2. Clamps them to safe range
+    3. Converts to FP16
+    4. Verifies no NaN/Inf was created
+    """
+    FP16_MAX = 65504.0
+    
+    # Step 1: Check and clamp unsafe values BEFORE conversion
+    print("   🔍 Checking for FP16-unsafe values...")
+    unsafe_params = []
+    
+    for name, param in model.named_parameters():
+        if param.dtype == torch.float32:
+            abs_max = param.abs().max().item()
+            if abs_max > FP16_MAX:
+                unsafe_params.append((name, abs_max))
+                # Clamp to FP16-safe range
+                with torch.no_grad():
+                    param.clamp_(-FP16_MAX, FP16_MAX)
+    
+    if unsafe_params:
+        print(f"   ⚠️ Found {len(unsafe_params)} params with values > FP16 max ({FP16_MAX}):")
+        for name, val in unsafe_params[:10]:
+            print(f"      - {name}: max_abs={val:.2f} (clamped)")
+        if len(unsafe_params) > 10:
+            print(f"      ... and {len(unsafe_params) - 10} more")
+        print("   ✅ All values clamped to FP16-safe range")
+    else:
+        print("   ✅ All values are FP16-safe")
+    
+    # Step 2: Convert to FP16
+    model = model.half()
+    
+    # Step 3: Verify no NaN/Inf was created
+    print("   🔍 Verifying FP16 conversion...")
+    nan_params = []
+    
+    for name, param in model.named_parameters():
+        has_nan = torch.isnan(param).any().item()
+        has_inf = torch.isinf(param).any().item()
+        if has_nan or has_inf:
+            nan_count = torch.isnan(param).sum().item()
+            inf_count = torch.isinf(param).sum().item()
+            nan_params.append((name, nan_count, inf_count, param.shape))
+    
+    if nan_params:
+        print(f"\n   ❌ CRITICAL: FP16 conversion created {len(nan_params)} NaN/Inf params!")
+        for name, nan_count, inf_count, shape in nan_params[:20]:
+            total = 1
+            for s in shape:
+                total *= s
+            pct = 100 * (nan_count + inf_count) / total
+            print(f"      - {name}: nan={nan_count}, inf={inf_count}, shape={list(shape)} ({pct:.1f}%)")
+        if len(nan_params) > 20:
+            print(f"      ... and {len(nan_params) - 20} more")
+        
+        raise RuntimeError(
+            f"FP16 conversion failed - {len(nan_params)} parameters have NaN/Inf. "
+            "This usually means the model initialization created extreme values. "
+            "Try using bf16 instead (set bf16=True in training config) or check model initialization."
+        )
+    
+    print("   ✅ FP16 conversion verified - no NaN/Inf")
+    return model
+
+
 def clear_screen():
     """Clear terminal screen."""
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -923,7 +997,7 @@ def run_build_and_train(
             print("   ✅ Model converted to bfloat16 (2x memory savings)")
         elif training_config.fp16:
             print("\n🔧 Converting model to float16 for memory efficiency...")
-            model = model.half()
+            model = safe_convert_to_fp16(model)
             print("   ✅ Model converted to float16 (2x memory savings)")
         
         # Clear cache after conversion
@@ -1083,7 +1157,7 @@ def run_hf_training(
             print("   ✅ Model converted to bfloat16 (2x memory savings)")
         elif training_config.fp16:
             print("\n🔧 Converting model to float16 for memory efficiency...")
-            model = model.half()
+            model = safe_convert_to_fp16(model)
             print("   ✅ Model converted to float16 (2x memory savings)")
         
         # Clear cache after conversion
