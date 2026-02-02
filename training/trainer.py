@@ -103,38 +103,36 @@ class XoronTrainer:
         model_is_half = model_dtype in (torch.float16, torch.bfloat16)
         model_is_fp16 = model_dtype == torch.float16
         model_is_bf16 = model_dtype == torch.bfloat16
+        self.model_is_fp16 = model_is_fp16  # Store for use in training loop
         
         # GradScaler configuration:
+        # - GradScaler ONLY works with FP32 models + FP16 autocast (true mixed precision)
+        # - GradScaler CANNOT work with FP16 models (raises "Attempting to unscale FP16 gradients")
         # - BF16: Never needs GradScaler (BF16 has same exponent range as FP32)
-        # - FP16 model: NEEDS GradScaler for loss scaling to prevent gradient underflow/overflow
-        # - FP32 model with FP16 autocast: Needs GradScaler for mixed precision
         # 
-        # CRITICAL FIX: FP16 models DO need GradScaler for loss scaling!
-        # Without it, small gradients underflow to 0 and large gradients overflow to NaN.
+        # For FP16 models: Use manual loss scaling instead of GradScaler
         use_bf16 = getattr(config, 'bf16', False) or model_is_bf16
-        need_scaler = config.fp16 and not use_bf16 and config.device == "cuda"
         
-        # FP16 models need loss scaling but standard GradScaler expects FP32 master weights.
-        # For pure FP16 models, we use a custom approach:
-        if model_is_fp16 and need_scaler:
-            # Use GradScaler with FP16 model - this works but needs careful handling
-            # The scaler will scale the loss up before backward and scale gradients down before optimizer
-            self.scaler = GradScaler(init_scale=2.**16, growth_interval=2000)
-            print(f"   📝 Model is FP16 - using GradScaler for loss scaling (CRITICAL for stability)")
-            print(f"   ⚠️ FP16 training is risky - consider converting to BF16 if available")
-        elif need_scaler and not model_is_half:
+        if model_is_fp16:
+            # FP16 model - cannot use GradScaler, use manual loss scaling
+            self.scaler = None
+            self.manual_loss_scale = 2.**12  # Start with 4096x scaling for FP16
+            self.loss_scale_growth_interval = 2000
+            self.loss_scale_backoff = 0.5
+            self.loss_scale_growth = 2.0
+            self.steps_since_scale_change = 0
+            print(f"   📝 Model is FP16 - using MANUAL loss scaling (scale={self.manual_loss_scale})")
+            print(f"   ⚠️ FP16 training is risky - recommend converting to BF16 if available")
+        elif config.fp16 and not use_bf16 and config.device == "cuda" and not model_is_half:
             # Standard mixed precision: FP32 model with FP16 autocast
             self.scaler = GradScaler()
+            self.manual_loss_scale = None
             print(f"   📝 Mixed precision training with GradScaler")
         else:
             self.scaler = None
+            self.manual_loss_scale = None
             if model_is_bf16:
-                print(f"   📝 Model is BF16 - GradScaler not needed (BF16 is numerically stable)")
-            elif model_is_fp16:
-                # This is dangerous - FP16 without loss scaling
-                print(f"   ⚠️ WARNING: FP16 model without GradScaler!")
-                print(f"   ⚠️ This may cause NaN from gradient overflow/underflow!")
-                print(f"   💡 Enable config.fp16=True to use loss scaling")
+                print(f"   📝 Model is BF16 - no loss scaling needed (BF16 is numerically stable)")
         
         self.global_step = 0
         self.start_epoch = 0
@@ -1107,8 +1105,14 @@ class XoronTrainer:
                 scaled_loss = total_loss / self.config.gradient_accumulation_steps
                 
                 if self.scaler is not None:
+                    # Standard GradScaler (FP32 model with FP16 autocast)
                     self.scaler.scale(scaled_loss).backward()
+                elif self.manual_loss_scale is not None:
+                    # Manual loss scaling for FP16 models
+                    # Scale up loss before backward to prevent gradient underflow
+                    (scaled_loss * self.manual_loss_scale).backward()
                 else:
+                    # BF16 or FP32 - no scaling needed
                     scaled_loss.backward()
                 
                 # ═══════════════════════════════════════════════════════════════════
@@ -1164,8 +1168,16 @@ class XoronTrainer:
                 has_nan_grad = False
                 nan_grad_names = []
                 
+                # Unscale gradients before checking/clipping
                 if self.scaler is not None:
+                    # GradScaler handles unscaling
                     self.scaler.unscale_(self.optimizer)
+                elif self.manual_loss_scale is not None:
+                    # Manual unscaling for FP16 models
+                    # Divide gradients by loss scale to get true gradient values
+                    for param in self.model.parameters():
+                        if param.grad is not None:
+                            param.grad.data.div_(self.manual_loss_scale)
                 
                 # Check all gradients for NaN/Inf - CRITICAL to prevent weight corruption
                 for name, param in self.model.named_parameters():
@@ -1191,6 +1203,13 @@ class XoronTrainer:
                     self.optimizer.zero_grad(set_to_none=getattr(self.config, 'set_to_none', True))
                     if self.scaler is not None:
                         self.scaler.update()  # Still update scaler to adjust scale factor
+                    elif self.manual_loss_scale is not None:
+                        # Reduce loss scale on NaN (backoff)
+                        old_scale = self.manual_loss_scale
+                        self.manual_loss_scale *= self.loss_scale_backoff
+                        self.manual_loss_scale = max(self.manual_loss_scale, 1.0)  # Don't go below 1
+                        self.steps_since_scale_change = 0
+                        print(f"   📉 Reduced loss scale: {old_scale} → {self.manual_loss_scale}")
                 else:
                     # DOUBLE CHECK: Verify weights are still valid before optimizer step
                     weights_ok = True
@@ -1235,6 +1254,17 @@ class XoronTrainer:
                         self.scaler.update()
                     else:
                         self.optimizer.step()
+                        
+                        # Grow manual loss scale on successful steps (for FP16)
+                        if self.manual_loss_scale is not None:
+                            self.steps_since_scale_change += 1
+                            if self.steps_since_scale_change >= self.loss_scale_growth_interval:
+                                old_scale = self.manual_loss_scale
+                                self.manual_loss_scale *= self.loss_scale_growth
+                                self.manual_loss_scale = min(self.manual_loss_scale, 2.**16)  # Cap at 65536
+                                self.steps_since_scale_change = 0
+                                if old_scale != self.manual_loss_scale:
+                                    print(f"   📈 Increased loss scale: {old_scale} → {self.manual_loss_scale}")
 
                     # ═══════════════════════════════════════════════════════════════════
                     # AGGRESSIVE POST-OPTIMIZER WEIGHT CHECK - THE CRITICAL CHECK!
