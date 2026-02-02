@@ -48,8 +48,8 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    max_per_epoch: int = 66
-    max_per_dataset: int = 1  # Prevent any single dataset from dominating the epoch
+    max_per_epoch: int = 6600
+    max_per_dataset: int = 100  # Prevent any single dataset from dominating the epoch
     sample_repeat: int = 4  # Each sample shown N times within gradient accumulation window
 
     # Training settings - optimized for ~31GB VRAM
