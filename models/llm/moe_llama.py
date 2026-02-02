@@ -27,16 +27,12 @@ MAX_HIDDEN = 500.0  # Conservative to prevent overflow in matmuls
 
 
 def safe_clamp_hidden(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:
-    """Clamp hidden states for FP16 safety."""
+    """Clamp hidden states for FP16 safety. Handles NaN/Inf properly."""
     if x.numel() == 0:
         return x
-    nan_mask = torch.isnan(x)
-    inf_mask = torch.isinf(x)
-    if nan_mask.any():
-        x = x.masked_fill(nan_mask, 0.0)
-    if inf_mask.any():
-        x = x.masked_fill(inf_mask & (x > 0), max_val)
-        x = x.masked_fill(inf_mask & (x < 0), -max_val)
+    # nan_to_num is the ONLY way to properly replace NaN/Inf
+    # clamp(nan) = nan, which doesn't help!
+    x = torch.nan_to_num(x, nan=0.0, posinf=max_val, neginf=-max_val)
     return x.clamp(-max_val, max_val)
 
 
@@ -920,14 +916,16 @@ class MoELlamaForCausalLM(nn.Module):
         hidden_states = outputs.last_hidden_state
         aux_loss = outputs.aux_loss
         
-        # Clamp hidden states before lm_head
-        hidden_states = safe_clamp_hidden(hidden_states)
+        # CRITICAL: Replace NaN/Inf BEFORE any operations
+        # torch.clamp does NOT fix NaN - clamp(nan) = nan!
+        hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=MAX_HIDDEN, neginf=-MAX_HIDDEN)
+        hidden_states = hidden_states.clamp(-MAX_HIDDEN, MAX_HIDDEN)
 
         # Compute logits
         logits = self.lm_head(hidden_states)
         
-        # Clamp logits for cross-entropy softmax stability
-        # exp(10) ≈ 22000 (safe in FP16), exp(11) ≈ 60000 (close to limit)
+        # Replace NaN/Inf in logits, then clamp
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=10.0, neginf=-10.0)
         logits = logits.clamp(-10.0, 10.0)
 
         loss = None

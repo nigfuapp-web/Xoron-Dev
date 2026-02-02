@@ -22,17 +22,14 @@ MAX_HIDDEN = 500.0  # Conservative max to prevent overflow in matmuls
 
 
 def safe_clamp(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:
-    """Clamp tensor values for FP16 safety, handling NaN/Inf in-place style."""
+    """Clamp tensor values for FP16 safety, handling NaN/Inf properly.
+    
+    CRITICAL: torch.clamp does NOT fix NaN! clamp(nan, -10, 10) = nan
+    Must use nan_to_num first.
+    """
     if x.numel() == 0:
         return x
-    # Use masked_fill for efficiency - avoids creating new tensors
-    nan_mask = torch.isnan(x)
-    inf_mask = torch.isinf(x)
-    if nan_mask.any():
-        x = x.masked_fill(nan_mask, 0.0)
-    if inf_mask.any():
-        x = x.masked_fill(inf_mask & (x > 0), max_val)
-        x = x.masked_fill(inf_mask & (x < 0), -max_val)
+    x = torch.nan_to_num(x, nan=0.0, posinf=max_val, neginf=-max_val)
     return x.clamp(-max_val, max_val)
 
 
