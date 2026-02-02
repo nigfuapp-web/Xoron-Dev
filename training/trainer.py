@@ -1367,6 +1367,27 @@ class XoronTrainer:
             with open(os.path.join(checkpoint_path, "special_tokens.json"), "w") as f:
                 json.dump(SPECIAL_TOKENS, f, indent=2)
         
+        # Save trainer_state.json for HuggingFace compatibility and training resume
+        trainer_state = {
+            "best_model_checkpoint": checkpoint_path,
+            "best_metric": self.best_loss,
+            "epoch": epoch + 1,
+            "global_step": self.global_step,
+            "is_local_process_zero": True,
+            "is_world_process_zero": True,
+            "log_history": [],
+            "logging_steps": 100,
+            "max_steps": self.global_step,
+            "num_train_epochs": self.config.num_epochs,
+            "total_flos": 0,
+            "train_batch_size": self.config.batch_size,
+            "trial_name": None,
+            "trial_params": None,
+        }
+        trainer_state_path = os.path.join(checkpoint_path, "trainer_state.json")
+        with open(trainer_state_path, "w") as f:
+            json.dump(trainer_state, f, indent=2)
+        
         # Save streaming state for dataset resume
         if hasattr(self.train_dataset, 'save_streaming_state'):
             streaming_state_path = os.path.join(checkpoint_path, "streaming_state.json")
@@ -1380,7 +1401,7 @@ class XoronTrainer:
             print(f"   ⭐ New best loss: {loss:.4f}")
 
     def _save_final_model(self):
-        """Save the final trained model with tokenizer, chat template, and streaming state."""
+        """Save the final trained model with tokenizer, chat template, trainer state, and streaming state."""
         print(f"\n💾 Saving final model to {self.config.final_model_dir}...")
         os.makedirs(self.config.final_model_dir, exist_ok=True)
 
@@ -1406,6 +1427,28 @@ class XoronTrainer:
             with open(os.path.join(self.config.final_model_dir, "special_tokens.json"), "w") as f:
                 json.dump(SPECIAL_TOKENS, f, indent=2)
             print(f"   💾 Tokenizer and chat template saved")
+        
+        # Save trainer_state.json for HuggingFace compatibility and training resume
+        trainer_state = {
+            "best_model_checkpoint": self.config.final_model_dir,
+            "best_metric": self.best_loss,
+            "epoch": self.config.num_epochs,
+            "global_step": self.global_step,
+            "is_local_process_zero": True,
+            "is_world_process_zero": True,
+            "log_history": [],
+            "logging_steps": 100,
+            "max_steps": self.global_step,
+            "num_train_epochs": self.config.num_epochs,
+            "total_flos": 0,
+            "train_batch_size": self.config.batch_size,
+            "trial_name": None,
+            "trial_params": None,
+        }
+        trainer_state_path = os.path.join(self.config.final_model_dir, "trainer_state.json")
+        with open(trainer_state_path, "w") as f:
+            json.dump(trainer_state, f, indent=2)
+        print(f"   💾 Trainer state saved")
         
         # Save streaming state for dataset resume (useful if continuing training later)
         if hasattr(self.train_dataset, 'save_streaming_state'):
