@@ -430,9 +430,9 @@ class LlamaAttention(nn.Module):
                 )
                 attn_weights = attn_weights + causal_mask.unsqueeze(0).unsqueeze(0)
             
-            # FP16-safe: clamp attention weights before softmax to prevent overflow
-            attn_weights = torch.clamp(attn_weights, min=-65000.0, max=65000.0)
-            attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            # FP16-safe: clamp attention weights before softmax to prevent exp() overflow
+            attn_weights = torch.clamp(attn_weights, min=-50.0, max=50.0)  # exp(50) is safe, exp(89) overflows FP16
+            attn_weights = F.softmax(attn_weights, dim=-1)
             
             if self.training and self.attention_dropout > 0:
                 attn_weights = F.dropout(attn_weights, p=self.attention_dropout)
