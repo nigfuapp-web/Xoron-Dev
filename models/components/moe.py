@@ -7,7 +7,7 @@ Features:
 - Expert choice routing option
 - Improved load balancing with auxiliary losses
 - Capacity factor for expert utilization
-- FP16-native numerical stability (no float32 upcasting)
+- FP16-native numerical stability
 """
 
 import torch
@@ -16,21 +16,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 
 # FP16 constants
-# FP16 range: -65504 to 65504, smallest positive: ~6e-8
-EPS = 1e-4  # Safe epsilon for FP16 (1e-5 can underflow in some ops)
-MAX_HIDDEN = 500.0  # Conservative max to prevent overflow in matmuls
-
-
-def safe_clamp(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:
-    """Clamp tensor values for FP16 safety, handling NaN/Inf properly.
-    
-    CRITICAL: torch.clamp does NOT fix NaN! clamp(nan, -10, 10) = nan
-    Must use nan_to_num first.
-    """
-    if x.numel() == 0:
-        return x
-    x = torch.nan_to_num(x, nan=0.0, posinf=max_val, neginf=-max_val)
-    return x.clamp(-max_val, max_val)
+EPS = 1e-5
 
 
 class MoERouter(nn.Module):
@@ -57,27 +43,22 @@ class MoERouter(nn.Module):
         batch_size, seq_len, hidden_dim = hidden_states.shape
         hidden_flat = hidden_states.view(-1, hidden_dim)
         
-        # Normalize and clamp input
+        # Normalize input for stability
         hidden_norm = self.input_norm(hidden_flat)
-        hidden_norm = safe_clamp(hidden_norm, 50.0)
         
         router_logits = self.gate(hidden_norm)
-        # Tight clamp for FP16 softmax stability (exp(10) ~ 22000, safe in FP16)
-        router_logits = router_logits.clamp(-10.0, 10.0)
 
         if self.training and self.noise_std > 0:
             noise = torch.randn_like(router_logits) * self.noise_std
-            noisy_logits = (router_logits + noise).clamp(-10.0, 10.0)
+            noisy_logits = router_logits + noise
         else:
             noisy_logits = router_logits
 
-        # Softmax in FP16 with clamped logits is safe
-        router_probs = F.softmax(noisy_logits, dim=-1)
-        router_probs = router_probs.clamp(EPS, 1.0)
+        router_probs = F.softmax(noisy_logits, dim=-1, dtype=hidden_states.dtype)
         
         top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
         
-        # Safe normalization
+        # Normalize top-k probs
         prob_sum = top_k_probs.sum(dim=-1, keepdim=True).clamp(min=EPS)
         top_k_probs = top_k_probs / prob_sum
 
@@ -101,23 +82,16 @@ class MoEExpert(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        # Small init to prevent explosion in FP16
+        # Small init for FP16 stability
         std = 0.02
         nn.init.normal_(self.gate_proj.weight, mean=0.0, std=std)
         nn.init.normal_(self.up_proj.weight, mean=0.0, std=std)
         nn.init.normal_(self.down_proj.weight, mean=0.0, std=std * 0.5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = safe_clamp(x, MAX_HIDDEN)
-        gate = self.gate_proj(x)
-        gate = safe_clamp(gate, MAX_HIDDEN)
-        gate = self.act_fn(gate)
+        gate = self.act_fn(self.gate_proj(x))
         up = self.up_proj(x)
-        up = safe_clamp(up, MAX_HIDDEN)
-        # Clamp product to prevent overflow
-        prod = (gate * up).clamp(-MAX_HIDDEN, MAX_HIDDEN)
-        out = self.down_proj(prod)
-        out = safe_clamp(out, MAX_HIDDEN)
+        out = self.down_proj(gate * up)
         return self.dropout(out)
 
 
@@ -145,17 +119,10 @@ class SharedExpert(nn.Module):
         nn.init.normal_(self.down_proj.weight, mean=0.0, std=std * 0.5)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = safe_clamp(x, MAX_HIDDEN)
-        gate = self.gate_proj(x)
-        gate = safe_clamp(gate, MAX_HIDDEN)
-        gate = self.act_fn(gate)
+        gate = self.act_fn(self.gate_proj(x))
         up = self.up_proj(x)
-        up = safe_clamp(up, MAX_HIDDEN)
-        prod = (gate * up).clamp(-MAX_HIDDEN, MAX_HIDDEN)
-        out = self.down_proj(prod)
-        out = safe_clamp(out, MAX_HIDDEN)
+        out = self.down_proj(gate * up)
         out = self.dropout(out)
-        # sigmoid output is always in [0,1], safe
         return out * torch.sigmoid(self.shared_gate)
 
 
@@ -193,7 +160,6 @@ class MoELayer(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, hidden_size = hidden_states.shape
         
-        hidden_states = safe_clamp(hidden_states, MAX_HIDDEN)
         hidden_flat = hidden_states.view(-1, hidden_size)
         num_tokens = hidden_flat.shape[0]
 
@@ -208,13 +174,11 @@ class MoELayer(nn.Module):
                 if mask.any():
                     expert_input = hidden_flat[mask]
                     expert_output = expert(expert_input)
-                    expert_output = safe_clamp(expert_output, MAX_HIDDEN)
                     weight = top_k_probs[mask, k:k+1]
                     final_output[mask] = final_output[mask] + weight * expert_output
 
         shared_output = self.shared_expert(hidden_flat)
-        shared_output = safe_clamp(shared_output, MAX_HIDDEN)
-        final_output = (final_output + shared_output).clamp(-MAX_HIDDEN, MAX_HIDDEN)
+        final_output = final_output + shared_output
 
         final_output = final_output.view(batch_size, seq_len, hidden_size)
         aux_loss = self._compute_aux_loss(router_logits, top_k_indices, num_tokens)
@@ -226,10 +190,7 @@ class MoELayer(nn.Module):
         device = router_logits.device
         dtype = router_logits.dtype
         
-        # Already clamped in router, but be safe
-        router_logits_clamped = router_logits.clamp(-10.0, 10.0)
-        router_probs = F.softmax(router_logits_clamped, dim=-1)
-        router_probs = router_probs.clamp(EPS, 1.0)
+        router_probs = F.softmax(router_logits, dim=-1, dtype=dtype)
 
         expert_mask = F.one_hot(top_k_indices, self.num_experts).to(dtype)
         denominator = max(num_tokens * self.num_experts_per_tok, 1)
@@ -237,10 +198,10 @@ class MoELayer(nn.Module):
         avg_probs = router_probs.mean(dim=0)
         load_balance_loss = self.num_experts * (tokens_per_expert * avg_probs).sum()
 
-        # z_loss: logsumexp with clamped logits is safe
-        z_loss = torch.logsumexp(router_logits_clamped, dim=-1).square().mean() * 0.001
+        # z_loss for router stability
+        z_loss = torch.logsumexp(router_logits, dim=-1).square().mean() * 0.001
 
-        # Entropy with safe log
+        # Entropy loss to encourage exploration
         router_probs_safe = router_probs.clamp(EPS, 1.0 - EPS)
         log_probs = torch.log(router_probs_safe)
         entropy = -(router_probs_safe * log_probs).sum(dim=-1).mean()
@@ -251,11 +212,6 @@ class MoELayer(nn.Module):
         utilization_loss = (1.0 - expert_usage) * 0.1
 
         total_aux_loss = load_balance_loss + z_loss + entropy_loss + utilization_loss
-        total_aux_loss = total_aux_loss.clamp(0.0, 10.0)
-        
-        # Final NaN/Inf check
-        if torch.isnan(total_aux_loss) or torch.isinf(total_aux_loss):
-            return torch.tensor(0.1, device=device, dtype=dtype)
         
         return total_aux_loss
 
@@ -288,17 +244,13 @@ class ExpertChoiceMoELayer(nn.Module):
         
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, hidden_size = hidden_states.shape
-        hidden_states = safe_clamp(hidden_states, MAX_HIDDEN)
         hidden_flat = hidden_states.view(-1, hidden_size)
         num_tokens = hidden_flat.shape[0]
         
         hidden_norm = self.input_norm(hidden_flat)
-        hidden_norm = safe_clamp(hidden_norm, 50.0)
         
         router_logits = self.gate(hidden_norm)
-        router_logits = router_logits.clamp(-10.0, 10.0)
-        router_probs = F.softmax(router_logits, dim=0)
-        router_probs = router_probs.clamp(EPS, 1.0)
+        router_probs = F.softmax(router_logits, dim=0, dtype=hidden_states.dtype)
         
         capacity = int(num_tokens * self.capacity_factor / self.num_experts)
         capacity = max(capacity, 1)
@@ -314,21 +266,15 @@ class ExpertChoiceMoELayer(nn.Module):
             
             expert_input = hidden_flat[top_indices]
             expert_output = expert(expert_input)
-            expert_output = safe_clamp(expert_output, MAX_HIDDEN)
             
             final_output[top_indices] = final_output[top_indices] + top_probs.unsqueeze(-1) * expert_output
             token_counts[top_indices] = token_counts[top_indices] + top_probs
         
         token_counts = token_counts.clamp(min=EPS)
         final_output = final_output / token_counts.unsqueeze(-1)
-        final_output = safe_clamp(final_output, MAX_HIDDEN)
         
         final_output = final_output.view(batch_size, seq_len, hidden_size)
         
         aux_loss = torch.logsumexp(router_logits, dim=-1).square().mean() * 0.001
-        aux_loss = aux_loss.clamp(0.0, 10.0)
-        
-        if torch.isnan(aux_loss) or torch.isinf(aux_loss):
-            return final_output, torch.tensor(0.1, device=hidden_states.device, dtype=hidden_states.dtype)
         
         return final_output, aux_loss

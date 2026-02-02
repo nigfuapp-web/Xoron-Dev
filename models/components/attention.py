@@ -4,6 +4,7 @@ SOTA Flash Attention and Cross-Attention implementations with KV cache support.
 Features:
 - Full KV cache support for efficient autoregressive generation
 - Flash Attention 2 integration via PyTorch SDPA
+- Pre-scaled Q/K for FP16 stability (prevents overflow in Q@K^T)
 - Sliding window attention support
 - Grouped Query Attention (GQA) support
 - Memory-efficient cross-attention for multimodal fusion
@@ -24,6 +25,16 @@ def flash_attention_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def compute_qk_scale(head_dim: int) -> float:
+    """Compute the Q/K pre-scaling factor for FP16 stability.
+    
+    By scaling both Q and K by head_dim^-0.25, the product Q@K^T
+    is effectively scaled by head_dim^-0.5 (the standard attention scaling).
+    This prevents overflow in FP16 when Q and K have large values.
+    """
+    return head_dim ** -0.25
 
 
 @dataclass
@@ -88,7 +99,7 @@ class AttentionKVCache:
 
 class FlashAttention(nn.Module):
     """
-    SOTA Flash Attention with KV cache support.
+    SOTA Flash Attention with KV cache support and FP16-safe Q/K pre-scaling.
     
     Uses PyTorch's scaled_dot_product_attention when available,
     with fallback to standard attention. Supports:
@@ -96,6 +107,7 @@ class FlashAttention(nn.Module):
     - Sliding window attention
     - Causal masking
     - Attention dropout
+    - Pre-scaled Q/K for FP16 stability
     """
     
     def __init__(
@@ -103,12 +115,16 @@ class FlashAttention(nn.Module):
         dropout: float = 0.0, 
         causal: bool = False,
         sliding_window: int = None,
+        head_dim: int = None,
     ):
         super().__init__()
         self.dropout = dropout
         self.causal = causal
         self.sliding_window = sliding_window
         self._flash_available = flash_attention_available()
+        # Store head_dim for Q/K scaling; will be inferred from input if not provided
+        self._head_dim = head_dim
+        self._qk_scale = compute_qk_scale(head_dim) if head_dim else None
 
     def forward(
         self,
@@ -140,6 +156,9 @@ class FlashAttention(nn.Module):
         causal = is_causal if is_causal is not None else self.causal
         batch_size, num_heads, seq_len, head_dim = query.shape
         
+        # Compute Q/K scaling factor (for FP16 stability)
+        qk_scale = self._qk_scale if self._qk_scale else compute_qk_scale(head_dim)
+        
         # Handle KV cache
         if past_key_value is not None:
             past_key, past_value = past_key_value
@@ -158,21 +177,24 @@ class FlashAttention(nn.Module):
         attn_weights = None
 
         if self._flash_available and not output_attentions:
-            # Use Flash Attention via SDPA
-            dropout_p = self.dropout if self.training else 0.0
+            # CRITICAL: Scale Q and K BEFORE SDPA to prevent FP16 overflow
+            query_scaled = query * qk_scale
+            key_scaled = key * qk_scale
             
-            # Determine if we should use causal mask
+            dropout_p = self.dropout if self.training else 0.0
             use_causal = causal and attn_mask is None and seq_len > 1 and seq_len == kv_seq_len
             
             output = F.scaled_dot_product_attention(
-                query, key, value,
+                query_scaled, key_scaled, value,
                 attn_mask=attn_mask,
                 dropout_p=dropout_p,
                 is_causal=use_causal,
+                scale=1.0,  # We already scaled Q and K
             )
         else:
-            # Manual attention computation
-            attn_weights = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(head_dim)
+            # Manual attention computation with standard scaling
+            scale = 1.0 / math.sqrt(head_dim)
+            attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
 
             # Apply causal mask if needed
             if causal and attn_mask is None and seq_len > 1:
@@ -185,7 +207,7 @@ class FlashAttention(nn.Module):
             if attn_mask is not None:
                 attn_weights = attn_weights + attn_mask
 
-            attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+            attn_weights = F.softmax(attn_weights, dim=-1, dtype=query.dtype)
 
             if self.training and self.dropout > 0:
                 attn_weights = F.dropout(attn_weights, p=self.dropout)
@@ -202,7 +224,7 @@ class MultimodalCrossAttention(nn.Module):
     Allows text to attend to image/video/audio features with:
     - KV caching for efficient generation
     - Gated residual connection for stable training
-    - Flash Attention support
+    - Flash Attention support with pre-scaled Q/K for FP16 stability
     - Optional attention weight output
     """
     
@@ -220,6 +242,9 @@ class MultimodalCrossAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.use_flash_attention = use_flash_attention and flash_attention_available()
         self.dropout_p = dropout
+        
+        # Pre-compute Q/K scaling factor for FP16 stability
+        self.qk_scale = compute_qk_scale(self.head_dim)
 
         # Projections
         self.q_proj = nn.Linear(hidden_size, hidden_size, bias=False)
@@ -280,21 +305,27 @@ class MultimodalCrossAttention(nn.Module):
         attn_weights = None
         
         if self.use_flash_attention and not output_attentions:
+            # CRITICAL: Scale Q and K BEFORE SDPA to prevent FP16 overflow
+            query_scaled = query * self.qk_scale
+            key_scaled = key * self.qk_scale
+            
             dropout_p = self.dropout_p if self.training else 0.0
             attn_output = F.scaled_dot_product_attention(
-                query, key, value,
+                query_scaled, key_scaled, value,
                 attn_mask=modality_mask,
                 dropout_p=dropout_p,
                 is_causal=False,
+                scale=1.0,  # We already scaled Q and K
             )
         else:
-            # Manual attention computation
-            attn_weights = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            # Manual attention computation with standard scaling
+            scale = 1.0 / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
             
             if modality_mask is not None:
                 attn_weights = attn_weights + modality_mask
                 
-            attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+            attn_weights = F.softmax(attn_weights, dim=-1, dtype=text_hidden.dtype)
             
             if self.training and self.dropout_p > 0:
                 attn_weights = F.dropout(attn_weights, p=self.dropout_p)

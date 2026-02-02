@@ -5,10 +5,10 @@ Features:
 - Full KV cache support for efficient autoregressive generation
 - Sliding window attention with proper cache management
 - Grouped Query Attention (GQA) for memory efficiency
-- Flash Attention integration
+- Flash Attention integration with pre-scaled Q/K for FP16 stability
 - Proper position_ids handling with KV cache
 - DeepSeek-style MoE with shared expert
-- FP16-native numerical stability (no float32 upcasting)
+- FP16-native numerical stability
 """
 
 import math
@@ -21,19 +21,8 @@ from dataclasses import dataclass
 from transformers.models.llama.modeling_llama import LlamaRMSNorm, LlamaMLP
 from models.components.moe import MoELayer
 
-# FP16 constants - conservative values to prevent overflow
-EPS = 1e-4
-MAX_HIDDEN = 500.0  # Conservative to prevent overflow in matmuls
-
-
-def safe_clamp_hidden(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:
-    """Clamp hidden states for FP16 safety. Handles NaN/Inf properly."""
-    if x.numel() == 0:
-        return x
-    # nan_to_num is the ONLY way to properly replace NaN/Inf
-    # clamp(nan) = nan, which doesn't help!
-    x = torch.nan_to_num(x, nan=0.0, posinf=max_val, neginf=-max_val)
-    return x.clamp(-max_val, max_val)
+# FP16 constants
+EPS = 1e-5
 
 
 class DynamicNTKScalingRotaryEmbedding(nn.Module):
@@ -264,9 +253,9 @@ class LlamaAttention(nn.Module):
     Features:
     - Grouped Query Attention (GQA) for memory efficiency
     - Flash Attention 2 integration via PyTorch SDPA
+    - Pre-scaled Q/K to prevent FP16 overflow in SDPA
     - Sliding window attention for efficient long context
     - Full KV cache support for autoregressive generation
-    - Proper position_ids handling with cache
     """
 
     def __init__(self, config, layer_idx: int = 0):
@@ -290,6 +279,10 @@ class LlamaAttention(nn.Module):
         # Sliding window attention configuration
         self.use_sliding_window = getattr(config, 'use_sliding_window', True)
         self.sliding_window = getattr(config, 'sliding_window', 4096)
+        
+        # Pre-compute scaling factor for Q/K (split scaling for FP16 stability)
+        # Instead of scaling after Q@K^T, we scale Q and K before to prevent overflow
+        self.qk_scale = self.head_dim ** -0.25  # sqrt(sqrt(head_dim))
 
         # Projections
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -332,19 +325,12 @@ class LlamaAttention(nn.Module):
         use_cache: bool = False,
         cache_position: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
-        """Forward pass - FP16 native."""
+        """Forward pass - FP16 native with pre-scaled Q/K for SDPA stability."""
         batch_size, seq_len, _ = hidden_states.shape
-        
-        hidden_states = safe_clamp_hidden(hidden_states)
 
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
-        
-        # Clamp QKV - use smaller value for attention stability
-        query_states = safe_clamp_hidden(query_states, 50.0)
-        key_states = safe_clamp_hidden(key_states, 50.0)
-        value_states = safe_clamp_hidden(value_states, 50.0)
 
         query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(batch_size, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -360,9 +346,6 @@ class LlamaAttention(nn.Module):
 
         cos, sin = self.rotary_emb(query_states, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        
-        query_states = safe_clamp_hidden(query_states, 50.0)
-        key_states = safe_clamp_hidden(key_states, 50.0)
 
         if past_key_value is not None:
             past_key, past_value = past_key_value
@@ -383,37 +366,43 @@ class LlamaAttention(nn.Module):
         attn_weights = None
         
         if self.use_flash_attention and self.flash_attention_available and not output_attentions:
+            # CRITICAL FIX: Scale Q and K BEFORE SDPA to prevent FP16 overflow
+            # SDPA internally computes Q@K^T which can overflow if Q,K are large
+            # By scaling both by head_dim^-0.25, the product is scaled by head_dim^-0.5 (correct scaling)
+            query_states_scaled = query_states * self.qk_scale
+            key_states_scaled = key_states_expanded * self.qk_scale
+            
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
                 sliding_mask = make_sliding_window_causal_mask(
                     seq_len, self.sliding_window, hidden_states.device, hidden_states.dtype, kv_seq_len
                 )
                 attn_output = F.scaled_dot_product_attention(
-                    query_states, key_states_expanded, value_states_expanded,
+                    query_states_scaled, key_states_scaled, value_states_expanded,
                     attn_mask=sliding_mask, 
                     dropout_p=self.attention_dropout if self.training else 0.0, 
                     is_causal=False,
+                    scale=1.0,  # We already scaled Q and K
                 )
             elif attention_mask is not None:
                 attn_output = F.scaled_dot_product_attention(
-                    query_states, key_states_expanded, value_states_expanded,
+                    query_states_scaled, key_states_scaled, value_states_expanded,
                     attn_mask=attention_mask, 
                     dropout_p=self.attention_dropout if self.training else 0.0, 
                     is_causal=False,
+                    scale=1.0,
                 )
             else:
                 attn_output = F.scaled_dot_product_attention(
-                    query_states, key_states_expanded, value_states_expanded,
+                    query_states_scaled, key_states_scaled, value_states_expanded,
                     attn_mask=None, 
                     dropout_p=self.attention_dropout if self.training else 0.0, 
                     is_causal=(seq_len > 1 and not self.use_sliding_window),
+                    scale=1.0,
                 )
         else:
-            # Manual attention - FP16 safe
+            # Manual attention with proper scaling
             scale = 1.0 / math.sqrt(self.head_dim)
             attn_weights = torch.matmul(query_states, key_states_expanded.transpose(-2, -1)) * scale
-            
-            # Tight clamp for FP16 softmax (exp(10) ~ 22000, safe)
-            attn_weights = attn_weights.clamp(-10.0, 10.0)
             
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
                 sliding_mask = make_sliding_window_causal_mask(
@@ -424,25 +413,20 @@ class LlamaAttention(nn.Module):
                 attn_weights = attn_weights + attention_mask
             elif seq_len > 1:
                 causal_mask = torch.triu(
-                    torch.full((seq_len, kv_seq_len), -10.0, device=hidden_states.device, dtype=hidden_states.dtype),
+                    torch.full((seq_len, kv_seq_len), float('-inf'), device=hidden_states.device, dtype=hidden_states.dtype),
                     diagonal=kv_seq_len - seq_len + 1
                 )
                 attn_weights = attn_weights + causal_mask.unsqueeze(0).unsqueeze(0)
             
-            # Softmax in FP16 with clamped inputs is safe
-            attn_weights = F.softmax(attn_weights, dim=-1)
-            attn_weights = attn_weights.clamp(0.0, 1.0)
+            attn_weights = F.softmax(attn_weights, dim=-1, dtype=hidden_states.dtype)
             
             if self.training and self.attention_dropout > 0:
                 attn_weights = F.dropout(attn_weights, p=self.attention_dropout)
                 
             attn_output = torch.matmul(attn_weights, value_states_expanded)
-
-        attn_output = safe_clamp_hidden(attn_output, 50.0)
         
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
-        attn_output = safe_clamp_hidden(attn_output)
 
         return attn_output, present_key_value, attn_weights
 
@@ -489,11 +473,8 @@ class MoELlamaDecoderLayer(nn.Module):
         **kwargs,
     ) -> Tuple[torch.Tensor, ...]:
         """Forward pass - FP16 native."""
-        hidden_states = safe_clamp_hidden(hidden_states)
-        
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = safe_clamp_hidden(hidden_states)
 
         attn_output, present_key_value, attn_weights = self.self_attn(
             hidden_states=hidden_states,
@@ -504,12 +485,10 @@ class MoELlamaDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
-        attn_output = safe_clamp_hidden(attn_output)
-        hidden_states = (residual + attn_output).clamp(-MAX_HIDDEN, MAX_HIDDEN)
+        hidden_states = residual + attn_output
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = safe_clamp_hidden(hidden_states)
 
         aux_loss = None
         if self.is_moe:
@@ -517,8 +496,7 @@ class MoELlamaDecoderLayer(nn.Module):
         else:
             hidden_states = self.mlp(hidden_states)
         
-        hidden_states = safe_clamp_hidden(hidden_states)
-        hidden_states = (residual + hidden_states).clamp(-MAX_HIDDEN, MAX_HIDDEN)
+        hidden_states = residual + hidden_states
 
         outputs = (hidden_states, present_key_value)
         
@@ -612,8 +590,6 @@ class MoELlamaModel(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        inputs_embeds = safe_clamp_hidden(inputs_embeds)
-
         batch_size, seq_length = inputs_embeds.shape[:2]
         device = inputs_embeds.device
 
@@ -669,28 +645,23 @@ class MoELlamaModel(nn.Module):
                 )
 
             hidden_states = layer_outputs[0]
-            hidden_states = safe_clamp_hidden(hidden_states)
             
             if use_cache:
                 next_cache.append(layer_outputs[1])
             
             if layer.is_moe and layer_outputs[2] is not None:
-                aux = layer_outputs[2]
-                if not (torch.isnan(aux) or torch.isinf(aux)):
-                    all_aux_losses.append(aux)
+                all_aux_losses.append(layer_outputs[2])
             
             if output_attentions and len(layer_outputs) > 3:
                 all_attentions = all_attentions + (layer_outputs[3],)
 
         hidden_states = self.norm(hidden_states)
-        hidden_states = safe_clamp_hidden(hidden_states)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
         if all_aux_losses:
             total_aux_loss = sum(all_aux_losses) / len(all_aux_losses)
-            total_aux_loss = total_aux_loss.clamp(0.0, 10.0)
         else:
             total_aux_loss = torch.tensor(0.0, device=device, dtype=hidden_states.dtype)
 
@@ -895,10 +866,9 @@ class MoELlamaForCausalLM(nn.Module):
     ) -> Union[Tuple, CausalLMOutput]:
         """Forward pass - FP16 native.
         
-        The key to avoiding NaN/Inf in FP16:
-        1. Keep hidden states bounded (done in layers)
-        2. Keep logits bounded for softmax in cross-entropy
-        3. Use proper weight initialization (done in __init__)
+        FP16 stability is achieved through:
+        1. Pre-scaled Q/K in attention (prevents overflow in Q@K^T)
+        2. Proper weight initialization
         """
         outputs = self.model(
             input_ids=input_ids,
@@ -915,18 +885,9 @@ class MoELlamaForCausalLM(nn.Module):
 
         hidden_states = outputs.last_hidden_state
         aux_loss = outputs.aux_loss
-        
-        # CRITICAL: Replace NaN/Inf BEFORE any operations
-        # torch.clamp does NOT fix NaN - clamp(nan) = nan!
-        hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=MAX_HIDDEN, neginf=-MAX_HIDDEN)
-        hidden_states = hidden_states.clamp(-MAX_HIDDEN, MAX_HIDDEN)
 
         # Compute logits
         logits = self.lm_head(hidden_states)
-        
-        # Replace NaN/Inf in logits, then clamp
-        logits = torch.nan_to_num(logits, nan=0.0, posinf=10.0, neginf=-10.0)
-        logits = logits.clamp(-10.0, 10.0)
 
         loss = None
         if labels is not None:
@@ -936,20 +897,15 @@ class MoELlamaForCausalLM(nn.Module):
             if shift_labels.dtype != torch.long:
                 shift_labels = shift_labels.long()
             
-            # CrossEntropyLoss in FP16 is safe with clamped logits
             loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
             loss = loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), 
                 shift_labels.view(-1)
             )
             
-            # Safety check
-            if torch.isnan(loss) or torch.isinf(loss):
-                loss = torch.tensor(0.1, device=logits.device, dtype=logits.dtype, requires_grad=True)
-            
             if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
-                if aux_loss is not None and not torch.isnan(aux_loss) and not torch.isinf(aux_loss):
-                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss.clamp(0.0, 10.0)
+                if aux_loss is not None:
+                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
 
         if not return_dict:
             output = (logits, outputs.past_key_values, outputs.hidden_states, outputs.attentions, aux_loss)
