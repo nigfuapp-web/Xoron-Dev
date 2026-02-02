@@ -765,7 +765,23 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         video_size=xoron_config.generation_video_size,
         resume_state_path=None,  # Don't resume eval dataset
     )
-    print(f"   ✅ Eval dataset ready")
+    
+    # CRITICAL FIX: Set initial skip positions for eval dataset
+    # Eval must start AFTER training samples to ensure proper validation (held-out data)
+    # Without this, eval uses the SAME samples as training, making overfitting detection impossible!
+    # Train: samples 0 to (max_per_dataset - 1) from each dataset
+    # Eval: samples max_per_dataset to (max_per_dataset + max_per_dataset_eval - 1) from each dataset
+    train_samples_per_dataset = training_config.max_per_dataset
+    eval_skip_positions = {}
+    for dtype, configs in dataset_configs.items():
+        if configs:
+            for cfg in configs:
+                eval_skip_positions[cfg["name"]] = train_samples_per_dataset
+    eval_dataset._streaming_state["dataset_positions"] = eval_skip_positions.copy()
+    
+    print(f"   ✅ Eval dataset ready (held-out data starting at position {train_samples_per_dataset})")
+    print(f"      → Train: samples 0-{train_samples_per_dataset-1} per dataset")
+    print(f"      → Eval: samples {train_samples_per_dataset}-{train_samples_per_dataset + eval_samples_per_dataset - 1} per dataset")
 
     # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
     collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
