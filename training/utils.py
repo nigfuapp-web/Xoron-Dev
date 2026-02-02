@@ -16,6 +16,82 @@ except ImportError:
     pass
 
 
+class FP32OptimizerWrapper:
+    """
+    Wrapper that maintains FP32 master weights for FP16 models.
+    
+    This solves the FP16 optimizer overflow problem by:
+    1. Keeping FP32 copies of all parameters (master weights)
+    2. Running optimizer on FP32 copies (no overflow)
+    3. Copying back to FP16 model after each step
+    
+    This is the standard "master weights" approach used in mixed precision training.
+    """
+    
+    def __init__(self, optimizer_class, model, **optimizer_kwargs):
+        """
+        Args:
+            optimizer_class: Optimizer class (e.g., AdamW)
+            model: The FP16 model
+            **optimizer_kwargs: Arguments to pass to optimizer (lr, weight_decay, etc.)
+        """
+        self.model = model
+        self.fp16_params = []
+        self.fp32_params = []
+        
+        # Create FP32 copies of FP16 parameters
+        for param in model.parameters():
+            if param.requires_grad:
+                self.fp16_params.append(param)
+                # Create FP32 copy
+                fp32_param = param.data.float().clone().detach().requires_grad_(True)
+                self.fp32_params.append(fp32_param)
+        
+        # Create optimizer on FP32 params
+        self.optimizer = optimizer_class(self.fp32_params, **optimizer_kwargs)
+        
+        print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters")
+        print(f"   📝 Optimizer will run on FP32, then copy back to FP16")
+    
+    def zero_grad(self, set_to_none=False):
+        """Zero gradients on FP32 params."""
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+    
+    def step(self):
+        """
+        1. Copy FP16 gradients to FP32 params
+        2. Run optimizer on FP32
+        3. Copy FP32 params back to FP16 model
+        """
+        # Copy gradients from FP16 to FP32
+        for fp16_p, fp32_p in zip(self.fp16_params, self.fp32_params):
+            if fp16_p.grad is not None:
+                if fp32_p.grad is None:
+                    fp32_p.grad = fp16_p.grad.float()
+                else:
+                    fp32_p.grad.copy_(fp16_p.grad.float())
+        
+        # Run optimizer step on FP32 params
+        self.optimizer.step()
+        
+        # Copy updated FP32 params back to FP16 model
+        for fp16_p, fp32_p in zip(self.fp16_params, self.fp32_params):
+            fp16_p.data.copy_(fp32_p.data.half())
+    
+    def state_dict(self):
+        """Return optimizer state dict."""
+        return self.optimizer.state_dict()
+    
+    def load_state_dict(self, state_dict):
+        """Load optimizer state dict."""
+        self.optimizer.load_state_dict(state_dict)
+    
+    @property
+    def param_groups(self):
+        """Return param groups from underlying optimizer."""
+        return self.optimizer.param_groups
+
+
 def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all'):
     """Create a collate function with the specified video configuration.
     
@@ -164,42 +240,29 @@ def create_optimizer_and_scheduler(
         force_fp32_optimizer: Force FP32 optimizer states even with FP16 model (HIGHLY RECOMMENDED)
     
     Note on FP16 stability:
-        If training with FP16 weights (not mixed precision with FP32 master weights),
-        consider using eps=1e-4 to prevent division by small numbers causing NaN.
-        Also ensure GradScaler is used for loss scaling.
+        FP16 models REQUIRE FP32 optimizer states to prevent overflow in Adam.
+        This function automatically uses FP32OptimizerWrapper for FP16 models.
     """
-    # Check model dtype to warn about FP16 risks
+    # Check model dtype
     model_dtype = next(model.parameters()).dtype
     is_fp16 = model_dtype == torch.float16
     
+    # For FP16 models, use FP32OptimizerWrapper to prevent optimizer overflow
     if is_fp16:
-        if force_fp32_optimizer:
-            print(f"   ⚠️ Model is FP16 but using FP32 optimizer states (recommended)")
-            print(f"   ⚠️ This prevents NaN from numerical overflow in Adam")
-        else:
-            print(f"   ⚠️ Model is FP16 - optimizer states will also be FP16")
-            print(f"   ⚠️ This can cause NaN from numerical overflow in Adam!")
-            print(f"   💡 Consider: 1) Use BF16 instead, 2) Use mixed precision with FP32 master weights")
-            # Increase eps for FP16 stability
-            if eps < 1e-6:
-                eps = 1e-4
-                print(f"   🔧 Automatically increased Adam eps to {eps} for FP16 stability")
-    
-    # Collect parameters - cast to FP32 for optimizer if needed
-    params_for_optimizer = []
-    if is_fp16 and force_fp32_optimizer:
-        # Create FP32 copies of parameters for optimizer
-        # The optimizer will maintain FP32 master weights internally
-        for param in model.parameters():
-            if param.requires_grad:
-                params_for_optimizer.append(param)
-    else:
-        params_for_optimizer = model.parameters()
-    
-    # Choose optimizer based on 8-bit setting
-    if use_8bit_optimizer and BNB_AVAILABLE:
+        print(f"   📝 Model is FP16 - using FP32 master weights for optimizer")
+        print(f"   📝 This prevents NaN from numerical overflow in Adam")
+        
+        # Use FP32OptimizerWrapper which maintains FP32 copies
+        optimizer = FP32OptimizerWrapper(
+            optimizer_class=AdamW,
+            model=model,
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            eps=eps,
+        )
+    elif use_8bit_optimizer and BNB_AVAILABLE:
         optimizer = bnb.optim.AdamW8bit(
-            params_for_optimizer,
+            model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay,
             eps=eps,
@@ -207,7 +270,7 @@ def create_optimizer_and_scheduler(
         print("   ✅ Using 8-bit AdamW optimizer (saves ~75% optimizer memory)")
     else:
         optimizer = AdamW(
-            params_for_optimizer,
+            model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay,
             eps=eps,
@@ -217,8 +280,11 @@ def create_optimizer_and_scheduler(
             print("      Install with: pip install bitsandbytes")
 
     warmup_steps = int(total_steps * warmup_ratio)
+    
+    # Scheduler needs the underlying optimizer for FP32OptimizerWrapper
+    scheduler_optimizer = optimizer.optimizer if isinstance(optimizer, FP32OptimizerWrapper) else optimizer
     scheduler = get_linear_schedule_with_warmup(
-        optimizer,
+        scheduler_optimizer,
         num_warmup_steps=warmup_steps,
         num_training_steps=total_steps
     )

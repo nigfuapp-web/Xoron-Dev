@@ -114,18 +114,12 @@ class XoronTrainer:
         use_bf16 = getattr(config, 'bf16', False) or model_is_bf16
         
         if model_is_fp16:
-            # FP16 model - cannot use GradScaler, use manual loss scaling
-            # Start with LOW scale (128) to avoid FP16 overflow, will grow if stable
+            # FP16 model - optimizer should use FP32 master weights (handled by FP32OptimizerWrapper)
+            # No GradScaler or manual loss scaling needed - FP32 optimizer states don't overflow!
             self.scaler = None
-            self.manual_loss_scale = 2.**7  # Start with 128x (conservative for FP16)
-            self.loss_scale_growth_interval = 500  # Grow faster if stable
-            self.loss_scale_backoff = 0.5
-            self.loss_scale_growth = 2.0
-            self.steps_since_scale_change = 0
-            self.max_scaled_grad_norm = 1000.0  # If scaled grads exceed this, reduce scale
-            print(f"   📝 Model is FP16 - using MANUAL loss scaling (scale={self.manual_loss_scale})")
-            print(f"   📝 Max allowed scaled grad norm: {self.max_scaled_grad_norm}")
-            print(f"   ⚠️ FP16 training is risky - recommend converting to BF16 if available")
+            self.manual_loss_scale = None  # Not needed with FP32 optimizer states
+            print(f"   📝 Model is FP16 - optimizer uses FP32 master weights (no overflow risk)")
+            print(f"   📝 Gradients computed in FP16, optimizer runs in FP32, results copied back to FP16")
         elif config.fp16 and not use_bf16 and config.device == "cuda" and not model_is_half:
             # Standard mixed precision: FP32 model with FP16 autocast
             self.scaler = GradScaler()
