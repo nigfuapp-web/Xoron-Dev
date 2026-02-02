@@ -1066,7 +1066,6 @@ class XoronTrainer:
         eval_vid_diff_loss = 0.0
         eval_asr_loss = 0.0
         eval_tts_loss = 0.0
-        eval_moe_aux_loss = 0.0  # MoE auxiliary loss (load balancing)
         num_batches = 0
         num_valid_batches = 0
         num_cot = 0
@@ -1074,7 +1073,6 @@ class XoronTrainer:
         num_vid_diff = 0
         num_asr = 0
         num_tts = 0
-        num_moe = 0  # Batches with MoE aux loss
         
         # Track per-modality sample types for cross-modal analysis
         modality_counts = {
@@ -1129,18 +1127,7 @@ class XoronTrainer:
                         logits, labels, input_ids, sample_types, None
                     )
 
-                    # Get MoE auxiliary loss from model output
-                    moe_aux_loss = getattr(outputs, 'aux_loss', None)
-                    
-                    # Debug: Log first batch to see if aux_loss is being returned
-                    if batch_idx == 0:
-                        print(f"   🔍 Debug: outputs.aux_loss = {moe_aux_loss}")
-                    
-                    if moe_aux_loss is not None:
-                        moe_loss_val = moe_aux_loss.item()
-                        if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf'):
-                            eval_moe_aux_loss += moe_loss_val
-                            num_moe += 1
+
 
                     # Track CoT loss separately
                     if has_cot_samples:
@@ -1219,7 +1206,6 @@ class XoronTrainer:
         avg_vid = eval_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
         avg_asr = eval_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
         avg_tts = eval_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
-        avg_moe = eval_moe_aux_loss / max(num_moe, 1) if num_moe > 0 else 0.0
 
         # Return model to training mode
         self.model.train()
@@ -1231,7 +1217,6 @@ class XoronTrainer:
             'vid': avg_vid,
             'asr': avg_asr,
             'tts': avg_tts,
-            'moe_aux': avg_moe,
             'num_valid_batches': num_valid_batches,
             'num_batches': num_batches,
             'num_cot': num_cot,
@@ -1239,7 +1224,6 @@ class XoronTrainer:
             'num_vid_diff': num_vid_diff,
             'num_asr': num_asr,
             'num_tts': num_tts,
-            'num_moe': num_moe,
         }
 
         return eval_losses
@@ -1283,10 +1267,8 @@ class XoronTrainer:
         if eval_losses:
             print(f"   🔊 TTS Validation Loss:           {eval_losses['tts']:.4f} ({eval_losses['num_tts']} batches)")
         
-        # MoE Auxiliary Loss (load balancing)
+        # MoE Auxiliary Loss (load balancing) - training only, not a dataset loss
         print(f"   ⚡ MoE Aux Loss:                   {train_losses['moe_aux']:.4f} ({train_losses['num_moe']} batches)")
-        if eval_losses:
-            print(f"   ⚡ MoE Aux Validation Loss:        {eval_losses['moe_aux']:.4f} ({eval_losses['num_moe']} batches)")
         
         print(f"{'='*60}")
         print(f"   📈 Learning efficiency: {train_losses['valid_pct']:.1f}% of batches contributed to learning")
