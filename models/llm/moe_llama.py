@@ -960,15 +960,27 @@ class MoELlamaForCausalLM(nn.Module):
             if shift_labels.dtype != torch.long:
                 shift_labels = shift_labels.long()
             
-            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), 
-                shift_labels.view(-1)
-            )
+            # Check if there are any valid labels (not all -100)
+            # CrossEntropyLoss returns NaN when all labels are ignore_index
+            valid_mask = (shift_labels != -100)
+            num_valid = valid_mask.sum().item()
             
-            if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
-                if aux_loss is not None:
-                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
+            if num_valid > 0:
+                loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+                loss = loss_fct(
+                    shift_logits.view(-1, shift_logits.size(-1)), 
+                    shift_labels.view(-1)
+                )
+                
+                # Extra safety: clamp loss to prevent extreme values
+                loss = torch.clamp(loss, min=0.0, max=100.0)
+                
+                if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
+                    if aux_loss is not None:
+                        loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
+            else:
+                # No valid labels - return zero loss (batch has no trainable tokens)
+                loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype, requires_grad=True)
 
         if not return_dict:
             output = (logits, outputs.past_key_values, outputs.hidden_states, outputs.attentions, aux_loss)

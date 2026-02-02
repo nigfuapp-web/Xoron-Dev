@@ -469,6 +469,17 @@ class XoronTrainer:
             if shift_labels.dtype != torch.long:
                 shift_labels = shift_labels.long()
             
+            # Check if there are any valid labels BEFORE computing loss
+            # This prevents NaN from 0/0 division when all labels are -100
+            valid_mask_check = (shift_labels != -100)
+            num_valid_total = valid_mask_check.sum().item()
+            
+            if num_valid_total == 0:
+                # No valid labels at all - return model loss or zero
+                if model_loss is not None and not (torch.isnan(model_loss) or torch.isinf(model_loss)):
+                    return model_loss
+                return torch.tensor(0.0, device=device, requires_grad=True)
+            
             # Compute per-token loss - CrossEntropyLoss handles ignore_index internally
             loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
             flat_logits = shift_logits.view(-1, shift_logits.size(-1))
