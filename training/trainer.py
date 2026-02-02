@@ -822,8 +822,8 @@ class XoronTrainer:
         total_batches = len(train_loader)
 
         for batch_idx, batch in enumerate(train_loader):
-            # Only log every 1000 batches to reduce log spam
-            if (batch_idx + 1) % 1000 == 0 or batch_idx == 0:
+            # Only log every 100 batches to reduce log spam
+            if (batch_idx + 1) % 100 == 0 or batch_idx == 0:
                 print(f"🔄 Processing batch {batch_idx + 1}/{total_batches}...", flush=True)
             
             batch_start = time.time()
@@ -1087,8 +1087,8 @@ class XoronTrainer:
                 # This is critical for FP16 stability with gradient accumulation
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 
-                # Log gradient norms periodically (every 1000 batches)
-                if (batch_idx + 1) % 1000 == 0:
+                # Log gradient norms periodically (every 100 batches)
+                if (batch_idx + 1) % 100 == 0:
                     total_norm = 0.0
                     embed_norm = 0.0
                     for name, param in self.model.named_parameters():
@@ -1251,8 +1251,8 @@ class XoronTrainer:
             batch_time = time.time() - batch_start
             batch_times.append(batch_time)
 
-            # Only log every 1000 batches to reduce log spam
-            if (batch_idx + 1) % 1000 == 0:
+            # Only log every 100 batches to reduce log spam
+            if (batch_idx + 1) % 100 == 0:
                 print(f"✅ Batch {batch_idx + 1} completed", flush=True)
 
             # Clear cache periodically with proper GPU sync
