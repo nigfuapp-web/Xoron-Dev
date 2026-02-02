@@ -1121,21 +1121,15 @@ class XoronTrainer:
                             labels=labels,
                         )
                     
-                    # Get model's base loss
-                    model_loss = getattr(outputs, 'loss', None)
+                    # Get logits from model output
                     logits = getattr(outputs, 'logits', None)
                     
-                    # Use weighted loss for special token samples (CoT, tool use, etc.)
-                    if has_weighted_samples and logits is not None:
-                        llm_loss = self._compute_weighted_loss(
-                            logits, labels, input_ids, sample_types, model_loss
-                        )
-                    else:
-                        llm_loss = model_loss
-                        if llm_loss is None:
-                            llm_loss = torch.tensor(0.0, device=device)
+                    # Compute loss from logits and labels (same method as training)
+                    llm_loss = self._compute_weighted_loss(
+                        logits, labels, input_ids, sample_types, None
+                    )
 
-                    # Track MoE auxiliary loss (load balancing)
+                    # Get MoE auxiliary loss from model output
                     moe_aux_loss = getattr(outputs, 'aux_loss', None)
                     if moe_aux_loss is not None:
                         moe_loss_val = moe_aux_loss.item()
