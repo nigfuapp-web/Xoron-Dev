@@ -787,24 +787,6 @@ class XoronTrainer:
                         audio_features=audio_features,
                         labels=labels,
                     )
-                    
-                    # Get model's computed loss as fallback
-                    model_loss = getattr(outputs, 'loss', None)
-                    
-                    # Use weighted loss for CoT samples (safely get logits)
-                    logits = getattr(outputs, 'logits', None)
-                    if has_cot_samples and logits is not None:
-                        # Pass model_loss as fallback in case weighted loss computation fails
-                        llm_loss = self._compute_cot_weighted_loss(
-                            logits, labels, input_ids, sample_types, model_loss
-                        )
-                    else:
-                        llm_loss = model_loss
-                        if llm_loss is None:
-                            llm_loss = torch.tensor(0.0, device=device)
-                    
-                    # Get MoE auxiliary loss if available
-                    moe_aux_loss = getattr(outputs, 'aux_loss', None)
             else:
                 outputs = self.model(
                     input_ids=input_ids,
@@ -814,26 +796,16 @@ class XoronTrainer:
                     audio_features=audio_features,
                     labels=labels,
                 )
-                
-                # Get model's computed loss as fallback
-                model_loss = getattr(outputs, 'loss', None)
-                
-                # Use weighted loss for CoT samples (safely get logits)
-                logits = getattr(outputs, 'logits', None)
-                if has_cot_samples and logits is not None:
-                    # Pass model_loss as fallback in case weighted loss computation fails
-                    llm_loss = self._compute_cot_weighted_loss(
-                        logits, labels, input_ids, sample_types, model_loss
-                    )
-                else:
-                    llm_loss = model_loss
-                    if llm_loss is None:
-                        llm_loss = torch.tensor(0.0, device=device)
-                
-                # Get MoE auxiliary loss if available
-                moe_aux_loss = getattr(outputs, 'aux_loss', None)
             
-            # Track CoT loss separately (with NaN safety)
+            # Get LLM loss from model output - this is the primary loss
+            llm_loss = getattr(outputs, 'loss', None)
+            if llm_loss is None:
+                llm_loss = torch.tensor(0.0, device=device, requires_grad=True)
+            
+            # Get MoE auxiliary loss if available
+            moe_aux_loss = getattr(outputs, 'aux_loss', None)
+            
+            # Track CoT loss separately (same as LLM loss for CoT samples)
             if has_cot_samples:
                 cot_loss_val = llm_loss.item()
                 if not (cot_loss_val != cot_loss_val):  # NaN check
@@ -844,11 +816,11 @@ class XoronTrainer:
             total_loss = self.llm_loss_weight * llm_loss
             
             # Add MoE auxiliary loss if available (SOTA: proper MoE training)
-            if moe_aux_loss is not None and moe_aux_loss.item() > 0:
-                total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss
-                # Track MoE aux loss
+            if moe_aux_loss is not None:
                 moe_loss_val = moe_aux_loss.item()
-                if not (moe_loss_val != moe_loss_val):  # NaN check
+                # Check for valid loss (not NaN, not Inf)
+                if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf'):
+                    total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss
                     epoch_moe_aux_loss += moe_loss_val
                     num_moe += 1
 
@@ -1092,19 +1064,6 @@ class XoronTrainer:
                                 audio_features=audio_features,
                                 labels=labels,
                             )
-                            
-                            # Get model's computed loss as fallback
-                            model_loss = getattr(outputs, 'loss', None)
-                            
-                            logits = getattr(outputs, 'logits', None)
-                            if has_cot_samples and logits is not None:
-                                llm_loss = self._compute_cot_weighted_loss(
-                                    logits, labels, input_ids, sample_types, model_loss
-                                )
-                            else:
-                                llm_loss = model_loss
-                                if llm_loss is None:
-                                    llm_loss = torch.tensor(0.0, device=device)
                     else:
                         outputs = self.model(
                             input_ids=input_ids,
@@ -1114,29 +1073,21 @@ class XoronTrainer:
                             audio_features=audio_features,
                             labels=labels,
                         )
-                        
-                        # Get model's computed loss as fallback
-                        model_loss = getattr(outputs, 'loss', None)
-                        
-                        logits = getattr(outputs, 'logits', None)
-                        if has_cot_samples and logits is not None:
-                            llm_loss = self._compute_cot_weighted_loss(
-                                logits, labels, input_ids, sample_types, model_loss
-                            )
-                        else:
-                            llm_loss = model_loss
-                            if llm_loss is None:
-                                llm_loss = torch.tensor(0.0, device=device)
+                    
+                    # Get LLM loss from model output
+                    llm_loss = getattr(outputs, 'loss', None)
+                    if llm_loss is None:
+                        llm_loss = torch.tensor(0.0, device=device)
 
                     # Track MoE auxiliary loss (load balancing)
                     moe_aux_loss = getattr(outputs, 'aux_loss', None)
                     if moe_aux_loss is not None:
                         moe_loss_val = moe_aux_loss.item()
-                        if not (moe_loss_val != moe_loss_val) and moe_loss_val > 0:
+                        if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf'):
                             eval_moe_aux_loss += moe_loss_val
                             num_moe += 1
 
-                    # Track CoT loss separately
+                    # Track CoT loss separately (same as LLM loss for CoT samples)
                     if has_cot_samples:
                         cot_loss_val = llm_loss.item()
                         if not (cot_loss_val != cot_loss_val):

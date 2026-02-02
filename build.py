@@ -685,6 +685,9 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         active_modalities: Which modalities are active ('all', 'text', 'image', 'video', 'audio')
             Inactive modalities use minimal tensors to save RAM (~27MB per batch for text-only)
         resume_streaming_state: Path to streaming_state.json to resume from (optional)
+    
+    Returns:
+        train_dataset, eval_dataset, optimizer, scheduler, collate_fn
     """
     print("\n" + "=" * 60)
     print("⚙️ TRAINING SETUP")
@@ -740,6 +743,29 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
     train_dataset.set_state_save_path(streaming_state_path)
     print(f"   💾 Streaming state will be saved to: {streaming_state_path}")
+    
+    # Create eval dataset - pulls max_per_dataset_eval samples from each dataset for validation
+    eval_samples_per_dataset = training_config.max_per_dataset_eval
+    num_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
+    eval_total = eval_samples_per_dataset * num_datasets
+    
+    print(f"\n📊 Creating eval dataset ({eval_samples_per_dataset} samples × {num_datasets} datasets = {eval_total} total)")
+    eval_dataset = TrueStreamingDataset(
+        dataset_configs=dataset_configs,
+        format_functions=format_functions,
+        tokenizer=tokenizer,
+        tokens=SPECIAL_TOKENS,
+        image_processor=image_processor,
+        max_length=training_config.max_seq_length,
+        max_per_epoch=eval_total,
+        max_per_dataset=eval_samples_per_dataset,
+        sample_repeat=1,  # No repetition for eval
+        voice_processor=voice_proc,
+        max_video_frames=xoron_config.max_video_frames,
+        video_size=xoron_config.generation_video_size,
+        resume_state_path=None,  # Don't resume eval dataset
+    )
+    print(f"   ✅ Eval dataset ready")
 
     # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
     collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
@@ -760,6 +786,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
 
     print(f"\n📊 Training Configuration:")
     print(f"   Max samples per epoch: {training_config.max_per_epoch}")
+    print(f"   Eval samples per epoch: {eval_max_per_epoch}")
     print(f"   Estimated steps/epoch: {steps_per_epoch}")
     print(f"   Total steps: {total_steps}")
     print(f"   FP16: {training_config.fp16}")
@@ -767,7 +794,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     print(f"   Video frames: {xoron_config.max_video_frames}")
     print(f"   Video size: {xoron_config.generation_video_size}x{xoron_config.generation_video_size}")
 
-    return train_dataset, optimizer, scheduler, collate_fn
+    return train_dataset, eval_dataset, optimizer, scheduler, collate_fn
 
 
 def run_test(model, tokenizer, training_config):
@@ -895,7 +922,7 @@ def run_build_and_train(
             print(f"\n📂 Found streaming state to resume from: {streaming_state_path}")
 
     # Setup training with filtered dataset configs
-    train_dataset, optimizer, scheduler, collate_fn = setup_training(
+    train_dataset, eval_dataset, optimizer, scheduler, collate_fn = setup_training(
         model, tokenizer, xoron_config, training_config, dataset_configs, 
         active_modalities=active_modalities,
         resume_streaming_state=resume_streaming_state
@@ -912,6 +939,7 @@ def run_build_and_train(
         collate_fn=collate_fn,
         resume_from=checkpoint_path if resume_training else None,
         tokenizer=tokenizer,  # Pass tokenizer for saving with checkpoints
+        eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
     )
 
     trainer.train()
@@ -1054,7 +1082,7 @@ def run_hf_training(
             print(f"\n📂 Found streaming state to resume from: {streaming_state_path}")
 
     # Setup training with filtered dataset configs
-    train_dataset, optimizer, scheduler, collate_fn = setup_training(
+    train_dataset, eval_dataset, optimizer, scheduler, collate_fn = setup_training(
         model, tokenizer, xoron_config, training_config, dataset_configs, 
         active_modalities=active_modalities,
         resume_streaming_state=resume_streaming_state
@@ -1071,6 +1099,7 @@ def run_hf_training(
         collate_fn=collate_fn,
         resume_from=resume_from,  # Pass checkpoint path for resuming
         tokenizer=tokenizer,
+        eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
     )
 
     trainer.train()
