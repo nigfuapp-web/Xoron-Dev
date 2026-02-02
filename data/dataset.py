@@ -834,6 +834,13 @@ class TrueStreamingDataset(IterableDataset):
                     pad = torch.zeros(audio_features.shape[0], max_audio_len - audio_features.shape[1])
                     audio_features = torch.cat([audio_features, pad], dim=1)
             
+            # Validate: ensure we have at least some valid labels to train on
+            # Samples with ALL -100 labels cause NaN loss and waste compute
+            num_valid_labels = (labels != -100).sum().item()
+            if num_valid_labels == 0:
+                # No valid labels - skip this sample entirely
+                return None
+            
             return {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
