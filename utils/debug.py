@@ -394,9 +394,16 @@ def diagnose_corruption_source(model, input_ids, labels=None) -> Dict:
     input_ids = input_ids.to(device)
     
     # Check 1: Input token IDs
+    # NOTE: Use ACTUAL embedding size, not config.vocab_size (may be stale after resize)
     vocab_size = None
-    if hasattr(model, 'llm') and hasattr(model.llm, 'config'):
-        vocab_size = getattr(model.llm.config, 'vocab_size', None)
+    if hasattr(model, 'llm'):
+        if hasattr(model.llm, 'model') and hasattr(model.llm.model, 'embed_tokens'):
+            vocab_size = model.llm.model.embed_tokens.weight.shape[0]
+        elif hasattr(model.llm, 'embed_tokens'):
+            vocab_size = model.llm.embed_tokens.weight.shape[0]
+        # Fallback to config
+        if vocab_size is None and hasattr(model.llm, 'config'):
+            vocab_size = getattr(model.llm.config, 'vocab_size', None)
     
     max_token = input_ids.max().item()
     min_token = input_ids.min().item()

@@ -850,9 +850,17 @@ class XoronTrainer:
             # CRITICAL: Validate token IDs are within vocabulary bounds
             # Out-of-range tokens cause NaN in embeddings → corrupts entire model
             # ═══════════════════════════════════════════════════════════════════
+            # NOTE: Use ACTUAL embedding size, not config.vocab_size
+            # (config may be stale after adding special tokens and resizing)
             vocab_size = None
-            if hasattr(self.model, 'llm') and hasattr(self.model.llm, 'config'):
-                vocab_size = getattr(self.model.llm.config, 'vocab_size', None)
+            if hasattr(self.model, 'llm'):
+                if hasattr(self.model.llm, 'model') and hasattr(self.model.llm.model, 'embed_tokens'):
+                    vocab_size = self.model.llm.model.embed_tokens.weight.shape[0]
+                elif hasattr(self.model.llm, 'embed_tokens'):
+                    vocab_size = self.model.llm.embed_tokens.weight.shape[0]
+                # Fallback to config if embedding not accessible
+                if vocab_size is None and hasattr(self.model.llm, 'config'):
+                    vocab_size = getattr(self.model.llm.config, 'vocab_size', None)
             
             if vocab_size is not None:
                 max_token_id = input_ids.max().item()
