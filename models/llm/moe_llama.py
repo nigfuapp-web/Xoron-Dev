@@ -315,6 +315,23 @@ class LlamaAttention(nn.Module):
         hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_kv_heads, n_rep, seq_len, head_dim)
         return hidden_states.reshape(batch, num_kv_heads * n_rep, seq_len, head_dim)
 
+    def _check_nan(self, tensor: torch.Tensor, name: str) -> bool:
+        """Check for NaN/Inf and print debug info. Returns True if problem found."""
+        if tensor is None:
+            return False
+        has_nan = torch.isnan(tensor).any().item()
+        has_inf = torch.isinf(tensor).any().item()
+        if has_nan or has_inf:
+            nan_count = torch.isnan(tensor).sum().item()
+            inf_count = torch.isinf(tensor).sum().item()
+            finite_mask = torch.isfinite(tensor)
+            finite_vals = tensor[finite_mask] if finite_mask.any() else None
+            print(f"    ❌ {name}: nan={nan_count}, inf={inf_count}, shape={list(tensor.shape)}, dtype={tensor.dtype}")
+            if finite_vals is not None and finite_vals.numel() > 0:
+                print(f"       finite: min={finite_vals.min():.4f}, max={finite_vals.max():.4f}, mean={finite_vals.mean():.4f}")
+            return True
+        return False
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -324,13 +341,28 @@ class LlamaAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.Tensor] = None,
+        debug: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
         """Forward pass - FP16 native with pre-scaled Q/K for SDPA stability."""
         batch_size, seq_len, _ = hidden_states.shape
+        
+        # Debug: check input
+        if debug:
+            print(f"\n  [Layer {self.layer_idx}] Attention Debug:")
+            self._check_nan(hidden_states, "input_hidden")
 
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
+        
+        if debug:
+            self._check_nan(query_states, "Q_proj")
+            self._check_nan(key_states, "K_proj")
+            self._check_nan(value_states, "V_proj")
+            # Print weight stats
+            print(f"    Q_weight: min={self.q_proj.weight.min():.4f}, max={self.q_proj.weight.max():.4f}")
+            print(f"    K_weight: min={self.k_proj.weight.min():.4f}, max={self.k_proj.weight.max():.4f}")
+            print(f"    V_weight: min={self.v_proj.weight.min():.4f}, max={self.v_proj.weight.max():.4f}")
 
         query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(batch_size, seq_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -346,6 +378,12 @@ class LlamaAttention(nn.Module):
 
         cos, sin = self.rotary_emb(query_states, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        
+        if debug:
+            self._check_nan(query_states, "Q_after_rope")
+            self._check_nan(key_states, "K_after_rope")
+            self._check_nan(cos, "rope_cos")
+            self._check_nan(sin, "rope_sin")
 
         if past_key_value is not None:
             past_key, past_value = past_key_value
@@ -367,10 +405,18 @@ class LlamaAttention(nn.Module):
         
         if self.use_flash_attention and self.flash_attention_available and not output_attentions:
             # CRITICAL FIX: Scale Q and K BEFORE SDPA to prevent FP16 overflow
-            # SDPA internally computes Q@K^T which can overflow if Q,K are large
-            # By scaling both by head_dim^-0.25, the product is scaled by head_dim^-0.5 (correct scaling)
             query_states_scaled = query_states * self.qk_scale
             key_states_scaled = key_states_expanded * self.qk_scale
+            
+            if debug:
+                print(f"    qk_scale={self.qk_scale:.6f}")
+                self._check_nan(query_states_scaled, "Q_scaled")
+                self._check_nan(key_states_scaled, "K_scaled")
+                # Also check pre-scaled magnitudes
+                print(f"    Q pre-scale: abs_max={query_states.abs().max():.4f}")
+                print(f"    K pre-scale: abs_max={key_states_expanded.abs().max():.4f}")
+                print(f"    Q post-scale: abs_max={query_states_scaled.abs().max():.4f}")
+                print(f"    K post-scale: abs_max={key_states_scaled.abs().max():.4f}")
             
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
                 sliding_mask = make_sliding_window_causal_mask(
@@ -381,7 +427,7 @@ class LlamaAttention(nn.Module):
                     attn_mask=sliding_mask, 
                     dropout_p=self.attention_dropout if self.training else 0.0, 
                     is_causal=False,
-                    scale=1.0,  # We already scaled Q and K
+                    scale=1.0,
                 )
             elif attention_mask is not None:
                 attn_output = F.scaled_dot_product_attention(
@@ -399,10 +445,17 @@ class LlamaAttention(nn.Module):
                     is_causal=(seq_len > 1 and not self.use_sliding_window),
                     scale=1.0,
                 )
+                
+            if debug:
+                self._check_nan(attn_output, "SDPA_output")
         else:
             # Manual attention with proper scaling
             scale = 1.0 / math.sqrt(self.head_dim)
             attn_weights = torch.matmul(query_states, key_states_expanded.transpose(-2, -1)) * scale
+            
+            if debug:
+                self._check_nan(attn_weights, "attn_weights_raw")
+                print(f"    attn_weights: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}")
             
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
                 sliding_mask = make_sliding_window_causal_mask(
@@ -420,13 +473,23 @@ class LlamaAttention(nn.Module):
             
             attn_weights = F.softmax(attn_weights, dim=-1, dtype=hidden_states.dtype)
             
+            if debug:
+                self._check_nan(attn_weights, "attn_weights_softmax")
+            
             if self.training and self.attention_dropout > 0:
                 attn_weights = F.dropout(attn_weights, p=self.attention_dropout)
                 
             attn_output = torch.matmul(attn_weights, value_states_expanded)
+            
+            if debug:
+                self._check_nan(attn_output, "attn_output_manual")
         
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
+        
+        if debug:
+            self._check_nan(attn_output, "O_proj_output")
+            print(f"    O_weight: min={self.o_proj.weight.min():.4f}, max={self.o_proj.weight.max():.4f}")
 
         return attn_output, present_key_value, attn_weights
 

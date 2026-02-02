@@ -9,6 +9,7 @@ Features:
 - Gradient checkpointing support
 - MoE auxiliary loss tracking
 - Proper gradient clipping from config
+- Deep NaN/Inf debugging
 """
 
 import os
@@ -40,6 +41,7 @@ from config.special_tokens import (
     get_code_execution_block_tokens,
     get_flat_weighted_block_tokens,
 )
+from utils.debug import NaNDebugger, debug_full_forward, add_nan_hooks, remove_hooks
 
 
 class XoronTrainer:
@@ -807,8 +809,33 @@ class XoronTrainer:
             # CRITICAL: Check for NaN/Inf in model outputs BEFORE computing loss
             # This catches numerical instability early before it corrupts gradients
             if logits is not None and (torch.isnan(logits).any() or torch.isinf(logits).any()):
-                if batch_idx % 100 == 0:
-                    print(f"   ⚠️ Batch {batch_idx}: NaN/Inf detected in logits, skipping batch")
+                nan_count = torch.isnan(logits).sum().item()
+                inf_count = torch.isinf(logits).sum().item()
+                total_elements = logits.numel()
+                nan_pct = 100 * nan_count / total_elements
+                inf_pct = 100 * inf_count / total_elements
+                
+                print(f"\n{'!'*70}")
+                print(f"! ⚠️ BATCH {batch_idx}: NaN/Inf DETECTED IN LOGITS")
+                print(f"! nan_count={nan_count} ({nan_pct:.2f}%), inf_count={inf_count} ({inf_pct:.2f}%)")
+                print(f"! logits shape: {logits.shape}, dtype: {logits.dtype}")
+                print(f"{'!'*70}")
+                
+                # Get finite values stats
+                finite_mask = torch.isfinite(logits)
+                if finite_mask.any():
+                    finite_vals = logits[finite_mask]
+                    print(f"! Finite values: min={finite_vals.min():.4f}, max={finite_vals.max():.4f}, mean={finite_vals.mean():.4f}")
+                
+                # Deep debug on first occurrence or every 10th
+                if batch_idx < 5 or batch_idx % 10 == 0:
+                    print(f"\n🔬 RUNNING DEEP DEBUG...")
+                    try:
+                        debug_full_forward(self.model, input_ids, attention_mask, labels, max_layers_to_check=3)
+                    except Exception as e:
+                        print(f"❌ Debug failed: {e}")
+                
+                print(f"{'!'*70}\n")
                 num_batches += 1
                 continue
             
