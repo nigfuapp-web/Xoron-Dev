@@ -1131,6 +1131,11 @@ class XoronTrainer:
 
                     # Get MoE auxiliary loss from model output
                     moe_aux_loss = getattr(outputs, 'aux_loss', None)
+                    
+                    # Debug: Log first batch to see if aux_loss is being returned
+                    if batch_idx == 0:
+                        print(f"   🔍 Debug: outputs.aux_loss = {moe_aux_loss}")
+                    
                     if moe_aux_loss is not None:
                         moe_loss_val = moe_aux_loss.item()
                         if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf'):
