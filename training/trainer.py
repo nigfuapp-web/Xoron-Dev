@@ -846,6 +846,58 @@ class XoronTrainer:
             audio_features = batch["audio_features"].to(device)
             sample_types = batch.get("sample_type", ["text"] * len(input_ids))
             
+            # ═══════════════════════════════════════════════════════════════════
+            # CRITICAL: Validate token IDs are within vocabulary bounds
+            # Out-of-range tokens cause NaN in embeddings → corrupts entire model
+            # ═══════════════════════════════════════════════════════════════════
+            vocab_size = None
+            if hasattr(self.model, 'llm') and hasattr(self.model.llm, 'config'):
+                vocab_size = getattr(self.model.llm.config, 'vocab_size', None)
+            
+            if vocab_size is not None:
+                max_token_id = input_ids.max().item()
+                min_token_id = input_ids.min().item()
+                
+                if max_token_id >= vocab_size:
+                    # CRITICAL: Token IDs exceed vocabulary - this WILL corrupt the model!
+                    num_invalid = (input_ids >= vocab_size).sum().item()
+                    print(f"\n{'!'*70}")
+                    print(f"! 🚨 CRITICAL: TOKEN IDS OUT OF VOCABULARY BOUNDS!")
+                    print(f"! Batch {batch_idx}: max_token={max_token_id} >= vocab_size={vocab_size}")
+                    print(f"! Number of out-of-range tokens: {num_invalid}")
+                    print(f"! This WILL cause NaN corruption in embedding layer!")
+                    print(f"{'!'*70}")
+                    
+                    # Option 1: Clamp to valid range (may produce garbage but won't crash)
+                    # input_ids = input_ids.clamp(0, vocab_size - 1)
+                    # print(f"   ⚠️ Clamped tokens to valid range [0, {vocab_size-1}]")
+                    
+                    # Option 2: Skip this batch entirely
+                    print(f"   ➡️ Skipping batch {batch_idx} to prevent corruption")
+                    print(f"   💡 FIX YOUR TOKENIZER/DATA PIPELINE!\n")
+                    num_batches += 1
+                    continue
+                
+                if min_token_id < 0:
+                    # Also catch negative token IDs (except -100 in labels which is ignore_index)
+                    num_negative = (input_ids < 0).sum().item()
+                    print(f"\n⚠️ Batch {batch_idx}: Negative token IDs detected! min={min_token_id}, count={num_negative}")
+                    print(f"   ➡️ Skipping batch to prevent issues\n")
+                    num_batches += 1
+                    continue
+            
+            # Also validate labels (except -100 which is ignore_index)
+            if vocab_size is not None and labels is not None:
+                # Filter out ignore_index (-100) before checking max
+                valid_labels = labels[labels != -100]
+                if valid_labels.numel() > 0:
+                    max_label = valid_labels.max().item()
+                    if max_label >= vocab_size:
+                        print(f"\n⚠️ Batch {batch_idx}: Label IDs out of range! max_label={max_label} >= vocab_size={vocab_size}")
+                        print(f"   ➡️ Skipping batch to prevent issues\n")
+                        num_batches += 1
+                        continue
+            
             # Check for samples that need weighted loss (CoT, tool use, agentic, etc.)
             has_cot_samples = any(t == 'chain_of_thought' for t in sample_types)
             weighted_sample_types = {'chain_of_thought', 'tool_use', 'agentic', 'code_execution', 
