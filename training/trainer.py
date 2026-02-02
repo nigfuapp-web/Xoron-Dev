@@ -773,8 +773,11 @@ class XoronTrainer:
             audio_features = batch["audio_features"].to(device)
             sample_types = batch.get("sample_type", ["text"] * len(input_ids))
             
-            # Check for chain-of-thought samples
+            # Check for samples that need weighted loss (CoT, tool use, agentic, etc.)
             has_cot_samples = any(t == 'chain_of_thought' for t in sample_types)
+            weighted_sample_types = {'chain_of_thought', 'tool_use', 'agentic', 'code_execution', 
+                                      'shell_execution', 'jupyter', 'anti_hallucination'}
+            has_weighted_samples = any(t in weighted_sample_types for t in sample_types)
 
             # Forward pass with mixed precision (supports both FP16 and BF16)
             if self.use_amp:
@@ -797,15 +800,25 @@ class XoronTrainer:
                     labels=labels,
                 )
             
-            # Get LLM loss from model output - this is the primary loss
-            llm_loss = getattr(outputs, 'loss', None)
-            if llm_loss is None:
-                llm_loss = torch.tensor(0.0, device=device, requires_grad=True)
+            # Get model's base loss
+            model_loss = getattr(outputs, 'loss', None)
+            logits = getattr(outputs, 'logits', None)
+            
+            # Use weighted loss for special token samples (CoT, tool use, etc.)
+            # This gives higher weight to reasoning, tool calling, and anti-hallucination tokens
+            if has_weighted_samples and logits is not None:
+                llm_loss = self._compute_weighted_loss(
+                    logits, labels, input_ids, sample_types, model_loss
+                )
+            else:
+                llm_loss = model_loss
+                if llm_loss is None:
+                    llm_loss = torch.tensor(0.0, device=device, requires_grad=True)
             
             # Get MoE auxiliary loss if available
             moe_aux_loss = getattr(outputs, 'aux_loss', None)
             
-            # Track CoT loss separately (same as LLM loss for CoT samples)
+            # Track CoT loss separately
             if has_cot_samples:
                 cot_loss_val = llm_loss.item()
                 if not (cot_loss_val != cot_loss_val):  # NaN check
@@ -1051,6 +1064,9 @@ class XoronTrainer:
                 sample_types = batch.get("sample_type", ["text"] * len(input_ids))
 
                 has_cot_samples = any(t == 'chain_of_thought' for t in sample_types)
+                weighted_sample_types = {'chain_of_thought', 'tool_use', 'agentic', 'code_execution', 
+                                          'shell_execution', 'jupyter', 'anti_hallucination'}
+                has_weighted_samples = any(t in weighted_sample_types for t in sample_types)
 
                 try:
                     # Forward pass with mixed precision
@@ -1074,10 +1090,19 @@ class XoronTrainer:
                             labels=labels,
                         )
                     
-                    # Get LLM loss from model output
-                    llm_loss = getattr(outputs, 'loss', None)
-                    if llm_loss is None:
-                        llm_loss = torch.tensor(0.0, device=device)
+                    # Get model's base loss
+                    model_loss = getattr(outputs, 'loss', None)
+                    logits = getattr(outputs, 'logits', None)
+                    
+                    # Use weighted loss for special token samples (CoT, tool use, etc.)
+                    if has_weighted_samples and logits is not None:
+                        llm_loss = self._compute_weighted_loss(
+                            logits, labels, input_ids, sample_types, model_loss
+                        )
+                    else:
+                        llm_loss = model_loss
+                        if llm_loss is None:
+                            llm_loss = torch.tensor(0.0, device=device)
 
                     # Track MoE auxiliary loss (load balancing)
                     moe_aux_loss = getattr(outputs, 'aux_loss', None)
@@ -1087,7 +1112,7 @@ class XoronTrainer:
                             eval_moe_aux_loss += moe_loss_val
                             num_moe += 1
 
-                    # Track CoT loss separately (same as LLM loss for CoT samples)
+                    # Track CoT loss separately
                     if has_cot_samples:
                         cot_loss_val = llm_loss.item()
                         if not (cot_loss_val != cot_loss_val):
