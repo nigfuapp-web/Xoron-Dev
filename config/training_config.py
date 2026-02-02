@@ -57,7 +57,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 128
     learning_rate: float = 5e-5  # REDUCED: was 2e-4, too high for MoE + LoRA stability
     weight_decay: float = 0.01
-    num_epochs: int = 2
+    num_epochs: int = 1
     warmup_ratio: float = 0.05  # INCREASED: longer warmup for stability
     max_seq_length: int = 1024
     max_grad_norm: float = 0.5  # REDUCED: tighter clipping for MoE stability (was 1.0)
