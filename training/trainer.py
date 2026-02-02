@@ -582,8 +582,52 @@ class XoronTrainer:
         """Backward compatible alias for _compute_weighted_loss."""
         return self._compute_weighted_loss(logits, labels, input_ids, sample_types, model_loss)
 
+    def _verify_model_weights(self):
+        """Verify model weights are valid (no NaN/Inf) before training."""
+        print("\n🔍 Verifying model weights...")
+        bad_params = []
+        total_params = 0
+        nan_params = 0
+        
+        for name, param in self.model.named_parameters():
+            total_params += 1
+            has_nan = torch.isnan(param).any().item()
+            has_inf = torch.isinf(param).any().item()
+            if has_nan or has_inf:
+                nan_count = torch.isnan(param).sum().item()
+                inf_count = torch.isinf(param).sum().item()
+                bad_params.append((name, param.shape, nan_count, inf_count))
+                nan_params += 1
+        
+        if bad_params:
+            print(f"\n   ❌ CRITICAL: {len(bad_params)} parameters have NaN/Inf values!")
+            for name, shape, nan_count, inf_count in bad_params[:20]:
+                print(f"      - {name}: shape={list(shape)}, nan={nan_count}, inf={inf_count}")
+            if len(bad_params) > 20:
+                print(f"      ... and {len(bad_params) - 20} more")
+            raise RuntimeError(
+                f"Model has {len(bad_params)}/{total_params} corrupted parameters. "
+                "Cannot start training with NaN/Inf weights. "
+                "Please check your model initialization or loaded checkpoint."
+            )
+        else:
+            print(f"   ✅ All {total_params} parameters verified - no NaN/Inf detected")
+        
+        # Also check embedding stats
+        if hasattr(self.model, 'llm'):
+            llm = self.model.llm
+            if hasattr(llm, 'model') and hasattr(llm.model, 'embed_tokens'):
+                embed = llm.model.embed_tokens.weight
+                print(f"   📊 Embedding stats: min={embed.min():.4f}, max={embed.max():.4f}, mean={embed.mean():.4f}")
+            elif hasattr(llm, 'get_input_embeddings'):
+                embed = llm.get_input_embeddings().weight
+                print(f"   📊 Embedding stats: min={embed.min():.4f}, max={embed.max():.4f}, mean={embed.mean():.4f}")
+
     def train(self):
         """Run the full training loop."""
+        # CRITICAL: Verify weights are valid before starting
+        self._verify_model_weights()
+        
         print("\n" + "=" * 60)
         if self.start_epoch > 0:
             print("🔄 RESUMING MULTIMODAL TRAINING (SOTA)")
@@ -968,25 +1012,57 @@ class XoronTrainer:
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
                 # Check for NaN/Inf gradients before optimizer step
                 has_nan_grad = False
+                nan_grad_names = []
+                
                 if self.scaler is not None:
                     self.scaler.unscale_(self.optimizer)
                 
-                # Check all gradients for NaN/Inf
+                # Check all gradients for NaN/Inf - CRITICAL to prevent weight corruption
                 for name, param in self.model.named_parameters():
                     if param.grad is not None:
-                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        grad_nan = torch.isnan(param.grad).any().item()
+                        grad_inf = torch.isinf(param.grad).any().item()
+                        if grad_nan or grad_inf:
                             has_nan_grad = True
+                            nan_grad_names.append(name)
                             # Zero out bad gradients to prevent corruption
                             param.grad.zero_()
                 
                 if has_nan_grad:
                     # Skip this optimizer step entirely - bad gradients
-                    if batch_idx % 100 == 0:
-                        print(f"   ⚠️ Skipping optimizer step {self.global_step} due to NaN/Inf gradients")
+                    print(f"\n   ⚠️ GRADIENT NaN/Inf at step {self.global_step}!")
+                    print(f"   Affected params ({len(nan_grad_names)}):")
+                    for n in nan_grad_names[:10]:  # Show first 10
+                        print(f"      - {n}")
+                    if len(nan_grad_names) > 10:
+                        print(f"      ... and {len(nan_grad_names) - 10} more")
+                    print(f"   ➡️ Skipping optimizer step to prevent weight corruption\n")
+                    
                     self.optimizer.zero_grad(set_to_none=getattr(self.config, 'set_to_none', True))
                     if self.scaler is not None:
                         self.scaler.update()  # Still update scaler to adjust scale factor
                 else:
+                    # DOUBLE CHECK: Verify weights are still valid before optimizer step
+                    weights_ok = True
+                    for name, param in self.model.named_parameters():
+                        if torch.isnan(param).any() or torch.isinf(param).any():
+                            weights_ok = False
+                            print(f"\n   ❌ CRITICAL: Weight {name} already has NaN/Inf!")
+                            print(f"   This means weights were corrupted in a previous step.")
+                            print(f"   Training cannot continue with corrupted weights.\n")
+                            break
+                    
+                    if not weights_ok:
+                        # Weights are corrupted - cannot continue meaningfully
+                        raise RuntimeError(
+                            "Model weights are corrupted (contain NaN/Inf). "
+                            "This usually means:\n"
+                            "1. Learning rate too high - try reducing by 10x\n"
+                            "2. Gradient clipping threshold too high - try 0.5 instead of 1.0\n"
+                            "3. Bad data batch caused gradient explosion\n"
+                            "Please restart training with adjusted hyperparameters."
+                        )
+                    
                     # Safe to proceed with optimizer step
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     
