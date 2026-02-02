@@ -54,7 +54,7 @@ class TrainingConfig:
 
     # Training settings - optimized for ~31GB VRAM
     batch_size: int = 1
-    gradient_accumulation_steps: int = 128
+    gradient_accumulation_steps: int = 16  # REDUCED: 128 too high for FP16 stability, causes gradient explosion
     learning_rate: float = 5e-5  # REDUCED: was 2e-4, too high for MoE + LoRA stability
     weight_decay: float = 0.01
     num_epochs: int = 1

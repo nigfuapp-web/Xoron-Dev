@@ -926,6 +926,11 @@ class XoronTrainer:
                     self.scaler.scale(scaled_loss).backward()
                 else:
                     scaled_loss.backward()
+                
+                # Clip gradients immediately after each backward to prevent accumulation explosion
+                # This is critical for FP16 stability with gradient accumulation
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                
                 num_valid_batches += 1
             else:
                 # Skip backward for NaN/Inf loss - log warning
