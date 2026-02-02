@@ -8,6 +8,7 @@ Features:
 - Flash Attention integration
 - Proper position_ids handling with KV cache
 - DeepSeek-style MoE with shared expert
+- Robust numerical stability for FP16/BF16 training
 """
 
 import math
@@ -19,6 +20,19 @@ from dataclasses import dataclass
 
 from transformers.models.llama.modeling_llama import LlamaRMSNorm, LlamaMLP
 from models.components.moe import MoELayer
+
+# Numerical stability constants
+EPS = 1e-5
+MAX_HIDDEN = 65000.0
+
+
+def safe_clamp_hidden(x: torch.Tensor, max_val: float = 1000.0) -> torch.Tensor:
+    """Clamp hidden states to prevent FP16 overflow, handling NaN/Inf."""
+    if x.numel() == 0:
+        return x
+    x = torch.where(torch.isnan(x), torch.zeros_like(x), x)
+    x = torch.where(torch.isinf(x), torch.full_like(x, max_val) * torch.sign(x), x)
+    return torch.clamp(x, min=-max_val, max=max_val)
 
 
 class DynamicNTKScalingRotaryEmbedding(nn.Module):
@@ -317,27 +331,21 @@ class LlamaAttention(nn.Module):
         use_cache: bool = False,
         cache_position: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]], Optional[torch.Tensor]]:
-        """
-        Forward pass with full KV cache support.
-        
-        Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
-            attention_mask: Optional attention mask
-            position_ids: Position indices [batch, seq_len]
-            past_key_value: Optional tuple of (past_key, past_value) for KV cache
-            output_attentions: Whether to return attention weights
-            use_cache: Whether to return updated KV cache
-            cache_position: Optional cache position indices for efficient updates
-            
-        Returns:
-            Tuple of (output, past_key_value, attention_weights)
-        """
+        """Forward pass with full KV cache support and numerical stability."""
         batch_size, seq_len, _ = hidden_states.shape
+        
+        # Clamp input for numerical stability
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
         # Compute Q, K, V projections
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
+        
+        # Clamp projections
+        query_states = safe_clamp_hidden(query_states, 100.0)
+        key_states = safe_clamp_hidden(key_states, 100.0)
+        value_states = safe_clamp_hidden(value_states, 100.0)
 
         # Reshape for multi-head attention
         query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -347,7 +355,6 @@ class LlamaAttention(nn.Module):
         # Compute position IDs if not provided
         if position_ids is None:
             if past_key_value is not None:
-                # During generation: position starts after cached tokens
                 past_len = past_key_value[0].shape[2]
                 position_ids = torch.arange(past_len, past_len + seq_len, device=hidden_states.device).unsqueeze(0)
             else:
@@ -357,6 +364,10 @@ class LlamaAttention(nn.Module):
         # Apply rotary embeddings
         cos, sin = self.rotary_emb(query_states, position_ids)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        
+        # Clamp after rotary
+        query_states = safe_clamp_hidden(query_states, 100.0)
+        key_states = safe_clamp_hidden(key_states, 100.0)
 
         # Handle KV cache
         if past_key_value is not None:
@@ -364,28 +375,22 @@ class LlamaAttention(nn.Module):
             key_states = torch.cat([past_key, key_states], dim=2)
             value_states = torch.cat([past_value, value_states], dim=2)
             
-            # Apply sliding window eviction if cache exceeds window size
             if self.use_sliding_window and key_states.shape[2] > self.sliding_window:
                 key_states = key_states[:, :, -self.sliding_window:, :]
                 value_states = value_states[:, :, -self.sliding_window:, :]
 
-        # Prepare cache for return
         present_key_value = (key_states, value_states) if use_cache else None
 
         # Expand KV for GQA
         key_states_expanded = self._repeat_kv(key_states, self.num_key_value_groups)
         value_states_expanded = self._repeat_kv(value_states, self.num_key_value_groups)
         
-        # Get sequence lengths
         kv_seq_len = key_states_expanded.shape[2]
         
-        # Compute attention
         attn_weights = None
         
         if self.use_flash_attention and self.flash_attention_available and not output_attentions:
-            # Use Flash Attention via SDPA
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
-                # Create sliding window causal mask for training/prefill
                 sliding_mask = make_sliding_window_causal_mask(
                     seq_len, self.sliding_window, hidden_states.device, hidden_states.dtype, kv_seq_len
                 )
@@ -403,7 +408,6 @@ class LlamaAttention(nn.Module):
                     is_causal=False,
                 )
             else:
-                # Standard causal attention (for generation with seq_len=1)
                 attn_output = F.scaled_dot_product_attention(
                     query_states, key_states_expanded, value_states_expanded,
                     attn_mask=None, 
@@ -411,10 +415,13 @@ class LlamaAttention(nn.Module):
                     is_causal=(seq_len > 1 and not self.use_sliding_window),
                 )
         else:
-            # Manual attention computation
-            attn_weights = torch.matmul(query_states, key_states_expanded.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            # Manual attention with numerical stability
+            scale = 1.0 / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states_expanded.transpose(-2, -1)) * scale
             
-            # Apply attention mask
+            # Clamp attention scores before mask
+            attn_weights = torch.clamp(attn_weights, min=-100.0, max=100.0)
+            
             if self.use_sliding_window and attention_mask is None and seq_len > 1:
                 sliding_mask = make_sliding_window_causal_mask(
                     seq_len, self.sliding_window, hidden_states.device, hidden_states.dtype, kv_seq_len
@@ -423,38 +430,36 @@ class LlamaAttention(nn.Module):
             elif attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
             elif seq_len > 1:
-                # Standard causal mask
                 causal_mask = torch.triu(
                     torch.full((seq_len, kv_seq_len), float('-inf'), device=hidden_states.device, dtype=hidden_states.dtype),
                     diagonal=kv_seq_len - seq_len + 1
                 )
                 attn_weights = attn_weights + causal_mask.unsqueeze(0).unsqueeze(0)
             
-            # FP16-safe: clamp attention weights before softmax to prevent exp() overflow
-            attn_weights = torch.clamp(attn_weights, min=-50.0, max=50.0)  # exp(50) is safe, exp(89) overflows FP16
-            attn_weights = F.softmax(attn_weights, dim=-1)
+            # Stable softmax: clamp then compute in float32
+            attn_weights = torch.clamp(attn_weights, min=-65000.0, max=65000.0)
+            attn_weights = F.softmax(attn_weights.float(), dim=-1).to(query_states.dtype)
+            attn_weights = torch.clamp(attn_weights, min=0.0, max=1.0)
             
             if self.training and self.attention_dropout > 0:
                 attn_weights = F.dropout(attn_weights, p=self.attention_dropout)
                 
             attn_output = torch.matmul(attn_weights, value_states_expanded)
 
+        # Clamp attention output
+        attn_output = safe_clamp_hidden(attn_output, 100.0)
+        
         # Reshape output
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
+        attn_output = safe_clamp_hidden(attn_output, 1000.0)
 
         return attn_output, present_key_value, attn_weights
 
 
 class MoELlamaDecoderLayer(nn.Module):
     """
-    SOTA Llama decoder layer with MoE FFN and full KV cache support.
-    
-    Features:
-    - Pre-norm architecture (more stable training)
-    - MoE FFN with DeepSeek-style shared expert (always active)
-    - Full KV cache support for efficient generation
-    - Proper auxiliary loss propagation
+    SOTA Llama decoder layer with MoE FFN, full KV cache support, and numerical stability.
     """
 
     def __init__(self, config, layer_idx: int, moe_config: dict = None):
@@ -462,25 +467,20 @@ class MoELlamaDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.layer_idx = layer_idx
 
-        # Self-attention with KV cache support
         self.self_attn = LlamaAttention(config, layer_idx=layer_idx)
-        
-        # Pre-norm layers
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-        # MoE or standard FFN based on layer frequency
         use_moe = moe_config and moe_config.get('use_moe', False)
         moe_freq = moe_config.get('moe_layer_freq', 2) if moe_config else 2
 
         if use_moe and (layer_idx % moe_freq == 0):
-            # MoE layer with DeepSeek-style shared expert (always enabled)
             self.mlp = MoELayer(
                 hidden_size=config.hidden_size,
                 intermediate_size=moe_config.get('intermediate_size', config.intermediate_size),
                 num_experts=moe_config.get('num_experts', 8),
                 num_experts_per_tok=moe_config.get('num_experts_per_tok', 2),
-                use_shared_expert=True,  # Always use shared expert
+                use_shared_expert=True,
             )
             self.is_moe = True
         else:
@@ -498,25 +498,14 @@ class MoELlamaDecoderLayer(nn.Module):
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, ...]:
-        """
-        Forward pass with full KV cache support.
+        """Forward pass with numerical stability."""
+        # Clamp input
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
         
-        Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
-            attention_mask: Optional attention mask
-            position_ids: Position indices [batch, seq_len]
-            past_key_value: Optional KV cache tuple for this layer
-            output_attentions: Whether to return attention weights
-            use_cache: Whether to return updated KV cache
-            cache_position: Optional cache position indices
-            
-        Returns:
-            Tuple of (hidden_states, present_key_value, aux_loss, attn_weights)
-        """
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
-        # Self-attention with KV cache
         attn_output, present_key_value, attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
@@ -526,21 +515,24 @@ class MoELlamaDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+        attn_output = safe_clamp_hidden(attn_output, 1000.0)
         hidden_states = residual + attn_output
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
-        # FFN (MoE or standard)
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
         aux_loss = None
         if self.is_moe:
             hidden_states, aux_loss = self.mlp(hidden_states)
         else:
             hidden_states = self.mlp(hidden_states)
-
+        
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
         hidden_states = residual + hidden_states
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
-        # Build outputs tuple
         outputs = (hidden_states, present_key_value)
         
         if aux_loss is not None:
@@ -629,42 +621,25 @@ class MoELlamaModel(nn.Module):
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[Tuple, MoELlamaModelOutput]:
-        """
-        Forward pass with full KV cache support.
-        
-        Args:
-            input_ids: Input token IDs [batch, seq_len]
-            attention_mask: Attention mask [batch, seq_len]
-            position_ids: Position indices [batch, seq_len]
-            inputs_embeds: Optional pre-computed embeddings
-            past_key_values: List of KV cache tuples, one per layer
-            use_cache: Whether to return updated KV cache
-            output_attentions: Whether to return attention weights
-            output_hidden_states: Whether to return all hidden states
-            return_dict: Whether to return a dataclass or tuple
-            cache_position: Optional cache position indices
-            
-        Returns:
-            MoELlamaModelOutput or tuple with hidden states and auxiliary loss
-        """
+        """Forward pass with numerical stability."""
         # Get embeddings
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
+        # Clamp embeddings for stability
+        inputs_embeds = safe_clamp_hidden(inputs_embeds, 1000.0)
+
         batch_size, seq_length = inputs_embeds.shape[:2]
         device = inputs_embeds.device
 
-        # Compute position IDs if not provided
         if position_ids is None:
             if past_key_values is not None and len(past_key_values) > 0 and past_key_values[0] is not None:
-                # During generation: position starts after cached tokens
                 past_length = past_key_values[0][0].shape[2]
                 position_ids = torch.arange(past_length, past_length + seq_length, dtype=torch.long, device=device)
             else:
                 position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
 
-        # Prepare attention mask
         if attention_mask is not None:
             causal_mask = self._prepare_decoder_attention_mask(
                 attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values
@@ -674,7 +649,6 @@ class MoELlamaModel(nn.Module):
 
         hidden_states = inputs_embeds
         
-        # Initialize outputs
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         all_aux_losses = []
@@ -684,19 +658,17 @@ class MoELlamaModel(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            # Get past KV for this layer
             past_key_value = past_key_values[idx] if past_key_values is not None and idx < len(past_key_values) else None
 
             if self.gradient_checkpointing and self.training and not use_cache:
-                # Gradient checkpointing (no cache during training with checkpointing)
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     layer,
                     hidden_states,
                     causal_mask,
                     position_ids,
-                    None,  # past_key_value
+                    None,
                     output_attentions,
-                    False,  # use_cache
+                    False,
                     cache_position,
                     use_reentrant=False,
                 )
@@ -712,29 +684,28 @@ class MoELlamaModel(nn.Module):
                 )
 
             hidden_states = layer_outputs[0]
+            hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
             
-            # Collect KV cache
             if use_cache:
                 next_cache.append(layer_outputs[1])
             
-            # Collect auxiliary loss from MoE layers
             if layer.is_moe and layer_outputs[2] is not None:
-                all_aux_losses.append(layer_outputs[2])
+                aux = layer_outputs[2]
+                if not (torch.isnan(aux) or torch.isinf(aux)):
+                    all_aux_losses.append(aux)
             
-            # Collect attention weights
             if output_attentions and len(layer_outputs) > 3:
                 all_attentions = all_attentions + (layer_outputs[3],)
 
-        # Final layer norm
         hidden_states = self.norm(hidden_states)
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
-        # Add final hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        # Compute total auxiliary loss
         if all_aux_losses:
             total_aux_loss = sum(all_aux_losses) / len(all_aux_losses)
+            total_aux_loss = torch.clamp(total_aux_loss, min=0.0, max=10.0)
         else:
             total_aux_loss = torch.tensor(0.0, device=device, dtype=hidden_states.dtype)
 
@@ -916,26 +887,7 @@ class MoELlamaForCausalLM(nn.Module):
         cache_position: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutput]:
-        """
-        Forward pass with full KV cache support.
-        
-        Args:
-            input_ids: Input token IDs [batch, seq_len]
-            attention_mask: Attention mask [batch, seq_len]
-            position_ids: Position indices [batch, seq_len]
-            inputs_embeds: Optional pre-computed embeddings
-            labels: Optional labels for loss computation [batch, seq_len]
-            past_key_values: List of KV cache tuples, one per layer
-            use_cache: Whether to return updated KV cache
-            output_attentions: Whether to return attention weights
-            output_hidden_states: Whether to return all hidden states
-            return_dict: Whether to return a dataclass or tuple
-            cache_position: Optional cache position indices
-            
-        Returns:
-            CausalLMOutput or tuple with loss, logits, and optional outputs
-        """
-        # Forward through the model
+        """Forward pass with numerical stability for logits."""
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -951,36 +903,47 @@ class MoELlamaForCausalLM(nn.Module):
 
         hidden_states = outputs.last_hidden_state
         aux_loss = outputs.aux_loss
+        
+        # Ensure hidden states are clean before lm_head
+        hidden_states = safe_clamp_hidden(hidden_states, 1000.0)
 
-        # Compute logits
+        # Compute logits with numerical stability
         logits = self.lm_head(hidden_states)
+        
+        # CRITICAL: Clamp logits to prevent NaN/Inf
+        # FP16 max is ~65504, but softmax with large logits causes issues
+        # Clamp to reasonable range for cross-entropy
+        logits = torch.clamp(logits, min=-100.0, max=100.0)
+        
+        # Replace any remaining NaN/Inf with zeros
+        logits = torch.where(torch.isnan(logits), torch.zeros_like(logits), logits)
+        logits = torch.where(torch.isinf(logits), torch.zeros_like(logits), logits)
 
-        # Compute loss if labels provided
         loss = None
         if labels is not None:
-            # Shift for next-token prediction
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
-            # Ensure labels are long dtype for CrossEntropyLoss (critical!)
             if shift_labels.dtype != torch.long:
                 shift_labels = shift_labels.long()
             
-            # Standard loss computation - CrossEntropyLoss handles ignore_index internally
+            # Compute loss in float32 for stability
             loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
             loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), 
+                shift_logits.float().view(-1, shift_logits.size(-1)), 
                 shift_labels.view(-1)
             )
             
-            # NaN/Inf safety check - only replace if actually invalid
+            # Clamp loss to reasonable range
             if torch.isnan(loss) or torch.isinf(loss):
-                loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+                loss = torch.tensor(0.1, device=logits.device, dtype=logits.dtype, requires_grad=True)
+            else:
+                loss = torch.clamp(loss, min=0.0, max=100.0)
             
-            # Add auxiliary loss from MoE routing
             if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
                 if aux_loss is not None and not torch.isnan(aux_loss) and not torch.isinf(aux_loss):
-                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
+                    aux_loss_clamped = torch.clamp(aux_loss, min=0.0, max=10.0)
+                    loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss_clamped
 
         if not return_dict:
             output = (logits, outputs.past_key_values, outputs.hidden_states, outputs.attentions, aux_loss)

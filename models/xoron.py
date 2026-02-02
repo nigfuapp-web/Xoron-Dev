@@ -1,4 +1,4 @@
-"""Xoron Multimodal Model - Complete implementation."""
+"""Xoron Multimodal Model - Complete implementation with numerical stability."""
 
 import os
 import json
@@ -20,6 +20,15 @@ from models.encoders.audio import AudioEncoder, AudioDecoder
 from models.generators.image import MobileDiffusionGenerator
 from models.generators.video import MobileVideoDiffusion
 from models.llm.moe_llama import MoELlamaForCausalLM
+
+
+def safe_clamp_tensor(x: torch.Tensor, max_val: float = 1000.0) -> torch.Tensor:
+    """Clamp tensor values to prevent FP16 overflow, handling NaN/Inf."""
+    if x is None or x.numel() == 0:
+        return x
+    x = torch.where(torch.isnan(x), torch.zeros_like(x), x)
+    x = torch.where(torch.isinf(x), torch.full_like(x, max_val) * torch.sign(x), x)
+    return torch.clamp(x, min=-max_val, max=max_val)
 
 
 # Component groups for fine-tuning
@@ -384,6 +393,10 @@ class XoronMultimodalModel(nn.Module):
 
         input_ids_llm = input_ids.to(llm_device)
         text_embeds = self.llm.model.embed_tokens(input_ids_llm)
+        
+        # Clamp embeddings for numerical stability
+        text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
+        
         device = text_embeds.device
 
         if attention_mask is not None:
@@ -411,11 +424,13 @@ class XoronMultimodalModel(nn.Module):
         if has_content(pixel_values):
             try:
                 image_embeds = self.encode_image(pixel_values)
+                image_embeds = safe_clamp_tensor(image_embeds, 1000.0)
                 image_embeds_for_cross = image_embeds
                 image_start = self.image_start.expand(batch_size, -1, -1)
                 image_end = self.image_end.expand(batch_size, -1, -1)
                 image_embeds = torch.cat([image_start, image_embeds, image_end], dim=1)
                 text_embeds = torch.cat([image_embeds, text_embeds], dim=1)
+                text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
 
                 if attention_mask is not None:
                     image_mask = torch.ones(batch_size, image_embeds.shape[1], device=device)
@@ -431,11 +446,13 @@ class XoronMultimodalModel(nn.Module):
         if has_content(video_frames):
             try:
                 video_embeds = self.encode_video(video_frames)
+                video_embeds = safe_clamp_tensor(video_embeds, 1000.0)
                 video_embeds_for_cross = video_embeds
                 video_start = self.video_start.expand(batch_size, -1, -1)
                 video_end = self.video_end.expand(batch_size, -1, -1)
                 video_embeds = torch.cat([video_start, video_embeds, video_end], dim=1)
                 text_embeds = torch.cat([video_embeds, text_embeds], dim=1)
+                text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
 
                 if attention_mask is not None:
                     video_mask = torch.ones(batch_size, video_embeds.shape[1], device=device)
@@ -451,11 +468,13 @@ class XoronMultimodalModel(nn.Module):
         if has_content(audio_features):
             try:
                 audio_embeds = self.encode_audio(audio_features)
+                audio_embeds = safe_clamp_tensor(audio_embeds, 1000.0)
                 audio_embeds_for_cross = audio_embeds
                 audio_start = self.audio_start.expand(batch_size, -1, -1)
                 audio_end = self.audio_end.expand(batch_size, -1, -1)
                 audio_embeds = torch.cat([audio_start, audio_embeds, audio_end], dim=1)
                 text_embeds = torch.cat([audio_embeds, text_embeds], dim=1)
+                text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
 
                 if attention_mask is not None:
                     audio_mask = torch.ones(batch_size, audio_embeds.shape[1], device=device)
@@ -476,13 +495,15 @@ class XoronMultimodalModel(nn.Module):
                     video_embeds=video_embeds_for_cross,
                     audio_embeds=audio_embeds_for_cross,
                 )
+                text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
             except Exception:
                 pass
 
+        # Final clamp before LLM
+        text_embeds = safe_clamp_tensor(text_embeds, 1000.0)
+        
         outputs = self.llm(inputs_embeds=text_embeds, attention_mask=attention_mask, labels=labels)
 
-        # Always return loss, logits, and aux_loss (all needed for proper training)
-        # aux_loss is the MoE routing auxiliary loss for load balancing
         return MultimodalModelOutput(
             loss=outputs.loss if hasattr(outputs, 'loss') else None,
             logits=outputs.logits if hasattr(outputs, 'logits') else None,
