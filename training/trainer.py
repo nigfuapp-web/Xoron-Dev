@@ -99,16 +99,42 @@ class XoronTrainer:
         self.amp_dtype = torch.bfloat16 if getattr(config, 'bf16', False) else torch.float16
         
         # Check if model is already in half precision (fp16/bf16)
-        # If so, we don't need GradScaler - it's only for mixed precision with fp32 weights
         model_dtype = next(model.parameters()).dtype
         model_is_half = model_dtype in (torch.float16, torch.bfloat16)
+        model_is_fp16 = model_dtype == torch.float16
+        model_is_bf16 = model_dtype == torch.bfloat16
         
-        # Only use GradScaler if: fp16 enabled, not bf16, CUDA available, AND model is fp32
-        # GradScaler is incompatible with models already in fp16 (causes "Attempting to unscale FP16 gradients" error)
-        self.scaler = GradScaler() if config.fp16 and not getattr(config, 'bf16', False) and config.device == "cuda" and not model_is_half else None
+        # GradScaler configuration:
+        # - BF16: Never needs GradScaler (BF16 has same exponent range as FP32)
+        # - FP16 model: NEEDS GradScaler for loss scaling to prevent gradient underflow/overflow
+        # - FP32 model with FP16 autocast: Needs GradScaler for mixed precision
+        # 
+        # CRITICAL FIX: FP16 models DO need GradScaler for loss scaling!
+        # Without it, small gradients underflow to 0 and large gradients overflow to NaN.
+        use_bf16 = getattr(config, 'bf16', False) or model_is_bf16
+        need_scaler = config.fp16 and not use_bf16 and config.device == "cuda"
         
-        if model_is_half:
-            print(f"   📝 Model is {model_dtype}, GradScaler disabled (not needed)")
+        # FP16 models need loss scaling but standard GradScaler expects FP32 master weights.
+        # For pure FP16 models, we use a custom approach:
+        if model_is_fp16 and need_scaler:
+            # Use GradScaler with FP16 model - this works but needs careful handling
+            # The scaler will scale the loss up before backward and scale gradients down before optimizer
+            self.scaler = GradScaler(init_scale=2.**16, growth_interval=2000)
+            print(f"   📝 Model is FP16 - using GradScaler for loss scaling (CRITICAL for stability)")
+            print(f"   ⚠️ FP16 training is risky - consider converting to BF16 if available")
+        elif need_scaler and not model_is_half:
+            # Standard mixed precision: FP32 model with FP16 autocast
+            self.scaler = GradScaler()
+            print(f"   📝 Mixed precision training with GradScaler")
+        else:
+            self.scaler = None
+            if model_is_bf16:
+                print(f"   📝 Model is BF16 - GradScaler not needed (BF16 is numerically stable)")
+            elif model_is_fp16:
+                # This is dangerous - FP16 without loss scaling
+                print(f"   ⚠️ WARNING: FP16 model without GradScaler!")
+                print(f"   ⚠️ This may cause NaN from gradient overflow/underflow!")
+                print(f"   💡 Enable config.fp16=True to use loss scaling")
         
         self.global_step = 0
         self.start_epoch = 0

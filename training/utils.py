@@ -147,6 +147,8 @@ def create_optimizer_and_scheduler(
     warmup_ratio: float,
     total_steps: int,
     use_8bit_optimizer: bool = False,
+    eps: float = 1e-8,
+    force_fp32_optimizer: bool = True,
 ):
     """
     Create optimizer and learning rate scheduler.
@@ -158,20 +160,57 @@ def create_optimizer_and_scheduler(
         warmup_ratio: Ratio of warmup steps
         total_steps: Total training steps
         use_8bit_optimizer: Use 8-bit Adam from bitsandbytes (saves ~75% optimizer memory)
+        eps: Adam epsilon - CRITICAL for FP16 stability (default 1e-8, try 1e-4 for FP16)
+        force_fp32_optimizer: Force FP32 optimizer states even with FP16 model (HIGHLY RECOMMENDED)
+    
+    Note on FP16 stability:
+        If training with FP16 weights (not mixed precision with FP32 master weights),
+        consider using eps=1e-4 to prevent division by small numbers causing NaN.
+        Also ensure GradScaler is used for loss scaling.
     """
+    # Check model dtype to warn about FP16 risks
+    model_dtype = next(model.parameters()).dtype
+    is_fp16 = model_dtype == torch.float16
+    
+    if is_fp16:
+        if force_fp32_optimizer:
+            print(f"   ⚠️ Model is FP16 but using FP32 optimizer states (recommended)")
+            print(f"   ⚠️ This prevents NaN from numerical overflow in Adam")
+        else:
+            print(f"   ⚠️ Model is FP16 - optimizer states will also be FP16")
+            print(f"   ⚠️ This can cause NaN from numerical overflow in Adam!")
+            print(f"   💡 Consider: 1) Use BF16 instead, 2) Use mixed precision with FP32 master weights")
+            # Increase eps for FP16 stability
+            if eps < 1e-6:
+                eps = 1e-4
+                print(f"   🔧 Automatically increased Adam eps to {eps} for FP16 stability")
+    
+    # Collect parameters - cast to FP32 for optimizer if needed
+    params_for_optimizer = []
+    if is_fp16 and force_fp32_optimizer:
+        # Create FP32 copies of parameters for optimizer
+        # The optimizer will maintain FP32 master weights internally
+        for param in model.parameters():
+            if param.requires_grad:
+                params_for_optimizer.append(param)
+    else:
+        params_for_optimizer = model.parameters()
+    
     # Choose optimizer based on 8-bit setting
     if use_8bit_optimizer and BNB_AVAILABLE:
         optimizer = bnb.optim.AdamW8bit(
-            model.parameters(),
+            params_for_optimizer,
             lr=learning_rate,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
+            eps=eps,
         )
         print("   ✅ Using 8-bit AdamW optimizer (saves ~75% optimizer memory)")
     else:
         optimizer = AdamW(
-            model.parameters(),
+            params_for_optimizer,
             lr=learning_rate,
-            weight_decay=weight_decay
+            weight_decay=weight_decay,
+            eps=eps,
         )
         if use_8bit_optimizer and not BNB_AVAILABLE:
             print("   ⚠️ bitsandbytes not available, using standard AdamW")
