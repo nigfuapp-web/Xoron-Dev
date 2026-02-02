@@ -115,13 +115,16 @@ class XoronTrainer:
         
         if model_is_fp16:
             # FP16 model - cannot use GradScaler, use manual loss scaling
+            # Start with LOW scale (128) to avoid FP16 overflow, will grow if stable
             self.scaler = None
-            self.manual_loss_scale = 2.**12  # Start with 4096x scaling for FP16
-            self.loss_scale_growth_interval = 2000
+            self.manual_loss_scale = 2.**7  # Start with 128x (conservative for FP16)
+            self.loss_scale_growth_interval = 500  # Grow faster if stable
             self.loss_scale_backoff = 0.5
             self.loss_scale_growth = 2.0
             self.steps_since_scale_change = 0
+            self.max_scaled_grad_norm = 1000.0  # If scaled grads exceed this, reduce scale
             print(f"   📝 Model is FP16 - using MANUAL loss scaling (scale={self.manual_loss_scale})")
+            print(f"   📝 Max allowed scaled grad norm: {self.max_scaled_grad_norm}")
             print(f"   ⚠️ FP16 training is risky - recommend converting to BF16 if available")
         elif config.fp16 and not use_bf16 and config.device == "cuda" and not model_is_half:
             # Standard mixed precision: FP32 model with FP16 autocast
@@ -1169,15 +1172,48 @@ class XoronTrainer:
                 nan_grad_names = []
                 
                 # Unscale gradients before checking/clipping
+                skip_optimizer_step = False
+                
                 if self.scaler is not None:
                     # GradScaler handles unscaling
                     self.scaler.unscale_(self.optimizer)
                 elif self.manual_loss_scale is not None:
-                    # Manual unscaling for FP16 models
-                    # Divide gradients by loss scale to get true gradient values
+                    # FIRST: Check scaled gradient norm BEFORE unscaling
+                    # If too high, reduce scale to prevent FP16 overflow in optimizer
+                    scaled_grad_norm = 0.0
                     for param in self.model.parameters():
                         if param.grad is not None:
-                            param.grad.data.div_(self.manual_loss_scale)
+                            scaled_grad_norm += param.grad.data.float().norm(2).item() ** 2
+                    scaled_grad_norm = scaled_grad_norm ** 0.5
+                    
+                    if scaled_grad_norm > self.max_scaled_grad_norm:
+                        # Gradients too large - reduce scale and skip this step
+                        old_scale = self.manual_loss_scale
+                        self.manual_loss_scale = max(1.0, self.manual_loss_scale * 0.5)
+                        self.steps_since_scale_change = 0
+                        print(f"\n   ⚠️ Scaled grad norm too high: {scaled_grad_norm:.1f} > {self.max_scaled_grad_norm}")
+                        print(f"   📉 Reduced loss scale: {old_scale} → {self.manual_loss_scale}")
+                        print(f"   ➡️ Skipping this optimizer step\n")
+                        self.optimizer.zero_grad(set_to_none=getattr(self.config, 'set_to_none', True))
+                        self.global_step += 1
+                        skip_optimizer_step = True
+                    else:
+                        # Manual unscaling for FP16 models
+                        # Divide gradients by loss scale to get true gradient values
+                        for param in self.model.parameters():
+                            if param.grad is not None:
+                                param.grad.data.div_(self.manual_loss_scale)
+                
+                if skip_optimizer_step:
+                    # Skip the rest of optimizer step processing
+                    num_batches += 1
+                    batch_time = time.time() - batch_start
+                    batch_times.append(batch_time)
+                    if batch_idx % self.config.empty_cache_freq == 0 and torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                    continue
                 
                 # Check all gradients for NaN/Inf - CRITICAL to prevent weight corruption
                 for name, param in self.model.named_parameters():
