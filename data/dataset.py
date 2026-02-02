@@ -777,8 +777,41 @@ class TrueStreamingDataset(IterableDataset):
             
             input_ids = encoding["input_ids"].squeeze(0)
             attention_mask = encoding["attention_mask"].squeeze(0)
+            
+            # Create labels - only compute loss on ASSISTANT responses
+            # This is the gold standard for instruction tuning
             labels = input_ids.clone()
-            labels[attention_mask == 0] = -100
+            labels[attention_mask == 0] = -100  # Mask padding
+            
+            # Mask everything EXCEPT assistant responses
+            # Find assistant_start and assistant_end token IDs
+            assistant_start_token = self.tokens.get('assistant_start', '<|assistant|>')
+            assistant_end_token = self.tokens.get('assistant_end', '<|/assistant|>')
+            
+            try:
+                assistant_start_id = self.tokenizer.encode(assistant_start_token, add_special_tokens=False)
+                assistant_end_id = self.tokenizer.encode(assistant_end_token, add_special_tokens=False)
+                
+                if assistant_start_id and assistant_end_id:
+                    assistant_start_id = assistant_start_id[0] if len(assistant_start_id) == 1 else None
+                    assistant_end_id = assistant_end_id[0] if len(assistant_end_id) == 1 else None
+                    
+                    if assistant_start_id is not None and assistant_end_id is not None:
+                        # Mask all tokens, then unmask only assistant responses
+                        in_assistant = False
+                        for i in range(len(input_ids)):
+                            token_id = input_ids[i].item()
+                            
+                            if token_id == assistant_start_id:
+                                in_assistant = True
+                                labels[i] = -100  # Don't predict the start token itself
+                            elif token_id == assistant_end_id:
+                                in_assistant = False
+                                # Keep the end token in labels (model should learn to end)
+                            elif not in_assistant:
+                                labels[i] = -100  # Mask non-assistant tokens
+            except Exception:
+                pass  # Fall back to standard labels if tokenization fails
             
             # Process media on-demand
             pixel_values = self._process_image(raw_image_data) if raw_image_data else None
