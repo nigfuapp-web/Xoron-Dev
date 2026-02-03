@@ -61,12 +61,19 @@ class TrueStreamingDataset(IterableDataset):
         # Dataset sources list - will be populated in _init_iterators
         self._dataset_sources = []
         
-        # Streaming state for resume support
+        # Streaming state for resume support - organized by modality for proper tracking
         self._streaming_state = {
             "epoch": 0,
             "unique_samples": 0,
             "total_yields": 0,
             "dataset_positions": {},  # dataset_name -> samples_consumed
+            "modality_positions": {   # Per-modality tracking for --text, --image, --video, --voice flags
+                "text": {},           # text dataset positions
+                "image": {},          # image dataset positions
+                "video": {},          # video dataset positions
+                "voice": {},          # voice/audio dataset positions
+            },
+            "last_modality": None,    # Which modality was last trained
         }
         self._state_save_path = None
         
@@ -89,8 +96,7 @@ class TrueStreamingDataset(IterableDataset):
             has_audio_feature = False
 
         self._dataset_sources = []
-        
-        print("\n📦 Initializing streaming datasets...", flush=True)
+        failed_datasets = []
 
         for dtype, configs in self.dataset_configs.items():
             if not configs:
@@ -112,10 +118,8 @@ class TrueStreamingDataset(IterableDataset):
                             "local_path": local_path,
                             "hf_dataset": None,
                         })
-                        print(f"   ✅ {cfg['name']} (local streaming)")
                     else:
-                        print(f"   ⚠️ Local dataset not found: {cfg.get('path', '')}")
-                        print(f"      Run: python -m synth.generate_dataset to generate it")
+                        failed_datasets.append(cfg['name'])
                     continue
                 
                 # Handle remote HuggingFace datasets
@@ -143,7 +147,7 @@ class TrueStreamingDataset(IterableDataset):
                             time.sleep(retry_delay)
                             retry_delay *= 2
                         else:
-                            print(f"   ⚠️ Failed to load {cfg['name']}: {e}")
+                            failed_datasets.append(cfg['name'])
                             ds = None
 
                 if ds is not None:
@@ -155,20 +159,32 @@ class TrueStreamingDataset(IterableDataset):
                         "local_path": None,
                         "hf_dataset": ds,
                     })
-                    print(f"   ✅ {cfg['name']} (HF streaming)")
         
-        print(f"\n📊 {len(self._dataset_sources)} dataset sources initialized", flush=True)
+        # Print concise summary
+        print(f"   ✅ {len(self._dataset_sources)} datasets initialized", flush=True)
+        if failed_datasets:
+            print(f"   ⚠️ {len(failed_datasets)} failed: {', '.join(failed_datasets[:3])}{'...' if len(failed_datasets) > 3 else ''}")
     
     def _load_streaming_state(self, path: str):
         """Load streaming state from JSON file for resuming."""
         try:
             with open(path, 'r') as f:
                 state = json.load(f)
-            self._streaming_state = state
-            print(f"\n📂 Loaded streaming state from {path}")
-            print(f"   Epoch: {state.get('epoch', 0)}")
-            print(f"   Unique samples seen: {state.get('unique_samples', 0)}")
-            print(f"   Datasets with progress: {len(state.get('dataset_positions', {}))}")
+            
+            # Merge loaded state with default structure (handles old format gracefully)
+            self._streaming_state["epoch"] = state.get("epoch", 0)
+            self._streaming_state["unique_samples"] = state.get("unique_samples", 0)
+            self._streaming_state["total_yields"] = state.get("total_yields", 0)
+            self._streaming_state["dataset_positions"] = state.get("dataset_positions", {})
+            self._streaming_state["last_modality"] = state.get("last_modality", None)
+            
+            # Load per-modality positions if available
+            if "modality_positions" in state:
+                for modality in ["text", "image", "video", "voice"]:
+                    if modality in state["modality_positions"]:
+                        self._streaming_state["modality_positions"][modality] = state["modality_positions"][modality]
+            
+            print(f"   📂 Resumed from epoch {state.get('epoch', 0)}, {state.get('unique_samples', 0)} samples seen")
         except Exception as e:
             print(f"   ⚠️ Could not load streaming state: {e}")
     
@@ -977,9 +993,21 @@ class TrueStreamingDataset(IterableDataset):
                         self._streaming_state["total_yields"] = total_yields
                         self._streaming_state["dataset_positions"][source["name"]] = source["stream_position"]
                         
+                        # Also update per-modality positions for --text, --image, --video, --voice resume
+                        modality_map = {
+                            "text": ["text", "code", "conversation", "tool_use", "agentic"],
+                            "image": ["image_caption", "image_vqa", "image_generation", "image_editing", "ui_to_code"],
+                            "video": ["video_caption", "video_qa", "video_generation", "image_to_video", "video_preference", "video_likert"],
+                            "voice": ["voice_asr", "voice_tts"],
+                        }
+                        for modality, dtypes in modality_map.items():
+                            if dtype in dtypes:
+                                self._streaming_state["modality_positions"][modality][source["name"]] = source["stream_position"]
+                                break
+                        
                         # Log progress and save state every 500 unique samples
                         if unique_samples % 500 == 0:
-                            print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} unique samples ({total_yields:,} total yields)", flush=True)
+                            print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} samples", flush=True)
                             # Auto-save state if path is set
                             if self._state_save_path:
                                 self.save_streaming_state(self._state_save_path)
@@ -1025,8 +1053,6 @@ class TrueStreamingDataset(IterableDataset):
         Both training and eval datasets advance each epoch to get NEW samples.
         They have separate position tracking so they don't interfere with each other.
         """
-        print(f"\n🔄 Resetting dataset for new epoch...")
-        
         if clear_state:
             # Full reset - start from beginning of all datasets
             self._streaming_state = {
@@ -1034,6 +1060,8 @@ class TrueStreamingDataset(IterableDataset):
                 "unique_samples": 0,
                 "total_yields": 0,
                 "dataset_positions": {},  # Clear positions to restart from beginning
+                "modality_positions": {"text": {}, "image": {}, "video": {}, "voice": {}},
+                "last_modality": None,
             }
         else:
             # Epoch reset - keep stream positions but reset epoch counters
@@ -1043,6 +1071,8 @@ class TrueStreamingDataset(IterableDataset):
                 "unique_samples": 0,  # Reset for this epoch
                 "total_yields": 0,    # Reset for this epoch
                 "dataset_positions": self._streaming_state.get("dataset_positions", {}),  # KEEP positions!
+                "modality_positions": self._streaming_state.get("modality_positions", {"text": {}, "image": {}, "video": {}, "voice": {}}),
+                "last_modality": self._streaming_state.get("last_modality", None),
             }
         self._init_iterators()
         gc.collect()

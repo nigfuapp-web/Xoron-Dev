@@ -660,75 +660,25 @@ class XoronTrainer:
         
         print("\n" + "=" * 60)
         if self.start_epoch > 0:
-            print("🔄 RESUMING MULTIMODAL TRAINING (SOTA)")
-            print(f"   Starting from epoch {self.start_epoch + 1}, step {self.global_step}")
+            print(f"🔄 RESUMING TRAINING (epoch {self.start_epoch + 1}, step {self.global_step})")
         else:
-            print("🚀 STARTING FULL MULTIMODAL TRAINING (SOTA)")
+            print("🚀 STARTING TRAINING")
         
         # Get trainable and frozen components
         trainable = self.model.get_trainable_component_names()
         frozen = self.model.get_frozen_component_names()
         
-        # Define component descriptions
-        component_descriptions = {
-            'llm': 'LLM: text/conversation/code/tools/agentic',
-            'vision': 'Vision: image understanding',
-            'video': 'Video: video understanding',
-            'audio': 'Voice: ASR (speech-to-text) + TTS (text-to-speech)',
-            'image_generation': 'Image Diffusion: text-to-image generation',
-            'video_generation': 'Video Diffusion: text-to-video + image-to-video',
-            'cross_attention': 'Cross-Attention: multimodal fusion',
-            'modality_markers': 'Modality Markers: special tokens',
-        }
-        
-        # Show component status with 🔥 for trainable and ❄️ for frozen
-        for component, description in component_descriptions.items():
-            if component in trainable:
-                print(f"   🔥 {description}")
-            elif component in frozen:
-                print(f"   ❄️ {description}")
-        
-        # Chain-of-Thought depends on LLM being trainable
-        if 'llm' in trainable:
-            print("   🔥 Chain-of-Thought: structured reasoning with special tokens")
-        elif 'llm' in frozen:
-            print("   ❄️ Chain-of-Thought: structured reasoning with special tokens")
-        
-        # Image Editing depends on BOTH llm AND image_generation being trainable
-        if 'llm' in trainable and 'image_generation' in trainable:
-            print("   🔥 Image Editing: instruction-guided image editing")
-        elif 'image_generation' in frozen or 'llm' in frozen:
-            print("   ❄️ Image Editing: instruction-guided image editing")
-        
-        # Summary line
+        # Concise component status
         trainable_str = ', '.join(trainable) if trainable else 'none'
         frozen_str = ', '.join(frozen) if frozen else 'none'
-        print(f"\n   🔥 Trainable: {trainable_str}")
+        print(f"   🔥 Training: {trainable_str}")
         if frozen:
             print(f"   ❄️ Frozen: {frozen_str}")
+        
+        # Concise settings
+        precision = 'BF16' if self.amp_dtype == torch.bfloat16 else ('FP16' if self.use_amp else 'FP32')
+        print(f"   ⚙️ {precision} | grad_clip={self.max_grad_norm} | img={self.img_gen_size}px | vid={self.vid_gen_size}px")
         print("=" * 60)
-
-        print(f"\n📐 Generation sizes:")
-        print(f"   Image: {self.img_gen_size}x{self.img_gen_size}")
-        print(f"   Video: {self.vid_gen_size}x{self.vid_gen_size}")
-        
-        print(f"\n🎯 Loss weights (SOTA configurable):")
-        print(f"   LLM: {self.llm_loss_weight}")
-        print(f"   Image Diffusion: {self.image_diffusion_loss_weight}")
-        print(f"   Video Diffusion: {self.video_diffusion_loss_weight}")
-        print(f"   ASR: {self.asr_loss_weight}")
-        print(f"   TTS: {self.tts_loss_weight}")
-        print(f"   MoE Aux: {self.moe_aux_loss_weight}")
-        
-        print(f"\n🧠 Token group weights (for focused learning):")
-        print(f"   Chain-of-Thought: {self.cot_loss_weight}x (reasoning tokens)")
-        print(f"   Tool Calling: {self.tool_loss_weight}x (function/tool tokens)")
-        print(f"   Anti-Hallucination: {self.anti_hallucination_loss_weight}x (uncertainty/citation tokens)")
-        print(f"   Code Execution: {self.code_exec_loss_weight}x (exec/jupyter tokens)")
-        
-        print(f"\n⚙️ Training settings:")
-        print(f"   Mixed precision: {'BF16' if self.amp_dtype == torch.bfloat16 else 'FP16' if self.use_amp else 'FP32'}")
-        print(f"   Gradient clipping: {self.max_grad_norm}")
 
         self.model.train()
 
@@ -1632,19 +1582,29 @@ class XoronTrainer:
                 json.dump(SPECIAL_TOKENS, f, indent=2)
         
         # Save trainer_state.json for HuggingFace compatibility and training resume
+        # Get trainable/frozen components for resume info
+        trainable = self.model.get_trainable_component_names() if hasattr(self.model, 'get_trainable_component_names') else []
+        frozen = self.model.get_frozen_component_names() if hasattr(self.model, 'get_frozen_component_names') else []
+        
         trainer_state = {
             "best_model_checkpoint": checkpoint_path,
             "best_metric": self.best_loss,
             "epoch": epoch + 1,
+            "epochs_completed": epoch + 1,
             "global_step": self.global_step,
             "is_local_process_zero": True,
             "is_world_process_zero": True,
             "log_history": [],
-            "logging_steps": 100,
+            "logging_steps": self.config.logging_steps,
             "max_steps": self.global_step,
             "num_train_epochs": self.config.num_epochs,
             "total_flos": 0,
             "train_batch_size": self.config.batch_size,
+            "effective_batch_size": self.config.batch_size * self.config.gradient_accumulation_steps,
+            "learning_rate": self.config.learning_rate,
+            "max_grad_norm": self.max_grad_norm,
+            "trainable_components": trainable,
+            "frozen_components": frozen,
             "trial_name": None,
             "trial_params": None,
         }
@@ -1693,26 +1653,35 @@ class XoronTrainer:
             print(f"   💾 Tokenizer and chat template saved")
         
         # Save trainer_state.json for HuggingFace compatibility and training resume
+        # Get trainable/frozen components for resume info
+        trainable = self.model.get_trainable_component_names() if hasattr(self.model, 'get_trainable_component_names') else []
+        frozen = self.model.get_frozen_component_names() if hasattr(self.model, 'get_frozen_component_names') else []
+        
         trainer_state = {
             "best_model_checkpoint": self.config.final_model_dir,
             "best_metric": self.best_loss,
             "epoch": self.config.num_epochs,
+            "epochs_completed": self.config.num_epochs,
             "global_step": self.global_step,
             "is_local_process_zero": True,
             "is_world_process_zero": True,
             "log_history": [],
-            "logging_steps": 100,
+            "logging_steps": self.config.logging_steps,
             "max_steps": self.global_step,
             "num_train_epochs": self.config.num_epochs,
             "total_flos": 0,
             "train_batch_size": self.config.batch_size,
+            "effective_batch_size": self.config.batch_size * self.config.gradient_accumulation_steps,
+            "learning_rate": self.config.learning_rate,
+            "max_grad_norm": self.max_grad_norm,
+            "trainable_components": trainable,
+            "frozen_components": frozen,
             "trial_name": None,
             "trial_params": None,
         }
         trainer_state_path = os.path.join(self.config.final_model_dir, "trainer_state.json")
         with open(trainer_state_path, "w") as f:
             json.dump(trainer_state, f, indent=2)
-        print(f"   💾 Trainer state saved")
         
         # Save streaming state for dataset resume (useful if continuing training later)
         if hasattr(self.train_dataset, 'save_streaming_state'):

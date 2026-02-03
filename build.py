@@ -656,10 +656,8 @@ def apply_freezing(model, freeze_components: List[str], train_only_components: L
     """Apply component freezing to the model."""
     if train_only_components:
         model.freeze_all_except(train_only_components)
-        print(f"\n🎯 Training only: {train_only_components}")
     elif freeze_components:
         model.freeze_components(freeze_components)
-        print(f"\n❄️ Frozen components: {freeze_components}")
 
 
 def print_component_status(model):
@@ -763,23 +761,13 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     Returns:
         train_dataset, eval_dataset, optimizer, scheduler, collate_fn
     """
-    print("\n" + "=" * 60)
-    print("⚙️ TRAINING SETUP")
-    print("=" * 60)
+    print("\n⚙️ Setting up training...")
     
-    if active_modalities != 'all':
-        print(f"   📝 {active_modalities.upper()} mode: using minimal tensors for inactive modalities")
-
-    # Load image processor section
-    print("\n" + "-" * 40)
-    print("🖼️ Loading image processor...")
+    # Load image processor
     try:
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch16")
-        print("✅ Image processor ready")
     except:
         image_processor = None
-        print("⚠️ Image processor not available")
-    print("-" * 40)
 
     # Initialize voice processor
     try:
@@ -791,12 +779,8 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     formatter = MultimodalFormatter(SPECIAL_TOKENS, image_processor)
     format_functions = get_format_functions(formatter)
 
-    # Datasets section header
-    print("\n" + "-" * 40)
-    print("📁 Datasets (Streaming Mode)")
-    print("-" * 40)
-
     # Create streaming dataset with per-dataset limits and sample repetition
+    print(f"   📁 Loading train datasets...")
     train_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -816,14 +800,13 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     # Set auto-save path for streaming state (saved alongside checkpoints)
     streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
     train_dataset.set_state_save_path(streaming_state_path)
-    print(f"   💾 Streaming state will be saved to: {streaming_state_path}")
     
     # Create eval dataset - pulls max_per_dataset_eval samples from each dataset for validation
     eval_samples_per_dataset = training_config.max_per_dataset_eval
     num_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
     eval_total = eval_samples_per_dataset * num_datasets
     
-    print(f"\n📊 Creating eval dataset ({eval_samples_per_dataset} samples × {num_datasets} datasets = {eval_total} total)")
+    print(f"   📁 Loading eval datasets...")
     eval_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -840,11 +823,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         resume_state_path=None,  # Don't resume eval dataset
     )
     
-    # CRITICAL FIX: Set initial skip positions for eval dataset
-    # Eval must start AFTER training samples to ensure proper validation (held-out data)
-    # Without this, eval uses the SAME samples as training, making overfitting detection impossible!
-    # Train: samples 0 to (max_per_dataset - 1) from each dataset
-    # Eval: samples max_per_dataset to (max_per_dataset + max_per_dataset_eval - 1) from each dataset
+    # Set initial skip positions for eval dataset (held-out data)
     train_samples_per_dataset = training_config.max_per_dataset
     eval_skip_positions = {}
     for dtype, configs in dataset_configs.items():
@@ -852,10 +831,6 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
             for cfg in configs:
                 eval_skip_positions[cfg["name"]] = train_samples_per_dataset
     eval_dataset._streaming_state["dataset_positions"] = eval_skip_positions.copy()
-    
-    print(f"   ✅ Eval dataset ready (held-out data starting at position {train_samples_per_dataset})")
-    print(f"      → Train: samples 0-{train_samples_per_dataset-1} per dataset")
-    print(f"      → Eval: samples {train_samples_per_dataset}-{train_samples_per_dataset + eval_samples_per_dataset - 1} per dataset")
 
     # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
     collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
@@ -1670,23 +1645,15 @@ def run_cli_mode(args):
     if args.video:
         # Video mode: train video understanding and generation, keep vision for frame encoding
         auto_freeze = ['image_generation', 'audio']
-        print("\n🔥 Training for video mode: vision, video, video_generation, llm, cross_attention, modality_markers")
-        print("❄️ Auto-freezing: image_generation, audio")
     elif args.image:
         # Image mode: train image understanding and generation
         auto_freeze = ['video', 'video_generation', 'audio']
-        print("\n🔥 Training for image mode: vision, image_generation, llm, cross_attention, modality_markers")
-        print("❄️ Auto-freezing: video, video_generation, audio")
     elif args.text:
         # Text mode: train ONLY the LLM and related text components
         auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
-        print("\n🔥 Training for text mode: llm, cross_attention, modality_markers")
-        print("❄️ Auto-freezing: vision, video, audio, image_generation, video_generation")
     elif args.voice:
         # Voice mode: train audio understanding and generation
         auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
-        print("\n🔥 Training for voice mode: audio, llm, cross_attention, modality_markers")
-        print("❄️ Auto-freezing: vision, video, image_generation, video_generation")
     
     # Combine auto-freeze with any user-specified freeze components
     if auto_freeze:

@@ -177,7 +177,8 @@ class RelativePositionalEncoding(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0))
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pe[:, :x.size(1)]
+        # Match dtype of positional encoding to input to avoid Float/Half mismatch
+        return x + self.pe[:, :x.size(1)].to(x.dtype)
 
 
 class ConformerBlock(nn.Module):
@@ -520,18 +521,21 @@ class AudioDecoder(nn.Module):
         """
         batch_size, seq_len, _ = text_embeds.shape
         device = text_embeds.device
+        dtype = text_embeds.dtype  # Match dtype to avoid Float/Half mismatch
 
-        # Get embeddings
+        # Get embeddings - ensure dtype matches input
         if speaker is None:
             speaker = torch.zeros(batch_size, dtype=torch.long, device=device)
-        speaker_emb = self.speaker_embed(speaker).unsqueeze(1).expand(-1, seq_len, -1)
+        speaker_emb = self.speaker_embed(speaker).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
         
         if emotion is None:
             emotion = torch.zeros(batch_size, dtype=torch.long, device=device)
-        emotion_emb = self.emotion_embed(emotion).unsqueeze(1).expand(-1, seq_len, -1)
+        emotion_emb = self.emotion_embed(emotion).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
 
         if prosody is None:
-            prosody = torch.tensor([[1.0, 0.0, 1.0]], device=device).expand(batch_size, -1)
+            prosody = torch.tensor([[1.0, 0.0, 1.0]], device=device, dtype=dtype).expand(batch_size, -1)
+        else:
+            prosody = prosody.to(dtype)
         prosody_emb = self.prosody_proj(prosody).unsqueeze(1).expand(-1, seq_len, -1)
 
         # Combine embeddings

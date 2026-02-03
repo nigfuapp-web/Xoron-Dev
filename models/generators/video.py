@@ -26,9 +26,11 @@ class SinusoidalPositionEmbeddings(nn.Module):
         
     def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
         device = timesteps.device
+        dtype = timesteps.dtype
         half_dim = self.dim // 2
         embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        # Match dtype of timesteps to avoid Float/Half mismatch
+        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=dtype) * -embeddings)
         embeddings = timesteps[:, None] * embeddings[None, :]
         embeddings = torch.cat([torch.sin(embeddings), torch.cos(embeddings)], dim=-1)
         return embeddings
