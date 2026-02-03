@@ -100,7 +100,7 @@ class TrainingConfig:
     use_model_parallel: bool = field(default_factory=lambda: TORCH_AVAILABLE and torch.cuda.is_available() and torch.cuda.device_count() > 1)
 
     # Memory optimization
-    empty_cache_freq: int = 5  # More frequent cache clearing (was 10)
+    empty_cache_freq: int = 100  # Clear cache less frequently (was 5 - too slow!)
     gradient_checkpointing: bool = True  # Trade compute for memory
     use_8bit_optimizer: bool = True  # Use 8-bit Adam (saves ~75% optimizer memory)
     set_to_none: bool = True  # Use set_to_none in zero_grad (saves memory)

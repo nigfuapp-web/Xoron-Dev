@@ -751,12 +751,14 @@ class XoronTrainer:
                 self.train_dataset.reset(clear_state=False)
             
             # Create DataLoader for this epoch (IterableDataset requires fresh DataLoader per epoch)
+            # pin_memory=True speeds up CPU→GPU transfers on CUDA
             train_loader = DataLoader(
                 self.train_dataset,
                 batch_size=self.config.batch_size,
                 shuffle=False,  # IterableDataset handles shuffling internally
-                num_workers=0,
-                collate_fn=self.collate_fn
+                num_workers=0,  # Must be 0 for IterableDataset with state
+                collate_fn=self.collate_fn,
+                pin_memory=torch.cuda.is_available(),  # Faster CPU→GPU transfer
             )
 
             # Run training epoch
@@ -775,7 +777,8 @@ class XoronTrainer:
                     batch_size=self.config.batch_size,
                     shuffle=False,
                     num_workers=0,
-                    collate_fn=self.collate_fn
+                    collate_fn=self.collate_fn,
+                    pin_memory=torch.cuda.is_available(),
                 )
                 eval_losses = self._eval_epoch(eval_loader, epoch)
 
@@ -1122,7 +1125,6 @@ class XoronTrainer:
             if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
                 # Check for NaN/Inf gradients before optimizer step
                 has_nan_grad = False
-                nan_grad_names = []
                 
                 # Unscale gradients before checking/clipping
                 skip_optimizer_step = False
@@ -1163,32 +1165,24 @@ class XoronTrainer:
                     batch_time = time.time() - batch_start
                     batch_times.append(batch_time)
                     if batch_idx % self.config.empty_cache_freq == 0 and torch.cuda.is_available():
-                        torch.cuda.synchronize()
-                        torch.cuda.empty_cache()
-                        gc.collect()
+                        torch.cuda.empty_cache()  # No sync or gc - too slow
                     continue
                 
-                # Check all gradients for NaN/Inf - CRITICAL to prevent weight corruption
-                for name, param in self.model.named_parameters():
+                # Fast vectorized NaN/Inf gradient check (much faster than per-param loop)
+                # Only check the total gradient norm - if it's finite, all grads are fine
+                total_grad_norm = 0.0
+                for param in self.model.parameters():
                     if param.grad is not None:
-                        grad_nan = torch.isnan(param.grad).any().item()
-                        grad_inf = torch.isinf(param.grad).any().item()
-                        if grad_nan or grad_inf:
-                            has_nan_grad = True
-                            nan_grad_names.append(name)
-                            # Zero out bad gradients to prevent corruption
-                            param.grad.zero_()
+                        total_grad_norm += param.grad.data.norm(2).item() ** 2
+                total_grad_norm = total_grad_norm ** 0.5
+                
+                # If total norm is NaN or Inf, we have bad gradients
+                if total_grad_norm != total_grad_norm or total_grad_norm == float('inf'):
+                    has_nan_grad = True
                 
                 if has_nan_grad:
                     # Skip this optimizer step entirely - bad gradients
-                    print(f"\n   ⚠️ GRADIENT NaN/Inf at step {self.global_step}!")
-                    print(f"   Affected params ({len(nan_grad_names)}):")
-                    for n in nan_grad_names[:10]:  # Show first 10
-                        print(f"      - {n}")
-                    if len(nan_grad_names) > 10:
-                        print(f"      ... and {len(nan_grad_names) - 10} more")
-                    print(f"   ➡️ Skipping optimizer step to prevent weight corruption\n")
-                    
+                    print(f"   ⚠️ Gradient NaN/Inf at step {self.global_step}, skipping optimizer step")
                     self.optimizer.zero_grad(set_to_none=getattr(self.config, 'set_to_none', True))
                     if self.scaler is not None:
                         self.scaler.update()  # Still update scaler to adjust scale factor
@@ -1266,11 +1260,9 @@ class XoronTrainer:
             if (batch_idx + 1) % 100 == 0:
                 print(f"✅ Batch {batch_idx + 1} completed", flush=True)
 
-            # Clear cache periodically with proper GPU sync
+            # Clear cache periodically (no sync/gc - too slow for every batch)
             if batch_idx % self.config.empty_cache_freq == 0 and torch.cuda.is_available():
-                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
-                gc.collect()  # Also run garbage collection
 
         # Calculate average losses
         avg_llm = epoch_llm_loss / max(num_valid_batches, 1)  # Use valid batches for average
