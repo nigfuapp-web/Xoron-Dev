@@ -2,6 +2,7 @@
 
 import gc
 import json
+import logging
 import os
 import random
 import time
@@ -11,6 +12,8 @@ from torch.utils.data import IterableDataset
 from typing import Dict, List, Any, Optional, Callable, Iterator
 from PIL import Image
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class TrueStreamingDataset(IterableDataset):
@@ -1015,9 +1018,9 @@ class TrueStreamingDataset(IterableDataset):
                 except StopIteration:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
-                except Exception:
-                    # Skip problematic samples but continue
-                    pass
+                except Exception as e:
+                    # Skip problematic samples but log for debugging
+                    logger.debug(f"Sample processing skipped in {source.get('name', 'unknown')}: {e}")
             
             # Remove exhausted sources
             for idx in sorted(sources_to_remove, reverse=True):
