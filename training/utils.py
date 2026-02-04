@@ -355,10 +355,10 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         if mask is not None:
             mask = mask[valid_mask]
 
-        # Resize to target size
-        images = F.interpolate(images, size=(target_size, target_size), mode='bilinear', align_corners=False)
+        # Resize to target size - ensure dtype is preserved after interpolation
+        images = F.interpolate(images.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
         if mask is not None:
-            mask = F.interpolate(mask, size=(target_size // 8, target_size // 8), mode='nearest')
+            mask = F.interpolate(mask.float(), size=(target_size // 8, target_size // 8), mode='nearest').to(gen_dtype)
 
         # Normalize images to [-1, 1] for diffusion
         images_norm = images * 2 - 1
@@ -368,12 +368,14 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
 
         # Use generator's training_step if available (SOTA method)
         if hasattr(generator, 'training_step'):
-            losses = generator.training_step(images_norm, text_context, mask)
+            # Ensure all inputs are correct dtype
+            losses = generator.training_step(images_norm.to(gen_dtype), text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
             loss = losses['total_loss']
             del losses, images_norm  # Clean up
             return loss
         
-        # Fallback to manual training
+        # Fallback to manual training - ensure correct dtype
+        images_norm = images_norm.to(gen_dtype)
         z, mean, logvar = generator.encode(images_norm)
         del images_norm  # No longer needed
         
@@ -385,10 +387,10 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         if hasattr(generator, 'add_noise'):
             noisy_z = generator.add_noise(z, noise, timesteps)
         else:
-            alpha_t = generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1)
+            alpha_t = generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(gen_dtype)
             noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
         
-        noise_pred = generator.unet(noisy_z, timesteps, text_context, mask)
+        noise_pred = generator.unet(noisy_z, timesteps, text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
         del noisy_z  # Clean up
         
         diff_loss = F.mse_loss(noise_pred, noise)
@@ -472,9 +474,9 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         text_context = text_context[valid_mask]
         B = video_frames.shape[0]
 
-        # Resize frames to target size
+        # Resize frames to target size - ensure dtype is preserved
         video_frames = video_frames.contiguous().view(B * T, C, H, W)
-        video_frames = F.interpolate(video_frames, size=(target_size, target_size), mode='bilinear', align_corners=False)
+        video_frames = F.interpolate(video_frames.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
         video_frames = video_frames.contiguous().view(B, C, T, target_size, target_size)
 
         # Normalize to [-1, 1] for diffusion
@@ -490,12 +492,14 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
 
         # Use generator's training_step if available (SOTA method)
         if hasattr(video_generator, 'training_step'):
-            losses = video_generator.training_step(video_frames_norm, text_context, first_frame)
+            # Ensure all inputs are correct dtype
+            losses = video_generator.training_step(video_frames_norm.to(gen_dtype), text_context.to(gen_dtype), first_frame.to(gen_dtype) if first_frame is not None else None)
             loss = losses['total_loss']
             del losses, video_frames_norm, first_frame  # Clean up
             return loss
         
-        # Fallback to manual training
+        # Fallback to manual training - ensure correct dtype
+        video_frames_norm = video_frames_norm.to(gen_dtype)
         z, mean, logvar = video_generator.encode_video(video_frames_norm)
         del video_frames_norm  # No longer needed
         
@@ -507,11 +511,11 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if hasattr(video_generator, 'add_noise'):
             noisy_z = video_generator.add_noise(z, noise, timesteps)
         else:
-            alpha_t = video_generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1)
+            alpha_t = video_generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1).to(gen_dtype)
             noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
         
         first_frame_latent = z[:, :, 0] if first_frame is not None else None
-        noise_pred = video_generator.unet(noisy_z, timesteps, text_context, first_frame_latent)
+        noise_pred = video_generator.unet(noisy_z, timesteps, text_context.to(gen_dtype), first_frame_latent)
         del noisy_z, first_frame_latent  # Clean up
         
         # Losses
@@ -521,7 +525,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
         
         # Temporal consistency loss
-        temporal_loss = torch.tensor(0.0, device=gen_device)
+        temporal_loss = torch.tensor(0.0, device=gen_device, dtype=gen_dtype)
         if z.shape[2] > 1:
             z_diff = z[:, :, 1:] - z[:, :, :-1]
             temporal_loss = torch.mean(z_diff ** 2)
