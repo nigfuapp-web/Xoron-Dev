@@ -25,12 +25,17 @@ from models.llm.moe_llama import MoELlamaForCausalLM
 # Logger for model operations
 logger = logging.getLogger(__name__)
 
-# FP16 safe max value - balanced for FP16 range (~65504 max) while allowing confident predictions
+# FP16 safe max value for LINEAR/HIDDEN states only (not for attention logits before softmax)
+# For attention pre-softmax clamping, use ~11.0 since exp(11) ≈ 60000 is near FP16 max (65504)
+# This value (10000) is safe for hidden states since they don't go through exp()
 MAX_HIDDEN = 10000.0
 
 
 def safe_clamp_tensor(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:
     """Clamp tensor values for FP16 safety, handling NaN/Inf properly.
+    
+    WARNING: Only use for linear/hidden states, NOT for attention scores before softmax!
+    For attention scores, use a max of ~11.0 to prevent exp() overflow.
     
     CRITICAL: torch.clamp does NOT fix NaN! clamp(nan, -10, 10) = nan
     Must use nan_to_num first.

@@ -452,7 +452,11 @@ class XoronTrainer:
                 offset = logits_seq_len - labels_seq_len
                 if offset > 0:
                     # Take only the text portion of logits (skip multimodal prefix)
+                    # Also align input_ids to match labels for token-specific weighting
                     logits = logits[:, offset:, :]
+                    # input_ids should already match labels length, but verify
+                    if input_ids.size(1) > labels_seq_len:
+                        input_ids = input_ids[:, :labels_seq_len]
                 elif offset < 0:
                     # Labels are longer (shouldn't happen, but handle gracefully)
                     labels = labels[:, -logits_seq_len:]

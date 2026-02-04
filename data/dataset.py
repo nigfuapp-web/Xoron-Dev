@@ -315,9 +315,14 @@ class TrueStreamingDataset(IterableDataset):
                 processed = self.image_processor(img, return_tensors="pt")
                 return processed['pixel_values'].squeeze(0)
             else:
-                # Fallback: use 384x384 for SigLIP compatibility
+                # Fallback: use 384x384 for SigLIP compatibility with proper normalization
+                # SigLIP uses ImageNet mean/std normalization
                 img = img.resize((384, 384))
                 tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
+                # Apply ImageNet normalization (used by SigLIP/CLIP)
+                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                tensor = (tensor - mean) / std
                 return tensor
 
         except Exception:

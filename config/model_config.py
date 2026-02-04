@@ -86,7 +86,7 @@ class XoronConfig:
     train_lora_only: bool = False
     use_rslora: bool = True  # Rank-stabilized LoRA scaling
     use_dora: bool = False  # Weight-Decomposed LoRA (optional)
-    lora_plus_lr_ratio: float = 16.0  # LoRA+ B matrix learns faster
+    lora_plus_lr_ratio: float = 4.0  # LoRA+ B matrix learns faster (use training_config value)
 
     # Cross-Attention Configuration
     use_cross_attention: bool = True

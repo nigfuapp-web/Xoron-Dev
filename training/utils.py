@@ -100,7 +100,7 @@ class FP32OptimizerWrapper:
         return self.optimizer.param_groups
 
 
-def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all'):
+def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all', vision_size: int = 384):
     """Create a collate function with the specified video configuration.
     
     Args:
@@ -112,6 +112,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             'image' - image + text, minimal tensors for video/audio
             'video' - video + image + text, minimal tensors for audio
             'audio' - audio + text, minimal tensors for image/video
+        vision_size: Size of vision encoder input (default 384 for SigLIP SO400M)
     """
     # Determine which modalities need full tensors
     need_image = active_modalities in ('all', 'image', 'video')
@@ -129,7 +130,6 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             
             # Handle pixel_values - use minimal tensor if not needed
             if need_image:
-                vision_size = 384  # SigLIP SO400M default
                 pixel_values_list = []
                 for b in batch:
                     pv = b["pixel_values"]
@@ -205,7 +205,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
         except Exception:
             batch_size = len(batch)
             # Fallback with appropriate tensor sizes based on active modalities
-            vision_size = 384 if need_image else 1
+            vs = vision_size if need_image else 1
             vf_count = video_frames if need_video else 1
             vf_size = video_size if need_video else 1
             af_bins = 80 if need_audio else 1
@@ -215,7 +215,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 "input_ids": torch.stack([b["input_ids"] for b in batch]),
                 "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
                 "labels": torch.stack([b["labels"] for b in batch]),
-                "pixel_values": torch.zeros(batch_size, 3, vision_size, vision_size),
+                "pixel_values": torch.zeros(batch_size, 3, vs, vs),
                 "video_frames": torch.zeros(batch_size, vf_count, 3, vf_size, vf_size),
                 "audio_features": torch.zeros(batch_size, af_bins, af_len),
                 "sample_type": ["text"] * batch_size,

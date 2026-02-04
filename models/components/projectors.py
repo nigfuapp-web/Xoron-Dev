@@ -62,8 +62,9 @@ class PerceiverAttention(nn.Module):
         v = v.reshape(b, ctx_len, h, d).transpose(1, 2)
         
         # Attention (FP16-safe: clamp before softmax to prevent exp() overflow)
+        # ln(65504) ≈ 11.09, so exp(11) is the max safe value for FP16 softmax
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        attn = torch.clamp(attn, min=-50.0, max=50.0)  # exp(50) is safe, exp(89) overflows FP16
+        attn = torch.clamp(attn, min=-11.0, max=11.0)
         attn = attn.softmax(dim=-1)
         
         out = torch.matmul(attn, v)
