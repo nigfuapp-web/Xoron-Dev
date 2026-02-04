@@ -2,6 +2,7 @@
 
 import os
 import json
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +21,9 @@ from models.encoders.audio import AudioEncoder, AudioDecoder
 from models.generators.image import MobileDiffusionGenerator
 from models.generators.video import MobileVideoDiffusion
 from models.llm.moe_llama import MoELlamaForCausalLM
+
+# Logger for model operations
+logger = logging.getLogger(__name__)
 
 # FP16 safe max value - conservative to prevent overflow in subsequent ops
 MAX_HIDDEN = 500.0
@@ -443,8 +447,8 @@ class XoronMultimodalModel(nn.Module):
                 if labels is not None:
                     image_labels = torch.full((batch_size, image_embeds.shape[1]), -100, device=device, dtype=labels.dtype)
                     labels = torch.cat([image_labels, labels], dim=1)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Image encoding skipped: {e}")
 
         if has_content(video_frames):
             try:
@@ -464,8 +468,8 @@ class XoronMultimodalModel(nn.Module):
                 if labels is not None:
                     video_labels = torch.full((batch_size, video_embeds.shape[1]), -100, device=device, dtype=labels.dtype)
                     labels = torch.cat([video_labels, labels], dim=1)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Video encoding skipped: {e}")
 
         if has_content(audio_features):
             try:
@@ -485,8 +489,8 @@ class XoronMultimodalModel(nn.Module):
                 if labels is not None:
                     audio_labels = torch.full((batch_size, audio_embeds.shape[1]), -100, device=device, dtype=labels.dtype)
                     labels = torch.cat([audio_labels, labels], dim=1)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Audio encoding skipped: {e}")
 
         if self.cross_attention_layers is not None:
             try:
@@ -497,8 +501,8 @@ class XoronMultimodalModel(nn.Module):
                     audio_embeds=audio_embeds_for_cross,
                 )
                 text_embeds = safe_clamp_tensor(text_embeds)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Cross-attention skipped: {e}")
 
         text_embeds = safe_clamp_tensor(text_embeds)
         

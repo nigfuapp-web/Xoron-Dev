@@ -97,9 +97,10 @@ class LoRALinear(nn.Module):
             delta = (self.lora_B @ self.lora_A) * self.scaling
             if self.use_dora:
                 # For DoRA, we need to handle magnitude
+                # FP16-safe: use 1e-6 instead of 1e-8 (1e-8 underflows in FP16)
                 weight = self.linear.weight + delta
                 weight_norm = weight.norm(dim=1, keepdim=True)
-                self.linear.weight.data = (weight / (weight_norm + 1e-8)) * self.magnitude.unsqueeze(1)
+                self.linear.weight.data = (weight / (weight_norm + 1e-6)) * self.magnitude.unsqueeze(1)
             else:
                 self.linear.weight.data += delta
             self.merged = True

@@ -10,12 +10,15 @@ Features:
 - Memory-efficient cross-attention for multimodal fusion
 """
 
+import logging
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 def flash_attention_available() -> bool:
@@ -442,8 +445,8 @@ class MultimodalFusionLayer(nn.Module):
                 )
                 if use_cache:
                     present_key_values.image_kv = image_kv
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Image cross-attention skipped: {e}")
 
         # Video cross-attention
         if self._has_content(video_hidden) or past_video_kv is not None:
@@ -457,8 +460,8 @@ class MultimodalFusionLayer(nn.Module):
                 )
                 if use_cache:
                     present_key_values.video_kv = video_kv
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Video cross-attention skipped: {e}")
 
         # Audio cross-attention
         if self._has_content(audio_hidden) or past_audio_kv is not None:
@@ -472,8 +475,8 @@ class MultimodalFusionLayer(nn.Module):
                 )
                 if use_cache:
                     present_key_values.audio_kv = audio_kv
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Audio cross-attention skipped: {e}")
 
         # Fusion MLP
         residual = text_hidden

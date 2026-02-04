@@ -88,22 +88,24 @@ class CrossAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """Feed-forward network with GEGLU activation."""
+    """Feed-forward network with GEGLU activation (Gated Linear Unit with GELU)."""
     
     def __init__(self, dim: int, mult: int = 4, dropout: float = 0.0):
         super().__init__()
         inner_dim = int(dim * mult)
-        self.net = nn.Sequential(
-            nn.Linear(dim, inner_dim * 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        )
+        # GEGLU: Linear projects to 2x, split into (x, gate), output = x * gelu(gate)
+        self.proj_in = nn.Linear(dim, inner_dim * 2)
+        self.dropout = nn.Dropout(dropout)
+        self.proj_out = nn.Linear(inner_dim, dim)
+        self.dropout_out = nn.Dropout(dropout)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x, gate = self.net[0](x).chunk(2, dim=-1)
-        return self.net[3](self.net[2](x * F.gelu(gate)))
+        # GEGLU forward: split linear output, apply gated activation
+        x, gate = self.proj_in(x).chunk(2, dim=-1)
+        x = x * F.gelu(gate)
+        x = self.dropout(x)
+        x = self.proj_out(x)
+        return self.dropout_out(x)
 
 
 class TransformerBlock(nn.Module):
