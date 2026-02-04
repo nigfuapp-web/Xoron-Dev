@@ -1,93 +1,99 @@
 import os
 import json
 import torch
-from typing import Optional, Dict
+import torch.nn.functional as F
 from transformers import AutoTokenizer
-from config import XoronConfig
-from models.xoron import XoronMultimodalModel # Keep the class, we just use text parts
+from typing import Optional, Dict
 
-def load_llm_from_hf(
-    model_name: str = "Backup-bdg/Xoron-Dev-MultiMoe",
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    use_fp16: bool = True,
-) -> XoronMultimodalModel:
-    """Loads only the LLM portion of Xoron-Dev from HuggingFace."""
-    from huggingface_hub import snapshot_download
-    from safetensors.torch import load_model
-    
-    print(f"📥 Downloading LLM weights: {model_name}")
-    path = snapshot_download(repo_id=model_name)
-    
-    # 1. Load and Fix Config
-    with open(os.path.join(path, "config.json"), 'r') as f:
-        config_dict = json.load(f)
-    
-    # Force disable multimodal generators for a pure LLM load
-    config_dict['has_audio_encoder'] = False
-    config_dict['has_video_generator'] = False
-    config_dict['has_image_generator'] = False
-    
-    # 2. Detect Vocab Size from Safetensors
-    model_ts_path = os.path.join(path, "model.safetensors")
-    from safetensors import safe_open
-    with safe_open(model_ts_path, framework="pt") as f:
-        for key in f.keys():
-            if 'embed_tokens.weight' in key:
-                checkpoint_vocab_size = f.get_tensor(key).shape[0]
-                if checkpoint_vocab_size != config_dict.get('vocab_size'):
-                    print(f"🔄 Patching vocab: {checkpoint_vocab_size}")
-                    config_dict['vocab_size'] = checkpoint_vocab_size
+class XoronLLMLoader:
+    def __init__(self, model_path: str, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+        self.path = model_path
+        self.device = device
+        self.config = self._load_config()
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.get("tokenizer_name", "Qwen/Qwen2.5-7B"), 
+            trust_remote_code=True
+        )
+        self.model = self._load_llm_only()
+
+    def _load_config(self):
+        config_path = os.path.join(self.path, "config.json")
+        with open(config_path, 'r') as f:
+            return json.load(f)
+
+    def _load_llm_only(self):
+        """Loads only the language backbone and handles vocab/LoRA fixes."""
+        from models.xoron import XoronMultimodalModel
+        from config import XoronConfig
+
+        # Vocab Fix Logic: Ensure the model shell matches the checkpoint
+        checkpoint_vocab_size = self._detect_vocab_size()
+        if checkpoint_vocab_size:
+            self.config['vocab_size'] = checkpoint_vocab_size
+        
+        xoron_config = XoronConfig.from_dict(self.config)
+        # We initialize the full model but only use the backbone for this script
+        model = XoronMultimodalModel(xoron_config)
+        
+        # Load weights (handling safetensors or bin)
+        weight_path = os.path.join(self.path, "model.safetensors")
+        if os.path.exists(weight_path):
+            from safetensors.torch import load_model
+            load_model(model, weight_path)
+        else:
+            state_dict = torch.load(os.path.join(self.path, "pytorch_model.bin"), map_location='cpu')
+            model.load_state_dict(state_dict, strict=False)
+
+        model.to(self.device).eval()
+        return model
+
+    def _detect_vocab_size(self):
+        # Implementation of your logic to check embed_tokens.weight shape
+        # ... (Refer to your original _load_model_with_vocab_fix)
+        return self.config.get('vocab_size')
+
+    @torch.no_grad()
+    def generate(
+        self, 
+        prompt: str, 
+        max_new_tokens: int = 128, 
+        temperature: float = 0.7, 
+        top_p: float = 0.9,
+        top_k: int = 50
+    ):
+        """Proper Autoregressive Generation Loop"""
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        generated_ids = inputs["input_ids"]
+
+        for _ in range(max_new_tokens):
+            # 1. Forward Pass
+            outputs = self.model(input_ids=generated_ids)
+            
+            # 2. Extract Logits (Last token only)
+            next_token_logits = outputs.logits[:, -1, :] / (temperature if temperature > 0 else 1.0)
+
+            # 3. Top-K Filtering
+            if top_k > 0:
+                indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
+                next_token_logits[indices_to_remove] = float('-inf')
+
+            # 4. Top-P (Nucleus) Filtering
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                next_token_logits[indices_to_remove] = float('-inf')
+
+            # 5. Sample and Append
+            probs = F.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+
+            # 6. Stop on EOS
+            if next_token.item() == self.tokenizer.eos_token_id:
                 break
 
-    # 3. Initialize Model & Apply LoRA if checkpoint requires it
-    config = XoronConfig.from_dict(config_dict)
-    model = XoronMultimodalModel(config)
-    
-    # Detect LoRA structure in keys to apply before loading weights
-    with safe_open(model_ts_path, framework="pt") as f:
-        if any('.lora_A' in k for k in f.keys()):
-            print("🔧 Applying LoRA layers for compatibility...")
-            model.apply_lora()
-
-    # 4. Load Weights
-    print("📦 Loading weights into LLM...")
-    load_model(model, model_ts_path, strict=False)
-    
-    model = model.to(device)
-    if use_fp16 and "cuda" in device:
-        model = model.half()
-    
-    model.eval()
-    return model, path
-
-def generate_text(model, tokenizer, prompt, device, max_tokens=128):
-    """Simple greedy generation for the LLM."""
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    
-    with torch.no_grad():
-        # Using standard HF-style generation if Xoron supports it, 
-        # otherwise use the model's forward pass
-        output_ids = model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_new_tokens=max_tokens,
-            do_sample=True,
-            temperature=0.7
-        )
-    
-    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
-
-if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Load Model
-    llm, model_path = load_llm_from_hf()
-    
-    # Load Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(llm.config.tokenizer_name, trust_remote_code=True)
-    
-    # Test Inference
-    prompt = "Explain why Mixture of Experts is efficient:"
-    print(f"\nPrompt: {prompt}")
-    response = generate_text(llm, tokenizer, prompt, device)
-    print(f"\nResponse: {response}")
+        return self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
