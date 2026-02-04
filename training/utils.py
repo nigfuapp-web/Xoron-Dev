@@ -51,13 +51,7 @@ class FP32OptimizerWrapper:
         # Create optimizer on FP32 params
         self.optimizer = optimizer_class(self.fp32_params, **optimizer_kwargs)
         
-        # Verify device
-        if self.fp32_params:
-            device = self.fp32_params[0].device
-            print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters on {device}")
-        else:
-            print(f"   ✅ FP32 master weights created for {len(self.fp32_params)} parameters")
-        print(f"   📝 Optimizer runs on FP32 (GPU), copies back to FP16")
+        # Verify device (silent - no logging needed)
     
     def zero_grad(self, set_to_none=False):
         """Zero gradients on both FP16 model and FP32 params."""
@@ -263,9 +257,6 @@ def create_optimizer_and_scheduler(
     
     # For FP16 models, use FP32OptimizerWrapper to prevent optimizer overflow
     if is_fp16:
-        print(f"   📝 Model is FP16 - using FP32 master weights for optimizer")
-        print(f"   📝 This prevents NaN from numerical overflow in Adam")
-        
         # Use FP32OptimizerWrapper which maintains FP32 copies
         optimizer = FP32OptimizerWrapper(
             optimizer_class=AdamW,

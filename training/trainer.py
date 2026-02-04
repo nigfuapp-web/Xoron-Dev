@@ -106,8 +106,6 @@ class XoronTrainer:
             # No GradScaler or manual loss scaling needed - FP32 optimizer states don't overflow!
             self.scaler = None
             self.manual_loss_scale = None  # Not needed with FP32 optimizer states
-            print(f"   📝 Model is FP16 - optimizer uses FP32 master weights (no overflow risk)")
-            print(f"   📝 Gradients computed in FP16, optimizer runs in FP32, results copied back to FP16")
         elif config.fp16 and not use_bf16 and config.device == "cuda" and not model_is_half:
             # Standard mixed precision: FP32 model with FP16 autocast
             self.scaler = GradScaler()

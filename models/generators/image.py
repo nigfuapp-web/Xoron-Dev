@@ -22,14 +22,18 @@ class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
+        # Register a dummy parameter to track model dtype
+        self.register_buffer('_dtype_tracker', torch.zeros(1))
         
     def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
         device = timesteps.device
-        dtype = timesteps.dtype
+        # Use the dtype of the model (tracked via _dtype_tracker buffer)
+        target_dtype = self._dtype_tracker.dtype
+        # Convert timesteps to target dtype for computation
+        timesteps = timesteps.to(target_dtype)
         half_dim = self.dim // 2
         embeddings = math.log(10000) / (half_dim - 1)
-        # Match dtype of timesteps to avoid Float/Half mismatch
-        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=dtype) * -embeddings)
+        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=target_dtype) * -embeddings)
         embeddings = timesteps[:, None] * embeddings[None, :]
         embeddings = torch.cat([torch.sin(embeddings), torch.cos(embeddings)], dim=-1)
         return embeddings
@@ -437,8 +441,9 @@ class MobileDiffusionGenerator(nn.Module):
 
     def add_noise(self, x: torch.Tensor, noise: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
         """Add noise to latents according to timesteps."""
-        sqrt_alpha = self.sqrt_alphas_cumprod[timesteps].view(-1, 1, 1, 1)
-        sqrt_one_minus_alpha = self.sqrt_one_minus_alphas_cumprod[timesteps].view(-1, 1, 1, 1)
+        # Ensure buffers match input dtype to avoid Float/Half mismatch
+        sqrt_alpha = self.sqrt_alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(x.dtype)
+        sqrt_one_minus_alpha = self.sqrt_one_minus_alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(x.dtype)
         return sqrt_alpha * x + sqrt_one_minus_alpha * noise
 
     def training_step(self, images: torch.Tensor, context: torch.Tensor, 

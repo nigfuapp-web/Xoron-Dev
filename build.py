@@ -849,15 +849,8 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         total_steps,
     )
 
-    print(f"\n📊 Training Configuration:")
-    print(f"   Max samples per epoch: {training_config.max_per_epoch}")
-    print(f"   Eval samples per epoch: {eval_samples_per_dataset}")
-    print(f"   Estimated steps/epoch: {steps_per_epoch}")
-    print(f"   Total steps: {total_steps}")
-    print(f"   FP16: {training_config.fp16}")
-    print(f"   Voice processor: {'✅' if voice_proc else '❌'}")
-    print(f"   Video frames: {xoron_config.max_video_frames}")
-    print(f"   Video size: {xoron_config.generation_video_size}x{xoron_config.generation_video_size}")
+    precision = 'BF16' if training_config.bf16 else ('FP16' if training_config.fp16 else 'FP32')
+    print(f"   📊 {total_steps} steps | {precision} | lr={training_config.learning_rate}")
 
     return train_dataset, eval_dataset, optimizer, scheduler, collate_fn
 
