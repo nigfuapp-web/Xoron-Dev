@@ -153,6 +153,9 @@ class XoronTrainer:
         # Gradient clipping from config
         self.max_grad_norm = getattr(config, 'max_grad_norm', 1.0)
         
+        # Debug mode for expensive NaN checks (off by default for throughput)
+        self.debug_nan_checks = getattr(config, 'debug_nan_checks', False)
+        
         # Enable gradient checkpointing if configured
         if getattr(config, 'gradient_checkpointing', False):
             self._enable_gradient_checkpointing()
@@ -891,9 +894,8 @@ class XoronTrainer:
             model_loss = getattr(outputs, 'loss', None)
             logits = getattr(outputs, 'logits', None)
             
-            # CRITICAL: Check for NaN/Inf in model outputs BEFORE computing loss
-            # This catches numerical instability early before it corrupts gradients
-            if logits is not None and (torch.isnan(logits).any() or torch.isinf(logits).any()):
+            # NaN/Inf check on logits - only when debug mode enabled (causes CPU-GPU sync)
+            if self.debug_nan_checks and logits is not None and (torch.isnan(logits).any() or torch.isinf(logits).any()):
                 nan_count = torch.isnan(logits).sum().item()
                 inf_count = torch.isinf(logits).sum().item()
                 total_elements = logits.numel()
@@ -1045,10 +1047,6 @@ class XoronTrainer:
                     # BF16 or FP32 - no scaling needed
                     scaled_loss.backward()
                 
-                # Clip gradients immediately after each backward to prevent accumulation explosion
-                # This is critical for FP16 stability with gradient accumulation
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                
                 # Log gradient norms periodically (every 100 batches)
                 if (batch_idx + 1) % 100 == 0:
                     total_norm = 0.0
@@ -1142,26 +1140,26 @@ class XoronTrainer:
                         self.steps_since_scale_change = 0
                         print(f"   📉 Reduced loss scale: {old_scale} → {self.manual_loss_scale}")
                 else:
-                    # DOUBLE CHECK: Verify weights are still valid before optimizer step
-                    weights_ok = True
-                    for name, param in self.model.named_parameters():
-                        if torch.isnan(param).any() or torch.isinf(param).any():
-                            weights_ok = False
-                            print(f"\n   ❌ CRITICAL: Weight {name} already has NaN/Inf!")
-                            print(f"   This means weights were corrupted in a previous step.")
-                            print(f"   Training cannot continue with corrupted weights.\n")
-                            break
-                    
-                    if not weights_ok:
-                        # Weights are corrupted - cannot continue meaningfully
-                        raise RuntimeError(
-                            "Model weights are corrupted (contain NaN/Inf). "
-                            "This usually means:\n"
-                            "1. Learning rate too high - try reducing by 10x\n"
-                            "2. Gradient clipping threshold too high - try 0.5 instead of 1.0\n"
-                            "3. Bad data batch caused gradient explosion\n"
-                            "Please restart training with adjusted hyperparameters."
-                        )
+                    # Weight validity check - only in debug mode (causes CPU-GPU sync on all params)
+                    if self.debug_nan_checks:
+                        weights_ok = True
+                        for name, param in self.model.named_parameters():
+                            if torch.isnan(param).any() or torch.isinf(param).any():
+                                weights_ok = False
+                                print(f"\n   ❌ CRITICAL: Weight {name} already has NaN/Inf!")
+                                print(f"   This means weights were corrupted in a previous step.")
+                                print(f"   Training cannot continue with corrupted weights.\n")
+                                break
+                        
+                        if not weights_ok:
+                            raise RuntimeError(
+                                "Model weights are corrupted (contain NaN/Inf). "
+                                "This usually means:\n"
+                                "1. Learning rate too high - try reducing by 10x\n"
+                                "2. Gradient clipping threshold too high - try 0.5 instead of 1.0\n"
+                                "3. Bad data batch caused gradient explosion\n"
+                                "Please restart training with adjusted hyperparameters."
+                            )
                     
                     # Safe to proceed with optimizer step
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)

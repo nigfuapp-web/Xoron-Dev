@@ -25,8 +25,8 @@ from models.llm.moe_llama import MoELlamaForCausalLM
 # Logger for model operations
 logger = logging.getLogger(__name__)
 
-# FP16 safe max value - conservative to prevent overflow in subsequent ops
-MAX_HIDDEN = 500.0
+# FP16 safe max value - balanced for FP16 range (~65504 max) while allowing confident predictions
+MAX_HIDDEN = 10000.0
 
 
 def safe_clamp_tensor(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Tensor:

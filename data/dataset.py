@@ -828,7 +828,7 @@ class TrueStreamingDataset(IterableDataset):
             # Process media on-demand
             pixel_values = self._process_image(raw_image_data) if raw_image_data else None
             if pixel_values is None:
-                pixel_values = torch.zeros(3, 224, 224)
+                pixel_values = torch.zeros(3, 384, 384)
             
             video_frames = None
             if raw_video_data and dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
