@@ -136,14 +136,33 @@ def _load_model_with_vocab_fix(
     # Load weights
     if os.path.exists(model_path):
         print(f"   📦 Loading weights from safetensors...")
-        from safetensors.torch import load_model
-        load_model(model, model_path)
+        from safetensors.torch import load_file
+        state_dict = load_file(model_path)
+        # Use strict=False to handle missing/extra keys (e.g., _dtype_tracker, audio_decoder)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if missing_keys:
+            # Filter out known non-critical missing keys
+            critical_missing = [k for k in missing_keys if '_dtype_tracker' not in k]
+            if critical_missing:
+                print(f"   ⚠️ Missing keys: {len(critical_missing)} (showing first 5)")
+                for k in critical_missing[:5]:
+                    print(f"      - {k}")
+        if unexpected_keys:
+            print(f"   ⚠️ Unexpected keys (ignored): {len(unexpected_keys)}")
         model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
     elif os.path.exists(pytorch_path):
         print(f"   📦 Loading weights from pytorch_model.bin...")
         if 'state_dict' not in dir():
             state_dict = torch.load(pytorch_path, map_location='cpu')
-        model.load_state_dict(state_dict, strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if missing_keys:
+            critical_missing = [k for k in missing_keys if '_dtype_tracker' not in k]
+            if critical_missing:
+                print(f"   ⚠️ Missing keys: {len(critical_missing)} (showing first 5)")
+                for k in critical_missing[:5]:
+                    print(f"      - {k}")
+        if unexpected_keys:
+            print(f"   ⚠️ Unexpected keys (ignored): {len(unexpected_keys)}")
         model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
     else:
         raise FileNotFoundError(f"No model weights found at {path}")
