@@ -597,6 +597,7 @@ class MoELlamaModel(nn.Module):
         super().__init__()
         self.config = config
         self.moe_config = moe_config
+        self.gradient_checkpointing = False  # Gradient checkpointing flag
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
 
@@ -613,6 +614,14 @@ class MoELlamaModel(nn.Module):
 
     def _init_weights(self):
         nn.init.normal_(self.embed_tokens.weight, mean=0.0, std=0.02)
+    
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing for memory efficiency."""
+        self.gradient_checkpointing = True
+    
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -649,14 +658,33 @@ class MoELlamaModel(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            hidden_states, attn_weights, present_key_value, aux_loss = layer(
-                hidden_states=hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values[idx],
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
+            if self.gradient_checkpointing and self.training and not use_cache:
+                # Use gradient checkpointing for memory efficiency during training
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                
+                layer_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
+                    hidden_states,
+                    attention_mask,
+                    position_ids,
+                    past_key_values[idx],
+                    output_attentions,
+                    use_cache,
+                    use_reentrant=False,
+                )
+                hidden_states, attn_weights, present_key_value, aux_loss = layer_outputs
+            else:
+                hidden_states, attn_weights, present_key_value, aux_loss = layer(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values[idx],
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                )
 
             if use_cache:
                 next_cache.append(present_key_value)
@@ -727,6 +755,14 @@ class MoELlamaForCausalLM(nn.Module):
 
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         self.lm_head = new_embeddings
+    
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing for memory efficiency."""
+        self.model.gradient_checkpointing_enable()
+    
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.model.gradient_checkpointing_disable()
 
     def prepare_inputs_for_generation(
         self,

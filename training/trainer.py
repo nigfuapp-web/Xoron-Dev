@@ -168,25 +168,31 @@ class XoronTrainer:
         """Enable gradient checkpointing for memory efficiency across all components."""
         enabled_components = []
         
-        # Enable for LLM - check multiple possible locations
+        # Enable for LLM - MoELlamaForCausalLM has gradient_checkpointing_enable()
         if hasattr(self.model, 'llm') and self.model.llm is not None:
-            # Try model.llm.model.gradient_checkpointing (MoELlamaForCausalLM structure)
-            if hasattr(self.model.llm, 'model') and hasattr(self.model.llm.model, 'gradient_checkpointing'):
-                self.model.llm.model.gradient_checkpointing = True
-                enabled_components.append('LLM')
-            # Try model.llm.gradient_checkpointing_enable() (HuggingFace style)
-            elif hasattr(self.model.llm, 'gradient_checkpointing_enable'):
+            # Primary method: gradient_checkpointing_enable() (our custom + HuggingFace style)
+            if hasattr(self.model.llm, 'gradient_checkpointing_enable'):
                 self.model.llm.gradient_checkpointing_enable()
                 enabled_components.append('LLM')
-            # Try model.llm.gradient_checkpointing directly
+            # Fallback: set model.gradient_checkpointing directly
+            elif hasattr(self.model.llm, 'model') and hasattr(self.model.llm.model, 'gradient_checkpointing'):
+                self.model.llm.model.gradient_checkpointing = True
+                enabled_components.append('LLM')
+            # Final fallback: top-level gradient_checkpointing
             elif hasattr(self.model.llm, 'gradient_checkpointing'):
                 self.model.llm.gradient_checkpointing = True
                 enabled_components.append('LLM')
         
-        # Enable for Vision Encoder - CLIP models have gradient_checkpointing_enable
+        # Enable for Vision Encoder - SigLIP/CLIP models have gradient_checkpointing_enable
         if hasattr(self.model, 'vision_encoder') and self.model.vision_encoder is not None:
-            # Try the inner model (CLIP)
-            if hasattr(self.model.vision_encoder, 'model'):
+            # Try vision_model (SigLIP/CLIP inner model)
+            if hasattr(self.model.vision_encoder, 'vision_model'):
+                inner = self.model.vision_encoder.vision_model
+                if hasattr(inner, 'gradient_checkpointing_enable'):
+                    inner.gradient_checkpointing_enable()
+                    enabled_components.append('Vision')
+            # Fallback: try 'model' attribute
+            elif hasattr(self.model.vision_encoder, 'model'):
                 inner = self.model.vision_encoder.model
                 if hasattr(inner, 'gradient_checkpointing_enable'):
                     inner.gradient_checkpointing_enable()
