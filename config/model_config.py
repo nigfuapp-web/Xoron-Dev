@@ -10,13 +10,19 @@ class XoronConfig:
     Configuration for Xoron-Dev multimodal model.
     
     SOTA Features:
-    - MoE with shared expert (DeepSeek-style)
+    - MLA (Multi-Head Latent Attention) for compressed KV cache
+    - MoE with shared expert isolation (DeepSeek-style)
+    - Ring Attention for distributed 128K+ context (replaces sliding window)
+    - YaRN/LongRoPE for superior long-context extrapolation
     - LoRA variants (rsLoRA, DoRA, LoRA+)
     - Perceiver Resampler for vision projection
     - Cross-attention for multimodal fusion
-    - Sliding window attention for 128K context
-    - SOTA image/video diffusion with CFG
+    - MoE-DiT with Flow Matching for image generation
+    - 3D-RoPE + 3D Causal Transformers for video generation
+    - TiTok-style 1D tokenization for vision encoding
+    - Dual-stream attention for symmetric processing
     - Conformer audio encoder/decoder
+    - FP16-native numerical stability
     """
 
     # Model name
@@ -31,31 +37,46 @@ class XoronConfig:
     max_position_embeddings: int = 131072  # 128K context length
     rms_norm_eps: float = 1e-6
     
-    # Ring Attention (enables efficient 128K context with FP16)
+    # Ring Attention (replaces sliding window for efficient 128K+ context with FP16)
     use_ring_attention: bool = True
     ring_attention_chunk_size: int = 4096  # Ring attention chunk size
+    use_sliding_window: bool = False  # Deprecated - use ring attention instead
+    sliding_window: int = 4096  # Legacy - kept for compatibility
     
     # Tie word embeddings (parameter efficiency)
     tie_word_embeddings: bool = True
 
-    # MoE Configuration (SOTA: with shared expert)
+    # MoE Configuration (SOTA: with shared expert isolation)
     use_moe: bool = True
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2  # MoE every 2 layers
     router_aux_loss_coef: float = 0.1
-    use_shared_expert: bool = True  # DeepSeek-style shared expert
+    use_shared_expert: bool = True  # DeepSeek-style shared expert isolation
     moe_capacity_factor: float = 1.25  # Expert capacity factor
+    use_aux_lossless: bool = True  # Aux-lossless MoE routing
 
-    # Vision Configuration (SOTA: SigLIP 2)
+    # Vision Configuration (SOTA: SigLIP 2 + TiTok + Dual-Stream)
     vision_model_name: str = "google/siglip-so400m-patch14-384"  # SigLIP 2 - best for MoE
     freeze_vision: bool = False
     num_vision_tokens: int = 64
     max_video_frames: int = 32
     projector_type: str = "perceiver"  # "perceiver", "spatial", "c_abstractor", "mlp"
     vision_image_size: int = 384  # SigLIP SO400M uses 384x384
+    
+    # Vision Encoder SOTA Features
+    use_vision_dual_stream: bool = True  # Symmetric dual-stream attention
+    use_vision_titok: bool = True  # TiTok-style 1D tokenization
+    num_vision_titok_tokens: int = 256  # TiTok compressed token count
+    num_vision_dual_stream_layers: int = 2  # Dual-stream encoder layers
+    
+    # Video Encoder SOTA Features
+    use_video_3d_rope: bool = True  # 3D-RoPE for (x,y,t) positions
+    use_video_temporal_moe: bool = True  # Temporal-aware expert routing
+    num_video_encoder_layers: int = 4  # 3D causal transformer layers
+    num_video_experts: int = 4  # Temporal MoE experts
 
-    # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching)
+    # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching + 2D-RoPE)
     enable_generation: bool = True
     generation_image_size: int = 256
     generation_latent_channels: int = 4
@@ -64,13 +85,16 @@ class XoronConfig:
     generation_cfg_scale: float = 7.5  # Classifier-free guidance scale
     generation_use_flow_matching: bool = True  # Use Flow Matching instead of DDPM
     generation_num_experts: int = 4  # MoE experts in DiT
+    generation_use_dual_stream: bool = True  # Symmetric dual-stream attention
     
-    # Video Generation Configuration (SOTA: 3D Causal Transformers with Flow Matching)
+    # Video Generation Configuration (SOTA: 3D Causal Transformers + Flow Matching + 3D-RoPE)
     generation_video_size: int = 256
     generation_num_frames: int = 16
     generation_video_cfg_scale: float = 7.5
     generation_video_use_flow_matching: bool = True
     generation_video_num_experts: int = 4
+    generation_video_use_3d_rope: bool = True  # 3D-RoPE for (x,y,t)
+    generation_video_use_temporal_moe: bool = True  # Temporal-aware expert routing
 
     # Audio Configuration (SOTA: Conformer)
     audio_sample_rate: int = 16000
@@ -125,6 +149,8 @@ class XoronConfig:
             'rms_norm_eps': self.rms_norm_eps,
             'use_ring_attention': self.use_ring_attention,
             'ring_attention_chunk_size': self.ring_attention_chunk_size,
+            'use_sliding_window': self.use_sliding_window,
+            'sliding_window': self.sliding_window,
             'tie_word_embeddings': self.tie_word_embeddings,
             'use_moe': self.use_moe,
             'num_experts': self.num_experts,
@@ -133,12 +159,21 @@ class XoronConfig:
             'router_aux_loss_coef': self.router_aux_loss_coef,
             'use_shared_expert': self.use_shared_expert,
             'moe_capacity_factor': self.moe_capacity_factor,
+            'use_aux_lossless': self.use_aux_lossless,
             'vision_model_name': self.vision_model_name,
             'freeze_vision': self.freeze_vision,
             'num_vision_tokens': self.num_vision_tokens,
             'max_video_frames': self.max_video_frames,
             'projector_type': self.projector_type,
             'vision_image_size': self.vision_image_size,
+            'use_vision_dual_stream': self.use_vision_dual_stream,
+            'use_vision_titok': self.use_vision_titok,
+            'num_vision_titok_tokens': self.num_vision_titok_tokens,
+            'num_vision_dual_stream_layers': self.num_vision_dual_stream_layers,
+            'use_video_3d_rope': self.use_video_3d_rope,
+            'use_video_temporal_moe': self.use_video_temporal_moe,
+            'num_video_encoder_layers': self.num_video_encoder_layers,
+            'num_video_experts': self.num_video_experts,
             'enable_generation': self.enable_generation,
             'generation_image_size': self.generation_image_size,
             'generation_latent_channels': self.generation_latent_channels,
@@ -147,11 +182,14 @@ class XoronConfig:
             'generation_cfg_scale': self.generation_cfg_scale,
             'generation_use_flow_matching': self.generation_use_flow_matching,
             'generation_num_experts': self.generation_num_experts,
+            'generation_use_dual_stream': self.generation_use_dual_stream,
             'generation_video_size': self.generation_video_size,
             'generation_num_frames': self.generation_num_frames,
             'generation_video_cfg_scale': self.generation_video_cfg_scale,
             'generation_video_use_flow_matching': self.generation_video_use_flow_matching,
             'generation_video_num_experts': self.generation_video_num_experts,
+            'generation_video_use_3d_rope': self.generation_video_use_3d_rope,
+            'generation_video_use_temporal_moe': self.generation_video_use_temporal_moe,
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
             'audio_num_emotions': self.audio_num_emotions,
@@ -187,11 +225,15 @@ class XoronConfig:
         print("XORON-DEV MODEL CONFIGURATION (SOTA)")
         print("=" * 60)
         print(f"\n🧠 LLM: {self.hidden_size}d, {self.num_layers}L, {self.num_heads}H")
-        print(f"📏 Context: {self.max_position_embeddings//1024}K positions, sliding window={self.sliding_window if self.use_sliding_window else 'disabled'}")
-        print(f"🎯 MoE: {self.num_experts} experts, top-{self.num_experts_per_tok} routing, shared_expert={self.use_shared_expert}")
-        print(f"👁️ Vision: {self.vision_model_name}, projector={self.projector_type}")
-        print(f"🎨 Image Generation: {self.generation_image_size}x{self.generation_image_size}, CFG={self.generation_cfg_scale}")
-        print(f"🎬 Video Generation: {self.generation_num_frames} frames @ {self.generation_video_size}x{self.generation_video_size}")
+        attn_type = "Ring Attention" if self.use_ring_attention else "Standard"
+        print(f"📏 Context: {self.max_position_embeddings//1024}K positions, {attn_type} (chunk={self.ring_attention_chunk_size})")
+        print(f"🎯 MoE: {self.num_experts} experts, top-{self.num_experts_per_tok}, shared_expert={self.use_shared_expert}, aux_lossless={self.use_aux_lossless}")
+        print(f"👁️ Vision: {self.vision_model_name}")
+        print(f"   - TiTok: {self.use_vision_titok} ({self.num_vision_titok_tokens} tokens)")
+        print(f"   - Dual-Stream: {self.use_vision_dual_stream} ({self.num_vision_dual_stream_layers} layers)")
+        print(f"🎬 Video Encoder: 3D-RoPE={self.use_video_3d_rope}, Temporal MoE={self.use_video_temporal_moe}")
+        print(f"🎨 Image Gen: {self.generation_image_size}x{self.generation_image_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
+        print(f"🎬 Video Gen: {self.generation_num_frames} frames @ {self.generation_video_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
         print(f"🎤 Audio: {self.audio_sample_rate}Hz, {self.audio_n_mels} mels, {self.audio_num_emotions} emotions")
         print(f"📝 Tokenizer: {self.tokenizer_name} (vocab: {self.vocab_size:,})")
         lora_type = "DoRA" if self.use_dora else ("rsLoRA" if self.use_rslora else "LoRA")

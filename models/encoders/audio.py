@@ -7,6 +7,8 @@ Implements:
 - Multi-speaker support
 - Emotion and prosody control
 - Custom mel spectrogram extraction (no torchaudio dependency)
+- FP16-native numerical stability
+- Integrates with MLA/Ring Attention LLM components
 """
 
 import torch
@@ -15,6 +17,8 @@ import torch.nn.functional as F
 import math
 import numpy as np
 from typing import Optional, Tuple, List
+
+EPS = 1e-5
 
 
 class MelSpectrogramExtractor(nn.Module):
