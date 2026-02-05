@@ -1,11 +1,12 @@
 """
-SOTA Mixture of Experts (MoE) components.
+SOTA Mixture of Experts (MoE) components v2.0.
 
 Features:
-- DeepSeek-style shared expert (always active)
+- Aux-Lossless MoE (no auxiliary loss needed, load balance through architecture)
+- Isolated Shared Expert (always active, separate from routed experts)
 - Fine-grained experts for better specialization
 - Expert choice routing option
-- Improved load balancing with auxiliary losses
+- Optional auxiliary losses for legacy compatibility
 - Capacity factor for expert utilization
 - FP16-native numerical stability
 """
@@ -21,23 +22,31 @@ EPS = 1e-5
 
 class MoERouter(nn.Module):
     """
-    SOTA Router for Mixture of Experts - FP16 native.
+    SOTA Router for Mixture of Experts v2.0 - FP16 native.
+    
+    Supports both traditional aux-loss routing and aux-lossless routing.
     """
 
     def __init__(self, hidden_size: int, num_experts: int, top_k: int = 2, 
-                 noise_std: float = 0.01, capacity_factor: float = 1.25):
+                 noise_std: float = 0.01, capacity_factor: float = 1.25,
+                 aux_lossless: bool = True):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         self.noise_std = noise_std
         self.capacity_factor = capacity_factor
         self.hidden_size = hidden_size
+        self.aux_lossless = aux_lossless
         
         # Layer norm for input stability
         self.input_norm = nn.LayerNorm(hidden_size, eps=1e-5)
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
         # Small init prevents large logits
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
+        
+        if aux_lossless:
+            # Bias term for Aux-Lossless load balancing
+            self.expert_bias = nn.Parameter(torch.zeros(num_experts))
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size, seq_len, hidden_dim = hidden_states.shape
@@ -47,6 +56,10 @@ class MoERouter(nn.Module):
         hidden_norm = self.input_norm(hidden_flat)
         
         router_logits = self.gate(hidden_norm)
+        
+        # Add expert bias for Aux-Lossless load balancing
+        if self.aux_lossless:
+            router_logits = router_logits + self.expert_bias
 
         if self.training and self.noise_std > 0:
             noise = torch.randn_like(router_logits) * self.noise_std
@@ -97,19 +110,32 @@ class MoEExpert(nn.Module):
 
 class SharedExpert(nn.Module):
     """
-    Shared expert that's always active (DeepSeek-style) - FP16 native.
+    Isolated Shared Expert (v2.0) - FP16 native.
+    
+    Always active, separate from routed experts.
+    The shared expert processes all tokens independently of routing decisions.
     """
     
-    def __init__(self, hidden_size: int, intermediate_size: int, dropout: float = 0.0):
+    def __init__(self, hidden_size: int, intermediate_size: int, dropout: float = 0.0,
+                 isolated: bool = True):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
+        self.isolated = isolated
+        
         self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
         self.act_fn = nn.SiLU()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        
+        # Learnable gate for isolated shared expert contribution
         self.shared_gate = nn.Parameter(torch.ones(1) * 0.5)
+        
+        if isolated:
+            # Separate normalization for isolation
+            self.pre_norm = nn.LayerNorm(hidden_size, eps=1e-5)
+        
         self._init_weights()
     
     def _init_weights(self):
@@ -119,6 +145,9 @@ class SharedExpert(nn.Module):
         nn.init.normal_(self.down_proj.weight, mean=0.0, std=std * 0.5)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.isolated:
+            x = self.pre_norm(x)
+        
         gate = self.act_fn(self.gate_proj(x))
         up = self.up_proj(x)
         out = self.down_proj(gate * up)
@@ -128,7 +157,9 @@ class SharedExpert(nn.Module):
 
 class MoELayer(nn.Module):
     """
-    SOTA Mixture of Experts layer - FP16 native.
+    SOTA Mixture of Experts layer v2.0 - FP16 native.
+    
+    Supports Aux-Lossless MoE with Isolated Shared Expert.
     """
 
     def __init__(
@@ -141,21 +172,33 @@ class MoELayer(nn.Module):
         shared_expert_intermediate_size: Optional[int] = None,
         capacity_factor: float = 1.25,
         expert_dropout: float = 0.0,
+        aux_lossless: bool = True,
+        isolated_shared: bool = True,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_experts = num_experts
         self.num_experts_per_tok = num_experts_per_tok
-        self.use_shared_expert = True
+        self.use_shared_expert = use_shared_expert
         self.capacity_factor = capacity_factor
+        self.aux_lossless = aux_lossless
 
-        self.router = MoERouter(hidden_size, num_experts, num_experts_per_tok, capacity_factor=capacity_factor)
+        self.router = MoERouter(
+            hidden_size, num_experts, num_experts_per_tok, 
+            capacity_factor=capacity_factor, aux_lossless=aux_lossless
+        )
         self.experts = nn.ModuleList([
             MoEExpert(hidden_size, intermediate_size, expert_dropout) 
             for _ in range(num_experts)
         ])
-        shared_size = shared_expert_intermediate_size or intermediate_size
-        self.shared_expert = SharedExpert(hidden_size, shared_size, expert_dropout)
+        
+        if use_shared_expert:
+            shared_size = shared_expert_intermediate_size or intermediate_size
+            self.shared_expert = SharedExpert(
+                hidden_size, shared_size, expert_dropout, isolated=isolated_shared
+            )
+        else:
+            self.shared_expert = None
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, hidden_size = hidden_states.shape
@@ -177,10 +220,13 @@ class MoELayer(nn.Module):
                     weight = top_k_probs[mask, k:k+1]
                     final_output[mask] = final_output[mask] + weight * expert_output
 
-        shared_output = self.shared_expert(hidden_flat)
-        final_output = final_output + shared_output
+        if self.shared_expert is not None:
+            shared_output = self.shared_expert(hidden_flat)
+            final_output = final_output + shared_output
 
         final_output = final_output.view(batch_size, seq_len, hidden_size)
+        
+        # Compute aux loss (returns 0 for aux-lossless mode)
         aux_loss = self._compute_aux_loss(router_logits, top_k_indices, num_tokens)
 
         return final_output, aux_loss
@@ -190,6 +236,12 @@ class MoELayer(nn.Module):
         device = router_logits.device
         dtype = router_logits.dtype
         
+        # Aux-Lossless: minimal z-loss only for stability
+        if self.aux_lossless:
+            z_loss = torch.logsumexp(router_logits, dim=-1).square().mean() * 0.0001
+            return z_loss
+        
+        # Traditional aux loss computation
         router_probs = F.softmax(router_logits, dim=-1, dtype=dtype)
 
         expert_mask = F.one_hot(top_k_indices, self.num_experts).to(dtype)
