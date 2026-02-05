@@ -96,11 +96,15 @@ class XoronConfig:
     generation_video_use_3d_rope: bool = True  # 3D-RoPE for (x,y,t)
     generation_video_use_temporal_moe: bool = True  # Temporal-aware expert routing
 
-    # Audio Configuration (SOTA: Conformer)
+    # Audio Configuration (SOTA: Raw Waveform Tokenizer, MAS, RMLA, Zero-Shot Cloning)
     audio_sample_rate: int = 16000
     audio_n_mels: int = 80
-    audio_num_emotions: int = 13  # neutral, happy, sad, angry, fearful, disgusted, surprised, etc.
     audio_num_speakers: int = 256  # Speaker embedding size
+    use_raw_waveform: bool = True  # Use raw waveform tokenizer instead of mel spectrogram
+    audio_kv_lora_rank: int = 256  # KV compression rank for RMLA
+    audio_speaker_embed_dim: int = 256  # Speaker embedding dimension for zero-shot cloning
+    use_mas: bool = True  # Use Monotonic Alignment Search for text-to-audio alignment
+    use_in_context_audio_prompting: bool = True  # Enable in-context audio prompting for voice cloning
 
     # Tokenizer Configuration
     tokenizer_name: str = "Qwen/Qwen2.5-1.5B"
@@ -192,8 +196,12 @@ class XoronConfig:
             'generation_video_use_temporal_moe': self.generation_video_use_temporal_moe,
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
-            'audio_num_emotions': self.audio_num_emotions,
             'audio_num_speakers': self.audio_num_speakers,
+            'use_raw_waveform': self.use_raw_waveform,
+            'audio_kv_lora_rank': self.audio_kv_lora_rank,
+            'audio_speaker_embed_dim': self.audio_speaker_embed_dim,
+            'use_mas': self.use_mas,
+            'use_in_context_audio_prompting': self.use_in_context_audio_prompting,
             'tokenizer_name': self.tokenizer_name,
             'use_lora': self.use_lora,
             'lora_r': self.lora_r,
@@ -234,7 +242,8 @@ class XoronConfig:
         print(f"🎬 Video Encoder: 3D-RoPE={self.use_video_3d_rope}, Temporal MoE={self.use_video_temporal_moe}")
         print(f"🎨 Image Gen: {self.generation_image_size}x{self.generation_image_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
         print(f"🎬 Video Gen: {self.generation_num_frames} frames @ {self.generation_video_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
-        print(f"🎤 Audio: {self.audio_sample_rate}Hz, {self.audio_n_mels} mels, {self.audio_num_emotions} emotions")
+        print(f"🎤 Audio: {self.audio_sample_rate}Hz, RawWaveform={self.use_raw_waveform}, MAS={self.use_mas}")
+        print(f"   - Zero-Shot Cloning: speaker_dim={self.audio_speaker_embed_dim}, In-Context Prompting={self.use_in_context_audio_prompting}")
         print(f"📝 Tokenizer: {self.tokenizer_name} (vocab: {self.vocab_size:,})")
         lora_type = "DoRA" if self.use_dora else ("rsLoRA" if self.use_rslora else "LoRA")
         print(f"🔧 {lora_type}: r={self.lora_r}, alpha={self.lora_alpha}, LoRA+ ratio={self.lora_plus_lr_ratio}")

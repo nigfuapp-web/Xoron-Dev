@@ -2,11 +2,14 @@
 SOTA Audio Encoder and Decoder for Speech Processing.
 
 Implements:
-- Conformer-based encoder (similar to Whisper/Conformer ASR)
+- Raw Waveform Tokenizer (replaces mel spectrogram)
+- Zero-Shot Speaker Cloning with speaker embedding extraction
+- Monotonic Alignment Search (MAS) for fluid text-to-audio alignment
+- Rotary Multi-Head Latent Attention (RMLA)
+- In-Context Audio Prompting
+- Conformer-based encoder
 - FastSpeech2/VITS-style decoder with variance adaptor
 - Multi-speaker support
-- Emotion and prosody control
-- Custom mel spectrogram extraction (no torchaudio dependency)
 - FP16-native numerical stability
 - Integrates with MLA/Ring Attention LLM components
 """
@@ -15,125 +18,648 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import numpy as np
 from typing import Optional, Tuple, List
 
 EPS = 1e-5
 
 
-class MelSpectrogramExtractor(nn.Module):
+class RawWaveformTokenizer(nn.Module):
     """
-    Custom mel spectrogram extractor using pure PyTorch.
-    No torchaudio dependency - uses FFT and mel filterbank.
-    """
+    Raw Waveform Tokenizer - directly tokenizes audio waveforms without mel spectrograms.
     
-    def __init__(self, sample_rate: int = 16000, n_fft: int = 1024, hop_length: int = 256,
-                 n_mels: int = 80, f_min: float = 0.0, f_max: float = 8000.0):
+    Uses multi-scale 1D convolutions to extract features at different temporal resolutions,
+    then combines them into a unified representation.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_codebooks: int = 8,
+        codebook_size: int = 1024,
+        sample_rate: int = 16000,
+        hop_length: int = 320,
+        num_conv_layers: int = 6,
+    ):
         super().__init__()
+        self.hidden_size = hidden_size
+        self.num_codebooks = num_codebooks
+        self.codebook_size = codebook_size
         self.sample_rate = sample_rate
-        self.n_fft = n_fft
         self.hop_length = hop_length
-        self.n_mels = n_mels
-        self.f_min = f_min
-        self.f_max = f_max if f_max else sample_rate / 2
-        
-        # Create mel filterbank
-        mel_fb = self._create_mel_filterbank()
-        self.register_buffer('mel_fb', mel_fb)
-        
-        # Create Hann window
-        window = torch.hann_window(n_fft)
-        self.register_buffer('window', window)
-        
-    def _hz_to_mel(self, hz: float) -> float:
-        """Convert Hz to mel scale."""
-        return 2595.0 * math.log10(1.0 + hz / 700.0)
-    
-    def _mel_to_hz(self, mel: float) -> float:
-        """Convert mel to Hz."""
-        return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
-    
-    def _create_mel_filterbank(self) -> torch.Tensor:
-        """Create mel filterbank matrix."""
-        # Mel points
-        mel_min = self._hz_to_mel(self.f_min)
-        mel_max = self._hz_to_mel(self.f_max)
-        mel_points = torch.linspace(mel_min, mel_max, self.n_mels + 2)
-        hz_points = torch.tensor([self._mel_to_hz(m.item()) for m in mel_points])
-        
-        # FFT bins
-        fft_bins = torch.floor((self.n_fft + 1) * hz_points / self.sample_rate).long()
-        
-        # Create filterbank
-        n_freqs = self.n_fft // 2 + 1
-        fb = torch.zeros(self.n_mels, n_freqs)
-        
-        for i in range(self.n_mels):
-            left = fft_bins[i]
-            center = fft_bins[i + 1]
-            right = fft_bins[i + 2]
-            
-            # Rising slope
-            for j in range(left, center):
-                if j < n_freqs and center > left:
-                    fb[i, j] = (j - left) / (center - left)
-            
-            # Falling slope
-            for j in range(center, right):
-                if j < n_freqs and right > center:
-                    fb[i, j] = (right - j) / (right - center)
-        
-        return fb
-    
-    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+
+        # Multi-scale convolutional encoder
+        self.conv_layers = nn.ModuleList()
+        in_channels = 1
+        channels = [32, 64, 128, 256, 512, hidden_size]
+        kernel_sizes = [7, 5, 5, 3, 3, 3]
+        strides = [2, 2, 2, 2, 2, 2]  # Total downsampling: 64x
+
+        for i in range(num_conv_layers):
+            out_channels = channels[i] if i < len(channels) else hidden_size
+            kernel_size = kernel_sizes[i] if i < len(kernel_sizes) else 3
+            stride = strides[i] if i < len(strides) else 2
+
+            self.conv_layers.append(nn.Sequential(
+                nn.Conv1d(in_channels, out_channels, kernel_size, stride, kernel_size // 2),
+                nn.GroupNorm(8 if out_channels >= 8 else 1, out_channels),
+                nn.SiLU(),
+            ))
+            in_channels = out_channels
+
+        # Residual vector quantization codebooks
+        self.codebooks = nn.ModuleList([
+            nn.Embedding(codebook_size, hidden_size)
+            for _ in range(num_codebooks)
+        ])
+
+        # Commitment loss weight
+        self.commitment_weight = 0.25
+
+        # Output projection
+        self.output_proj = nn.Linear(hidden_size, hidden_size)
+
+        print(f"   🎵 RawWaveformTokenizer: {num_codebooks} codebooks x {codebook_size} codes")
+
+    def encode(self, waveform: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Extract mel spectrogram from waveform.
+        Encode waveform to continuous features.
         
         Args:
-            waveform: [B, T] or [T] audio waveform
+            waveform: [B, T] or [B, 1, T] raw audio waveform
             
         Returns:
-            mel: [B, n_mels, T'] mel spectrogram
+            features: [B, T', hidden_size] encoded features
+            indices: [B, T', num_codebooks] quantized indices
         """
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)
+        if waveform.dim() == 2:
+            waveform = waveform.unsqueeze(1)  # [B, 1, T]
+
+        x = waveform
+        for conv in self.conv_layers:
+            x = conv(x)
+
+        # [B, C, T'] -> [B, T', C]
+        x = x.transpose(1, 2)
+
+        return x, None  # Return features without quantization for continuous mode
+
+    def quantize(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Residual Vector Quantization.
         
-        batch_size = waveform.size(0)
-        device = waveform.device
+        Args:
+            features: [B, T, hidden_size] continuous features
+            
+        Returns:
+            quantized: [B, T, hidden_size] quantized features
+            indices: [B, T, num_codebooks] codebook indices
+            commitment_loss: scalar commitment loss
+        """
+        batch_size, seq_len, _ = features.shape
+        residual = features
+        quantized = torch.zeros_like(features)
+        all_indices = []
+        total_commitment_loss = 0.0
+
+        for codebook in self.codebooks:
+            # Find nearest codebook entry
+            distances = torch.cdist(residual, codebook.weight)  # [B, T, codebook_size]
+            indices = distances.argmin(dim=-1)  # [B, T]
+            all_indices.append(indices)
+
+            # Get quantized vectors
+            quantized_step = codebook(indices)  # [B, T, hidden_size]
+
+            # Straight-through estimator
+            quantized = quantized + residual + (quantized_step - residual).detach()
+
+            # Commitment loss
+            commitment_loss = F.mse_loss(residual.detach(), quantized_step)
+            total_commitment_loss = total_commitment_loss + commitment_loss
+
+            # Update residual
+            residual = residual - quantized_step.detach()
+
+        indices = torch.stack(all_indices, dim=-1)  # [B, T, num_codebooks]
+        commitment_loss = total_commitment_loss * self.commitment_weight
+
+        return quantized, indices, commitment_loss
+
+    def forward(self, waveform: torch.Tensor, quantize: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Forward pass.
         
-        # Pad waveform
-        pad_amount = self.n_fft // 2
-        waveform = F.pad(waveform, (pad_amount, pad_amount), mode='reflect')
+        Args:
+            waveform: [B, T] or [B, 1, T] raw audio
+            quantize: Whether to apply vector quantization
+            
+        Returns:
+            features: [B, T', hidden_size] encoded features
+            commitment_loss: Optional commitment loss if quantize=True
+        """
+        features, _ = self.encode(waveform)
+
+        if quantize:
+            features, indices, commitment_loss = self.quantize(features)
+            features = self.output_proj(features)
+            return features, commitment_loss
+
+        features = self.output_proj(features)
+        return features, None
+
+
+class SpeakerEncoder(nn.Module):
+    """
+    Zero-Shot Speaker Encoder for speaker cloning.
+    
+    Extracts speaker embeddings from reference audio that can be used
+    to clone the speaker's voice characteristics.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 256,
+        output_size: int = 256,
+        num_layers: int = 3,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+
+        # Frame-level encoder
+        self.frame_encoder = nn.Sequential(
+            nn.Conv1d(80, hidden_size, 5, 1, 2),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_size),
+            nn.Conv1d(hidden_size, hidden_size, 5, 1, 2),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_size),
+            nn.Conv1d(hidden_size, hidden_size, 5, 1, 2),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_size),
+        )
+
+        # LSTM for temporal modeling
+        self.lstm = nn.LSTM(
+            hidden_size, hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+        )
+
+        # Attention pooling
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, 1),
+        )
+
+        # Output projection
+        self.output_proj = nn.Linear(hidden_size * 2, output_size)
+
+        print(f"   👤 SpeakerEncoder: {hidden_size}d -> {output_size}d speaker embedding")
+
+    def forward(self, mel_spectrogram: torch.Tensor) -> torch.Tensor:
+        """
+        Extract speaker embedding from mel spectrogram.
         
-        # STFT using unfold
-        frames = waveform.unfold(-1, self.n_fft, self.hop_length)  # [B, num_frames, n_fft]
+        Args:
+            mel_spectrogram: [B, n_mels, T] mel spectrogram
+            
+        Returns:
+            speaker_embedding: [B, output_size] speaker embedding
+        """
+        # Frame-level encoding
+        x = self.frame_encoder(mel_spectrogram)  # [B, hidden, T]
+        x = x.transpose(1, 2)  # [B, T, hidden]
+
+        # Temporal modeling
+        x, _ = self.lstm(x)  # [B, T, hidden*2]
+
+        # Attention pooling
+        attn_weights = self.attention(x)  # [B, T, 1]
+        attn_weights = F.softmax(attn_weights, dim=1)
+        x = (x * attn_weights).sum(dim=1)  # [B, hidden*2]
+
+        # Output projection with L2 normalization
+        speaker_embedding = self.output_proj(x)
+        speaker_embedding = F.normalize(speaker_embedding, p=2, dim=-1)
+
+        return speaker_embedding
+
+
+class MonotonicAlignmentSearch(nn.Module):
+    """
+    Monotonic Alignment Search (MAS) for text-to-audio alignment.
+    
+    Implements both:
+    1. Hard MAS for inference (dynamic programming)
+    2. Soft/Fluid MAS for training (differentiable)
+    """
+
+    def __init__(self, hidden_size: int = 1024):
+        super().__init__()
+        self.hidden_size = hidden_size
+
+        # Alignment predictor for soft MAS
+        self.alignment_proj = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+        )
+
+        # Duration predictor for fluid alignment
+        self.duration_predictor = nn.Sequential(
+            nn.Conv1d(hidden_size, hidden_size, 3, padding=1),
+            nn.ReLU(),
+            nn.LayerNorm([hidden_size]),
+            nn.Conv1d(hidden_size, hidden_size, 3, padding=1),
+            nn.ReLU(),
+            nn.LayerNorm([hidden_size]),
+            nn.Conv1d(hidden_size, 1, 1),
+        )
+
+    @staticmethod
+    def hard_mas(log_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Hard Monotonic Alignment Search using dynamic programming.
         
-        # Apply window
-        window = self.window.to(device)
-        frames = frames * window
+        Args:
+            log_probs: [B, T_text, T_audio] log alignment probabilities
+            
+        Returns:
+            alignment: [B, T_text, T_audio] hard alignment matrix
+        """
+        batch_size, text_len, audio_len = log_probs.shape
+        device = log_probs.device
+
+        # Dynamic programming
+        Q = torch.full((batch_size, text_len, audio_len), float('-inf'), device=device)
+        Q[:, 0, 0] = log_probs[:, 0, 0]
+
+        for j in range(1, audio_len):
+            Q[:, 0, j] = Q[:, 0, j - 1] + log_probs[:, 0, j]
+
+        for i in range(1, text_len):
+            Q[:, i, i] = Q[:, i - 1, i - 1] + log_probs[:, i, i]
+            for j in range(i + 1, audio_len):
+                Q[:, i, j] = torch.max(Q[:, i - 1, j - 1], Q[:, i, j - 1]) + log_probs[:, i, j]
+
+        # Backtrack to find alignment
+        alignment = torch.zeros_like(log_probs)
+        for b in range(batch_size):
+            i, j = text_len - 1, audio_len - 1
+            while i >= 0 and j >= 0:
+                alignment[b, i, j] = 1
+                if i == 0:
+                    j -= 1
+                elif j == 0:
+                    i -= 1
+                elif Q[b, i - 1, j - 1] >= Q[b, i, j - 1]:
+                    i -= 1
+                    j -= 1
+                else:
+                    j -= 1
+
+        return alignment
+
+    def soft_mas(
+        self,
+        text_hidden: torch.Tensor,
+        audio_hidden: torch.Tensor,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Soft/Differentiable Monotonic Alignment Search.
         
-        # FFT
-        spec = torch.fft.rfft(frames, dim=-1)  # [B, num_frames, n_fft//2+1]
+        Args:
+            text_hidden: [B, T_text, hidden_size] text features
+            audio_hidden: [B, T_audio, hidden_size] audio features
+            temperature: Softmax temperature
+            
+        Returns:
+            soft_alignment: [B, T_text, T_audio] soft alignment matrix
+        """
+        batch_size, text_len, _ = text_hidden.shape
+        audio_len = audio_hidden.shape[1]
+
+        # Compute pairwise alignment scores
+        text_expanded = text_hidden.unsqueeze(2).expand(-1, -1, audio_len, -1)
+        audio_expanded = audio_hidden.unsqueeze(1).expand(-1, text_len, -1, -1)
+        combined = torch.cat([text_expanded, audio_expanded], dim=-1)
+
+        # Alignment logits
+        logits = self.alignment_proj(combined).squeeze(-1)  # [B, T_text, T_audio]
+
+        # Apply monotonic constraint via cumulative softmax
+        # This encourages monotonic alignment while remaining differentiable
+        logits = logits / temperature
+
+        # Row-wise softmax with monotonic bias
+        position_bias = torch.arange(audio_len, device=logits.device).float()
+        position_bias = position_bias.unsqueeze(0).unsqueeze(0)  # [1, 1, T_audio]
+
+        text_positions = torch.arange(text_len, device=logits.device).float()
+        text_positions = text_positions.unsqueeze(0).unsqueeze(2)  # [1, T_text, 1]
+
+        # Expected position for each text token
+        expected_pos = text_positions * (audio_len / text_len)
+        monotonic_bias = -0.1 * (position_bias - expected_pos).abs()
+
+        logits = logits + monotonic_bias
+        soft_alignment = F.softmax(logits, dim=-1)
+
+        return soft_alignment
+
+    def predict_durations(self, text_hidden: torch.Tensor) -> torch.Tensor:
+        """
+        Predict durations for each text token.
         
-        # Power spectrum
-        power_spec = spec.abs().pow(2)  # [B, num_frames, n_fft//2+1]
+        Args:
+            text_hidden: [B, T_text, hidden_size] text features
+            
+        Returns:
+            durations: [B, T_text] predicted durations
+        """
+        x = text_hidden.transpose(1, 2)  # [B, hidden, T_text]
+        durations = self.duration_predictor(x).squeeze(1)  # [B, T_text]
+        durations = F.softplus(durations)  # Ensure positive
+        return durations
+
+    def forward(
+        self,
+        text_hidden: torch.Tensor,
+        audio_hidden: Optional[torch.Tensor] = None,
+        use_hard: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute alignment and durations.
         
-        # Apply mel filterbank
-        mel_fb = self.mel_fb.to(device)
-        mel_spec = torch.matmul(power_spec, mel_fb.T)  # [B, num_frames, n_mels]
+        Args:
+            text_hidden: [B, T_text, hidden_size] text features
+            audio_hidden: [B, T_audio, hidden_size] audio features (optional for inference)
+            use_hard: Use hard MAS instead of soft
+            
+        Returns:
+            alignment: [B, T_text, T_audio] alignment matrix
+            durations: [B, T_text] predicted durations
+        """
+        durations = self.predict_durations(text_hidden)
+
+        if audio_hidden is None:
+            # Inference mode - use predicted durations
+            return None, durations
+
+        if use_hard:
+            # Compute log probabilities for hard MAS
+            text_norm = F.normalize(text_hidden, dim=-1)
+            audio_norm = F.normalize(audio_hidden, dim=-1)
+            log_probs = torch.bmm(text_norm, audio_norm.transpose(1, 2))
+            alignment = self.hard_mas(log_probs)
+        else:
+            alignment = self.soft_mas(text_hidden, audio_hidden)
+
+        return alignment, durations
+
+
+class RotaryMultiHeadLatentAttention(nn.Module):
+    """
+    Rotary Multi-Head Latent Attention (RMLA).
+    
+    Combines:
+    - Multi-Head Latent Attention (MLA) for compressed KV cache
+    - Rotary Position Embeddings (RoPE) for position awareness
+    - Efficient attention computation
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_heads: int = 16,
+        num_kv_heads: int = 4,
+        head_dim: int = 64,
+        kv_lora_rank: int = 256,
+        max_position_embeddings: int = 8192,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
+        self.kv_lora_rank = kv_lora_rank
+        self.num_key_value_groups = num_heads // num_kv_heads
+
+        # Query projection
+        self.q_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=False)
+
+        # Compressed KV projection (MLA style)
+        self.kv_a_proj = nn.Linear(hidden_size, kv_lora_rank + head_dim, bias=False)
+        self.kv_b_proj = nn.Linear(kv_lora_rank, num_kv_heads * head_dim * 2, bias=False)
+        self.kv_norm = nn.LayerNorm(kv_lora_rank)
+
+        # Output projection
+        self.o_proj = nn.Linear(num_heads * head_dim, hidden_size, bias=False)
+
+        # Rotary embeddings
+        self.rotary_emb = self._create_rotary_embedding(head_dim, max_position_embeddings)
+
+        self.dropout = nn.Dropout(dropout)
+        self.scale = head_dim ** -0.5
+
+    def _create_rotary_embedding(self, dim: int, max_seq_len: int) -> nn.Module:
+        """Create rotary position embeddings."""
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+        t = torch.arange(max_seq_len).float()
+        freqs = torch.einsum('i,j->ij', t, inv_freq)
+        emb = torch.cat([freqs, freqs], dim=-1)
+        self.register_buffer('cos_cached', emb.cos())
+        self.register_buffer('sin_cached', emb.sin())
+
+        return None
+
+    def _apply_rotary(self, x: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """Apply rotary position embeddings."""
+        cos = self.cos_cached[:seq_len].unsqueeze(0).unsqueeze(0)
+        sin = self.sin_cached[:seq_len].unsqueeze(0).unsqueeze(0)
+
+        # Rotate half
+        x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
+        rotated = torch.cat([-x2, x1], dim=-1)
+
+        return x * cos.to(x.dtype) + rotated * sin.to(x.dtype)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        use_cache: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """
+        Forward pass with RMLA.
         
-        # Log mel
-        mel_spec = torch.log(mel_spec.clamp(min=1e-10))
+        Args:
+            hidden_states: [B, T, hidden_size]
+            attention_mask: Optional attention mask
+            past_key_value: Optional cached KV states
+            use_cache: Whether to return updated cache
+            
+        Returns:
+            output: [B, T, hidden_size]
+            present_key_value: Optional updated cache
+        """
+        batch_size, seq_len, _ = hidden_states.shape
+
+        # Query projection
+        query = self.q_proj(hidden_states)
+        query = query.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Compressed KV projection (MLA)
+        kv_compressed = self.kv_a_proj(hidden_states)
+        kv_latent, k_pe = kv_compressed.split([self.kv_lora_rank, self.head_dim], dim=-1)
+        kv_latent = self.kv_norm(kv_latent)
+        kv = self.kv_b_proj(kv_latent)
+
+        key, value = kv.split(self.num_kv_heads * self.head_dim, dim=-1)
+        key = key.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        value = value.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        # Apply rotary embeddings
+        query = self._apply_rotary(query, seq_len)
+        key = self._apply_rotary(key, seq_len)
+
+        # Handle KV cache
+        if past_key_value is not None:
+            past_key, past_value = past_key_value
+            key = torch.cat([past_key, key], dim=2)
+            value = torch.cat([past_value, value], dim=2)
+
+        present_key_value = (key, value) if use_cache else None
+
+        # Expand KV for grouped query attention
+        if self.num_key_value_groups > 1:
+            key = key.repeat_interleave(self.num_key_value_groups, dim=1)
+            value = value.repeat_interleave(self.num_key_value_groups, dim=1)
+
+        # Attention computation
+        attn_weights = torch.matmul(query, key.transpose(-1, -2)) * self.scale
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        attn_weights = self.dropout(attn_weights)
+
+        output = torch.matmul(attn_weights, value)
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        output = self.o_proj(output)
+
+        return output, present_key_value
+
+
+class InContextAudioPrompting(nn.Module):
+    """
+    In-Context Audio Prompting for conditioning generation on reference audio.
+    
+    Allows the model to use a reference audio clip to guide the style,
+    speaker characteristics, and prosody of generated audio.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_prompt_tokens: int = 32,
+        num_heads: int = 8,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_prompt_tokens = num_prompt_tokens
+
+        # Learnable prompt tokens
+        self.prompt_tokens = nn.Parameter(torch.randn(1, num_prompt_tokens, hidden_size) * 0.02)
+
+        # Cross-attention for prompt conditioning
+        self.cross_attn = nn.MultiheadAttention(
+            hidden_size, num_heads,
+            dropout=0.1,
+            batch_first=True,
+        )
+
+        # Prompt encoder
+        self.prompt_encoder = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+
+        # Gating for residual connection
+        self.gate = nn.Parameter(torch.zeros(1))
+
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def encode_prompt(self, audio_features: torch.Tensor) -> torch.Tensor:
+        """
+        Encode reference audio into prompt tokens.
         
-        # Transpose to [B, n_mels, T']
-        mel_spec = mel_spec.transpose(1, 2)
+        Args:
+            audio_features: [B, T, hidden_size] reference audio features
+            
+        Returns:
+            prompt: [B, num_prompt_tokens, hidden_size] encoded prompt
+        """
+        batch_size = audio_features.shape[0]
+
+        # Expand learnable prompt tokens
+        prompt = self.prompt_tokens.expand(batch_size, -1, -1)
+
+        # Cross-attend to audio features
+        prompt, _ = self.cross_attn(prompt, audio_features, audio_features)
+
+        # Encode
+        prompt = self.prompt_encoder(prompt)
+
+        return prompt
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        prompt_features: Optional[torch.Tensor] = None,
+        audio_prompt: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Apply in-context audio prompting.
         
-        return mel_spec
+        Args:
+            hidden_states: [B, T, hidden_size] input features
+            prompt_features: [B, num_prompt_tokens, hidden_size] pre-encoded prompt
+            audio_prompt: [B, T_prompt, hidden_size] raw audio features to encode
+            
+        Returns:
+            output: [B, T, hidden_size] conditioned features
+        """
+        if prompt_features is None and audio_prompt is not None:
+            prompt_features = self.encode_prompt(audio_prompt)
+
+        if prompt_features is None:
+            return hidden_states
+
+        # Cross-attend to prompt
+        attended, _ = self.cross_attn(hidden_states, prompt_features, prompt_features)
+
+        # Gated residual
+        gate = torch.sigmoid(self.gate)
+        output = hidden_states + gate * attended
+        output = self.norm(output)
+
+        return output
 
 
 class ConvolutionModule(nn.Module):
     """Conformer convolution module with gating."""
-    
+
     def __init__(self, channels: int, kernel_size: int = 31, dropout: float = 0.1):
         super().__init__()
         self.layer_norm = nn.LayerNorm(channels)
@@ -145,53 +671,43 @@ class ConvolutionModule(nn.Module):
         self.batch_norm = nn.BatchNorm1d(channels)
         self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, T, C]"""
         x = self.layer_norm(x)
         x = x.transpose(1, 2)  # [B, C, T]
-        
+
         # Pointwise conv with GLU
         x = self.pointwise_conv1(x)
         x = F.glu(x, dim=1)
-        
+
         # Depthwise conv
         x = self.depthwise_conv(x)
         x = self.batch_norm(x)
         x = F.silu(x)
-        
+
         # Pointwise conv
         x = self.pointwise_conv2(x)
         x = self.dropout(x)
-        
+
         return x.transpose(1, 2)  # [B, T, C]
 
 
-class RelativePositionalEncoding(nn.Module):
-    """Relative positional encoding for attention."""
-    
-    def __init__(self, d_model: int, max_len: int = 5000):
-        super().__init__()
-        self.d_model = d_model
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0))
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Match dtype of positional encoding to input to avoid Float/Half mismatch
-        return x + self.pe[:, :x.size(1)].to(x.dtype)
-
-
 class ConformerBlock(nn.Module):
-    """Single Conformer block with feed-forward, attention, convolution."""
-    
-    def __init__(self, d_model: int, num_heads: int = 8, ff_expansion: int = 4,
-                 conv_kernel_size: int = 31, dropout: float = 0.1):
+    """Single Conformer block with RMLA, feed-forward, and convolution."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int = 8,
+        ff_expansion: int = 4,
+        conv_kernel_size: int = 31,
+        dropout: float = 0.1,
+        use_rmla: bool = True,
+    ):
         super().__init__()
-        
+        self.use_rmla = use_rmla
+
         # First feed-forward (half-step)
         self.ff1_norm = nn.LayerNorm(d_model)
         self.ff1 = nn.Sequential(
@@ -201,15 +717,26 @@ class ConformerBlock(nn.Module):
             nn.Linear(d_model * ff_expansion, d_model),
             nn.Dropout(dropout)
         )
-        
-        # Multi-head self-attention
-        self.attn_norm = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+
+        # Attention (RMLA or standard)
+        if use_rmla:
+            self.attn = RotaryMultiHeadLatentAttention(
+                hidden_size=d_model,
+                num_heads=num_heads,
+                num_kv_heads=max(1, num_heads // 4),
+                head_dim=d_model // num_heads,
+                kv_lora_rank=d_model // 4,
+                dropout=dropout,
+            )
+        else:
+            self.attn_norm = nn.LayerNorm(d_model)
+            self.attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+
         self.attn_dropout = nn.Dropout(dropout)
-        
+
         # Convolution module
         self.conv = ConvolutionModule(d_model, conv_kernel_size, dropout)
-        
+
         # Second feed-forward (half-step)
         self.ff2_norm = nn.LayerNorm(d_model)
         self.ff2 = nn.Sequential(
@@ -219,167 +746,214 @@ class ConformerBlock(nn.Module):
             nn.Linear(d_model * ff_expansion, d_model),
             nn.Dropout(dropout)
         )
-        
+
         self.final_norm = nn.LayerNorm(d_model)
-        
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        past_key_value: Optional[Tuple] = None,
+        use_cache: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[Tuple]]:
         # Feed-forward 1 (half-step)
         x = x + 0.5 * self.ff1(self.ff1_norm(x))
-        
+
         # Self-attention
-        attn_out, _ = self.attn(self.attn_norm(x), self.attn_norm(x), self.attn_norm(x), key_padding_mask=mask)
+        if self.use_rmla:
+            attn_out, present_kv = self.attn(x, attention_mask=mask, past_key_value=past_key_value, use_cache=use_cache)
+        else:
+            attn_out, _ = self.attn(self.attn_norm(x), self.attn_norm(x), self.attn_norm(x), key_padding_mask=mask)
+            present_kv = None
         x = x + self.attn_dropout(attn_out)
-        
+
         # Convolution
         x = x + self.conv(x)
-        
+
         # Feed-forward 2 (half-step)
         x = x + 0.5 * self.ff2(self.ff2_norm(x))
-        
-        return self.final_norm(x)
+
+        return self.final_norm(x), present_kv
 
 
 class AudioEncoder(nn.Module):
     """
-    SOTA Conformer-based Audio Encoder for speech understanding.
-    
-    Architecture inspired by Whisper and Conformer:
-    - Conv subsampling (4x downsampling)
-    - Conformer blocks with relative positional encoding
-    - Multi-head self-attention with convolution modules
+    SOTA Audio Encoder with Raw Waveform Tokenization and RMLA.
+
+    Features:
+    - Raw waveform tokenization (no mel spectrogram)
+    - Conformer blocks with RMLA
+    - Zero-shot speaker encoding
+    - In-context audio prompting
     """
 
-    def __init__(self, hidden_size: int = 1024, n_mels: int = 80, max_audio_length: int = 3000,
-                 num_layers: int = 6, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        n_mels: int = 80,  # Kept for backward compatibility
+        max_audio_length: int = 3000,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+        use_raw_waveform: bool = True,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
-        self.n_mels = n_mels
         self.max_audio_length = max_audio_length
-        
-        # Convolutional subsampling (4x downsampling like Whisper)
-        self.conv_subsample = nn.Sequential(
-            nn.Conv1d(n_mels, hidden_size // 2, kernel_size=3, stride=2, padding=1),
-            nn.GELU(),
-            nn.Conv1d(hidden_size // 2, hidden_size, kernel_size=3, stride=2, padding=1),
-            nn.GELU(),
+        self.use_raw_waveform = use_raw_waveform
+
+        # Raw waveform tokenizer
+        if use_raw_waveform:
+            self.waveform_tokenizer = RawWaveformTokenizer(
+                hidden_size=hidden_size,
+                num_codebooks=8,
+                codebook_size=1024,
+            )
+        else:
+            self.waveform_tokenizer = None
+            # Fallback mel spectrogram processing
+            self.conv_subsample = nn.Sequential(
+                nn.Conv1d(n_mels, hidden_size // 2, kernel_size=3, stride=2, padding=1),
+                nn.GELU(),
+                nn.Conv1d(hidden_size // 2, hidden_size, kernel_size=3, stride=2, padding=1),
+                nn.GELU(),
+            )
+
+        # Speaker encoder for zero-shot cloning
+        self.speaker_encoder = SpeakerEncoder(
+            hidden_size=256,
+            output_size=hidden_size // 4,
         )
-        
-        # Positional encoding
-        self.pos_encoding = RelativePositionalEncoding(hidden_size, max_audio_length // 4)
-        
-        # Conformer blocks
+
+        # In-context audio prompting
+        self.audio_prompting = InContextAudioPrompting(
+            hidden_size=hidden_size,
+            num_prompt_tokens=32,
+        )
+
+        # Conformer blocks with RMLA
         self.conformer_blocks = nn.ModuleList([
-            ConformerBlock(hidden_size, num_heads, ff_expansion=4, conv_kernel_size=31, dropout=dropout)
+            ConformerBlock(
+                hidden_size, num_heads,
+                ff_expansion=4,
+                conv_kernel_size=31,
+                dropout=dropout,
+                use_rmla=True,
+            )
             for _ in range(num_layers)
         ])
-        
+
         # Output projection
         self.output_proj = nn.Linear(hidden_size, hidden_size)
-        
-        print(f"   🎤 AudioEncoder (Conformer): {n_mels} mels -> {hidden_size}d, {num_layers} layers")
 
-    def forward(self, mel_spectrogram: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        print(f"   🎤 AudioEncoder (RMLA Conformer): {hidden_size}d, {num_layers} layers")
+        if use_raw_waveform:
+            print(f"      - Raw Waveform Tokenizer enabled")
+        print(f"      - Zero-Shot Speaker Encoder enabled")
+        print(f"      - In-Context Audio Prompting enabled")
+
+    def forward(
+        self,
+        audio_input: torch.Tensor,
+        speaker_ref: Optional[torch.Tensor] = None,
+        audio_prompt: Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Process mel-spectrogram to audio features.
-        Input: [B, n_mels, T] mel-spectrogram
-        Output: [B, T', hidden_size] audio features
+        Process audio to features.
+        
+        Args:
+            audio_input: [B, T] raw waveform or [B, n_mels, T] mel spectrogram
+            speaker_ref: [B, n_mels, T_ref] reference audio for speaker cloning
+            audio_prompt: [B, T_prompt, hidden_size] audio prompt features
+            mask: Optional attention mask
+            
+        Returns:
+            features: [B, T', hidden_size] audio features
+            speaker_embedding: [B, hidden_size//4] speaker embedding (if speaker_ref provided)
         """
-        # Conv subsampling: [B, n_mels, T] -> [B, hidden, T/4]
-        x = self.conv_subsample(mel_spectrogram)
-        
-        # Transpose to [B, T/4, hidden]
-        x = x.transpose(1, 2)
-        
-        # Add positional encoding
-        x = self.pos_encoding(x)
-        
+        # Encode audio
+        if self.use_raw_waveform and audio_input.dim() == 2:
+            x, commitment_loss = self.waveform_tokenizer(audio_input)
+        else:
+            # Mel spectrogram input
+            if audio_input.dim() == 2:
+                audio_input = audio_input.unsqueeze(1)
+            x = self.conv_subsample(audio_input)
+            x = x.transpose(1, 2)
+            commitment_loss = None
+
+        # Extract speaker embedding if reference provided
+        speaker_embedding = None
+        if speaker_ref is not None:
+            speaker_embedding = self.speaker_encoder(speaker_ref)
+
+        # Apply in-context audio prompting
+        if audio_prompt is not None:
+            x = self.audio_prompting(x, audio_prompt=audio_prompt)
+
         # Conformer blocks
         for block in self.conformer_blocks:
-            x = block(x, mask)
-        
+            x, _ = block(x, mask)
+
         # Output projection
         x = self.output_proj(x)
-        
-        return x
+
+        return x, speaker_embedding
 
 
 class VariancePredictor(nn.Module):
-    """Variance predictor for duration, pitch, and energy (FastSpeech2 style)."""
-    
+    """Variance predictor for duration, pitch, and energy."""
+
     def __init__(self, hidden_size: int, kernel_size: int = 3, dropout: float = 0.1):
         super().__init__()
-        self.hidden_size = hidden_size
-        
-        # Conv layers
         self.conv1 = nn.Conv1d(hidden_size, hidden_size, kernel_size, padding=kernel_size // 2)
         self.norm1 = nn.LayerNorm(hidden_size)
         self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size, padding=kernel_size // 2)
         self.norm2 = nn.LayerNorm(hidden_size)
         self.dropout = nn.Dropout(dropout)
         self.linear = nn.Linear(hidden_size, 1)
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, T, C] -> [B, T]"""
-        # Conv1: [B, T, C] -> [B, C, T] -> conv -> [B, C, T] -> [B, T, C]
         out = self.conv1(x.transpose(1, 2)).transpose(1, 2)
         out = F.relu(out)
         out = self.norm1(out)
         out = self.dropout(out)
-        
-        # Conv2
+
         out = self.conv2(out.transpose(1, 2)).transpose(1, 2)
         out = F.relu(out)
         out = self.norm2(out)
         out = self.dropout(out)
-        
+
         return self.linear(out).squeeze(-1)
 
 
-class LengthRegulator(nn.Module):
-    """Length regulator for duration-based upsampling."""
-    
-    def forward(self, x: torch.Tensor, durations: torch.Tensor, target_length: Optional[int] = None) -> torch.Tensor:
-        """
-        Expand hidden states according to durations.
-        x: [B, T, C]
-        durations: [B, T] (in frames)
-        """
-        batch_size = x.size(0)
-        device = x.device
-        
-        # Round durations to integers
-        durations = torch.clamp(torch.round(durations), min=1).long()
-        
-        if target_length is None:
-            target_length = durations.sum(dim=1).max().item()
-        
-        # Expand each sequence
-        outputs = []
-        for i in range(batch_size):
-            expanded = torch.repeat_interleave(x[i], durations[i], dim=0)
-            # Pad or truncate to target length
-            if expanded.size(0) < target_length:
-                pad = torch.zeros(target_length - expanded.size(0), x.size(-1), device=device)
-                expanded = torch.cat([expanded, pad], dim=0)
-            else:
-                expanded = expanded[:target_length]
-            outputs.append(expanded)
-        
-        return torch.stack(outputs)
-
-
 class FFTBlock(nn.Module):
-    """FFT block for mel decoder (similar to FastSpeech2)."""
-    
-    def __init__(self, hidden_size: int, num_heads: int = 4, ff_expansion: int = 4,
-                 kernel_size: int = 9, dropout: float = 0.1):
+    """FFT block for mel decoder."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int = 4,
+        ff_expansion: int = 4,
+        kernel_size: int = 9,
+        dropout: float = 0.1,
+    ):
         super().__init__()
-        
-        # Self-attention
+
+        # Self-attention with RMLA
+        self.attn = RotaryMultiHeadLatentAttention(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            num_kv_heads=max(1, num_heads // 2),
+            head_dim=hidden_size // num_heads,
+            kv_lora_rank=hidden_size // 4,
+            dropout=dropout,
+        )
         self.attn_norm = nn.LayerNorm(hidden_size)
-        self.attn = nn.MultiheadAttention(hidden_size, num_heads, dropout=dropout, batch_first=True)
         self.attn_dropout = nn.Dropout(dropout)
-        
+
         # Conv feed-forward
         self.ff_norm = nn.LayerNorm(hidden_size)
         self.ff = nn.Sequential(
@@ -388,87 +962,92 @@ class FFTBlock(nn.Module):
             nn.Conv1d(hidden_size * ff_expansion, hidden_size, kernel_size, padding=kernel_size // 2),
             nn.Dropout(dropout)
         )
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Self-attention
         residual = x
         x = self.attn_norm(x)
-        x, _ = self.attn(x, x, x)
+        x, _ = self.attn(x)
         x = residual + self.attn_dropout(x)
-        
+
         # Feed-forward
         residual = x
         x = self.ff_norm(x)
         x = self.ff(x.transpose(1, 2)).transpose(1, 2)
         x = residual + x
-        
+
         return x
 
 
 class AudioDecoder(nn.Module):
     """
-    SOTA FastSpeech2-style Audio Decoder for TTS.
-    
+    SOTA Audio Decoder with MAS and Zero-Shot Speaker Cloning.
+
     Features:
+    - Monotonic Alignment Search for text-to-audio alignment
+    - Zero-shot speaker cloning via speaker embeddings
+    - In-context audio prompting
     - Variance adaptor with duration, pitch, energy prediction
-    - Length regulator for duration-based expansion
-    - FFT blocks for mel generation
-    - Multi-speaker support
-    - Emotion and prosody control
-    - HiFi-GAN style postnet
+    - RMLA-based FFT blocks
     """
 
-    EMOTIONS = ['neutral', 'happy', 'sad', 'angry', 'surprised', 'fearful', 'disgusted', 'calm', 
-                'excited', 'curious', 'confident', 'whisper', 'shouting']
-
-    def __init__(self, hidden_size: int = 1024, n_mels: int = 80, max_audio_length: int = 1000,
-                 num_speakers: int = 256, num_decoder_layers: int = 4, dropout: float = 0.1):
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        n_mels: int = 80,
+        max_audio_length: int = 1000,
+        num_speakers: int = 256,
+        num_decoder_layers: int = 4,
+        dropout: float = 0.1,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.n_mels = n_mels
         self.max_audio_length = max_audio_length
-        self.num_emotions = len(self.EMOTIONS)
-        
-        # Speaker embedding
+
+        # Monotonic Alignment Search
+        self.mas = MonotonicAlignmentSearch(hidden_size)
+
+        # Speaker embedding (for multi-speaker)
         self.speaker_embed = nn.Embedding(num_speakers, hidden_size // 4)
-        
-        # Emotion embedding
-        self.emotion_embed = nn.Embedding(self.num_emotions, hidden_size // 4)
-        
-        # Prosody projection (speed, pitch_shift, energy_scale)
-        self.prosody_proj = nn.Linear(3, hidden_size // 4)
-        
+
+        # Zero-shot speaker projection (from speaker encoder output)
+        self.speaker_proj = nn.Linear(hidden_size // 4, hidden_size // 4)
+
+        # In-context audio prompting
+        self.audio_prompting = InContextAudioPrompting(
+            hidden_size=hidden_size,
+            num_prompt_tokens=32,
+        )
+
         # Input projection
-        self.input_proj = nn.Linear(hidden_size + 3 * (hidden_size // 4), hidden_size)
-        
+        self.input_proj = nn.Linear(hidden_size + hidden_size // 4, hidden_size)
+
         # Encoder FFT blocks
         self.encoder_blocks = nn.ModuleList([
             FFTBlock(hidden_size, num_heads=4, ff_expansion=4, dropout=dropout)
             for _ in range(4)
         ])
-        
+
         # Variance adaptor
         self.duration_predictor = VariancePredictor(hidden_size, dropout=dropout)
         self.pitch_predictor = VariancePredictor(hidden_size, dropout=dropout)
         self.energy_predictor = VariancePredictor(hidden_size, dropout=dropout)
-        
+
         # Pitch and energy embeddings
         self.pitch_embed = nn.Conv1d(1, hidden_size, kernel_size=9, padding=4)
         self.energy_embed = nn.Conv1d(1, hidden_size, kernel_size=9, padding=4)
-        
-        # Length regulator
-        self.length_regulator = LengthRegulator()
-        
+
         # Decoder FFT blocks
         self.decoder_blocks = nn.ModuleList([
             FFTBlock(hidden_size, num_heads=4, ff_expansion=4, dropout=dropout)
             for _ in range(num_decoder_layers)
         ])
-        
+
         # Mel output
         self.mel_linear = nn.Linear(hidden_size, n_mels)
-        
-        # HiFi-GAN style postnet with residual connections
+
+        # Postnet
         self.postnet = nn.ModuleList([
             nn.Sequential(
                 nn.Conv1d(n_mels, 256, kernel_size=5, padding=2),
@@ -493,132 +1072,123 @@ class AudioDecoder(nn.Module):
             nn.Conv1d(256, n_mels, kernel_size=5, padding=2),
         ])
 
-        print(f"   🔊 AudioDecoder (FastSpeech2): {hidden_size}d -> {n_mels} mels, {self.num_emotions} emotions, {num_speakers} speakers")
+        print(f"   🔊 AudioDecoder (MAS + RMLA): {hidden_size}d -> {n_mels} mels")
+        print(f"      - Monotonic Alignment Search enabled")
+        print(f"      - Zero-Shot Speaker Cloning enabled")
+        print(f"      - In-Context Audio Prompting enabled")
 
     def forward(
         self,
         text_embeds: torch.Tensor,
         target_length: Optional[int] = None,
-        emotion: Optional[torch.Tensor] = None,
-        prosody: Optional[torch.Tensor] = None,
         speaker: Optional[torch.Tensor] = None,
+        speaker_embedding: Optional[torch.Tensor] = None,
+        audio_prompt: Optional[torch.Tensor] = None,
+        audio_features: Optional[torch.Tensor] = None,
         duration_target: Optional[torch.Tensor] = None,
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        use_mas: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
         Generate mel-spectrogram from text embeddings.
-        
+
         Args:
             text_embeds: [B, T, hidden_size] text embeddings
             target_length: target mel length (for training)
-            emotion: [B] emotion IDs
-            prosody: [B, 3] prosody controls (speed, pitch_shift, energy_scale)
-            speaker: [B] speaker IDs
-            duration_target: [B, T] ground truth durations (for training)
-            pitch_target: [B, T'] ground truth pitch (for training)
-            energy_target: [B, T'] ground truth energy (for training)
-            
+            speaker: [B] speaker IDs (for multi-speaker)
+            speaker_embedding: [B, hidden_size//4] zero-shot speaker embedding
+            audio_prompt: [B, T_prompt, hidden_size] audio prompt features
+            audio_features: [B, T_audio, hidden_size] target audio features (for MAS training)
+            duration_target: [B, T] ground truth durations
+            pitch_target: [B, T'] ground truth pitch
+            energy_target: [B, T'] ground truth energy
+            use_mas: Whether to use MAS for alignment
+
         Returns:
             mel: [B, n_mels, T'] generated mel spectrogram
             durations: [B, T] predicted durations
+            alignment: [B, T_text, T_audio] alignment matrix (if use_mas and audio_features provided)
         """
         batch_size, seq_len, _ = text_embeds.shape
         device = text_embeds.device
-        dtype = text_embeds.dtype  # Match dtype to avoid Float/Half mismatch
+        dtype = text_embeds.dtype
 
-        # Get embeddings - ensure dtype matches input
-        if speaker is None:
-            speaker = torch.zeros(batch_size, dtype=torch.long, device=device)
-        speaker_emb = self.speaker_embed(speaker).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
-        
-        if emotion is None:
-            emotion = torch.zeros(batch_size, dtype=torch.long, device=device)
-        emotion_emb = self.emotion_embed(emotion).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
-
-        if prosody is None:
-            prosody = torch.tensor([[1.0, 0.0, 1.0]], device=device, dtype=dtype).expand(batch_size, -1)
+        # Get speaker embedding
+        if speaker_embedding is not None:
+            # Zero-shot speaker cloning
+            spk_emb = self.speaker_proj(speaker_embedding)
+        elif speaker is not None:
+            # Multi-speaker embedding
+            spk_emb = self.speaker_embed(speaker)
         else:
-            prosody = prosody.to(dtype)
-        prosody_emb = self.prosody_proj(prosody).unsqueeze(1).expand(-1, seq_len, -1)
+            # Default speaker
+            speaker = torch.zeros(batch_size, dtype=torch.long, device=device)
+            spk_emb = self.speaker_embed(speaker)
+
+        spk_emb = spk_emb.unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
 
         # Combine embeddings
-        x = torch.cat([text_embeds, speaker_emb, emotion_emb, prosody_emb], dim=-1)
+        x = torch.cat([text_embeds, spk_emb], dim=-1)
         x = self.input_proj(x)
-        
+
+        # Apply in-context audio prompting
+        if audio_prompt is not None:
+            x = self.audio_prompting(x, audio_prompt=audio_prompt)
+
         # Encoder
         for block in self.encoder_blocks:
             x = block(x)
-        
-        # Variance prediction
-        duration_pred = F.softplus(self.duration_predictor(x))
-        pitch_pred = self.pitch_predictor(x)
-        energy_pred = F.softplus(self.energy_predictor(x))
-        
-        # Use targets during training, predictions during inference
+
+        # Monotonic Alignment Search
+        alignment = None
+        if use_mas and audio_features is not None:
+            alignment, durations = self.mas(x, audio_features, use_hard=not self.training)
+        else:
+            _, durations = self.mas(x)
+
+        # Use target durations during training if provided
         if duration_target is not None:
             durations = duration_target
-        else:
-            durations = duration_pred * prosody[:, 0:1]  # Apply speed control
-        
-        # Length regulation
+
+        # Variance prediction
+        pitch_pred = self.pitch_predictor(x)
+        energy_pred = F.softplus(self.energy_predictor(x))
+
+        # Determine output length
         if target_length is not None:
-            x = F.interpolate(x.transpose(1, 2), size=target_length, mode='linear', align_corners=False).transpose(1, 2)
             mel_length = target_length
         else:
             mel_length = int(durations.sum(dim=1).max().item())
             mel_length = max(16, min(mel_length, self.max_audio_length))
-            x = F.interpolate(x.transpose(1, 2), size=mel_length, mode='linear', align_corners=False).transpose(1, 2)
-        
-        # Add pitch and energy
-        if pitch_target is not None:
-            pitch = pitch_target
-        else:
-            pitch = pitch_pred + prosody[:, 1:2]  # Apply pitch shift
-        
-        if energy_target is not None:
-            energy = energy_target
-        else:
-            energy = energy_pred * prosody[:, 2:3]  # Apply energy scale
-        
-        # Upsample pitch and energy to mel length
+
+        # Length regulation via interpolation
+        x = F.interpolate(x.transpose(1, 2), size=mel_length, mode='linear', align_corners=False).transpose(1, 2)
+
+        # Use targets during training
+        pitch = pitch_target if pitch_target is not None else pitch_pred
+        energy = energy_target if energy_target is not None else energy_pred
+
+        # Upsample pitch and energy
         pitch_up = F.interpolate(pitch.unsqueeze(1), size=mel_length, mode='linear', align_corners=False)
         energy_up = F.interpolate(energy.unsqueeze(1), size=mel_length, mode='linear', align_corners=False)
-        
+
         # Add pitch and energy embeddings
         pitch_emb = self.pitch_embed(pitch_up).transpose(1, 2)
         energy_emb = self.energy_embed(energy_up).transpose(1, 2)
         x = x + pitch_emb + energy_emb
-        
+
         # Decoder
         for block in self.decoder_blocks:
             x = block(x)
-        
+
         # Mel output
         mel = self.mel_linear(x).transpose(1, 2)  # [B, n_mels, T']
-        
-        # Postnet with residual
+
+        # Postnet
         mel_post = mel
-        for i, layer in enumerate(self.postnet):
-            if i < len(self.postnet) - 1:
-                mel_post = layer(mel_post)
-            else:
-                mel_post = layer(mel_post)
+        for layer in self.postnet:
+            mel_post = layer(mel_post)
         mel = mel + mel_post
 
-        return mel, duration_pred
-
-    @staticmethod
-    def get_emotion_id(emotion_name: str) -> int:
-        """Convert emotion name to ID."""
-        emotion_name = emotion_name.lower()
-        if emotion_name in AudioDecoder.EMOTIONS:
-            return AudioDecoder.EMOTIONS.index(emotion_name)
-        return 0
-    
-    @staticmethod
-    def get_emotion_name(emotion_id: int) -> str:
-        """Convert emotion ID to name."""
-        if 0 <= emotion_id < len(AudioDecoder.EMOTIONS):
-            return AudioDecoder.EMOTIONS[emotion_id]
-        return 'neutral'
+        return mel, durations, alignment

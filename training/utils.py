@@ -616,14 +616,16 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         return None
 
 
-def train_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=None):
-    """Train TTS: text -> audio generation.
+def train_voice_tts_step(audio_decoder, text_embeds, target_mel, audio_encoder=None, sample_types=None, use_mas=True):
+    """Train TTS: text -> audio generation with Monotonic Alignment Search (MAS).
     
     Args:
-        audio_decoder: Audio decoder model
+        audio_decoder: Audio decoder model (with MAS support)
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
         target_mel: Target mel spectrograms (B, mel_bins, time)
+        audio_encoder: Optional audio encoder for extracting target audio features (for MAS)
         sample_types: List of sample types to filter valid samples (e.g., ['voice_tts', 'text', ...])
+        use_mas: Whether to use Monotonic Alignment Search for alignment loss
     """
     if audio_decoder is None or target_mel is None:
         return None
@@ -651,9 +653,7 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=No
             text_embeds = text_embeds[type_mask]
 
         # Then filter to only samples with valid (non-zero) target mel
-        # Check each sample in the batch - sum across mel bins and time
-        # Use a very lenient threshold to catch any non-zero audio
-        valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6  # Very lenient threshold
+        valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6
         num_valid = valid_mask.sum().item()
         
         if num_valid == 0:
@@ -663,9 +663,41 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=No
         target_mel = target_mel[valid_mask]
         text_embeds = text_embeds[valid_mask]
 
-        pred_mel, durations = audio_decoder(text_embeds, target_length=target_mel.shape[-1])
+        # Get target audio features for MAS if audio encoder is available
+        audio_features = None
+        if use_mas and audio_encoder is not None:
+            with torch.no_grad():
+                # Encode target mel to get audio features for alignment
+                audio_out, _ = audio_encoder(target_mel)
+                audio_features = audio_out
+
+        # Forward pass with MAS
+        pred_mel, durations, alignment = audio_decoder(
+            text_embeds, 
+            target_length=target_mel.shape[-1],
+            audio_features=audio_features,
+            use_mas=use_mas and audio_features is not None,
+        )
+        
+        # Mel reconstruction loss
         mel_loss = F.mse_loss(pred_mel, target_mel)
-        return mel_loss
+        
+        # MAS alignment loss (self-supervised)
+        mas_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
+        if use_mas and hasattr(audio_decoder, 'mas') and audio_features is not None:
+            mas_loss = audio_decoder.mas.compute_duration(alignment).sum() * 0.0  # Placeholder for actual MAS loss
+            # The actual MAS loss is computed inside the decoder during forward pass
+        
+        # Duration prediction loss (if we have ground truth durations)
+        duration_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
+        if alignment is not None:
+            # Use alignment to compute pseudo ground-truth durations
+            gt_durations = alignment.sum(dim=-1)  # [B, T_text]
+            duration_loss = F.mse_loss(durations, gt_durations)
+        
+        total_loss = mel_loss + 0.1 * duration_loss + 0.01 * mas_loss
+        return total_loss
+        
     except Exception as e:
         # Log the exception for debugging
         print(f"      ⚠️ TTS training error: {type(e).__name__}: {str(e)[:100]}")

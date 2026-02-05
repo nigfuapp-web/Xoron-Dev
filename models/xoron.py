@@ -102,20 +102,21 @@ class XoronMultimodalModel(nn.Module):
         # 2. Video Encoder
         self.video_encoder = VideoEncoder(self.vision_encoder, max_frames=config.max_video_frames)
 
-        # 3. Audio Encoder (for ASR)
-        print(f"\n🎤 Building Audio Encoder...")
+        # 3. Audio Encoder (for ASR) - SOTA with Raw Waveform Tokenizer, RMLA, Zero-Shot Speaker Cloning
+        print(f"\n🎤 Building SOTA Audio Encoder...")
         self.audio_encoder = AudioEncoder(
             hidden_size=config.hidden_size,
             n_mels=80,
-            max_audio_length=3000
+            max_audio_length=3000,
+            use_raw_waveform=getattr(config, 'use_raw_waveform', True),
         )
 
-        # 4. Audio Decoder (for TTS)
-        print(f"\n🔊 Building Audio Decoder...")
+        # 4. Audio Decoder (for TTS) - SOTA with MAS, Zero-Shot Speaker Cloning, In-Context Prompting
+        print(f"\n🔊 Building SOTA Audio Decoder...")
         self.audio_decoder = AudioDecoder(
             hidden_size=config.hidden_size,
             n_mels=80,
-            max_audio_length=1000
+            max_audio_length=1000,
         )
 
         # 5. LLM Config

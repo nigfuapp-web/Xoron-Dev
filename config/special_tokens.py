@@ -452,43 +452,12 @@ SPECIAL_TOKENS = {
     "speak_end": "<|/speak|>",
     "audio_start": "<|audio|>",
     "audio_end": "<|/audio|>",
-
-    # === HIDDEN EMOTION TAGS (for TTS - stripped from text output) ===
-    # These control the emotional tone of speech synthesis
-    # Format: <|emotion:TYPE|> - hidden from user, used by TTS decoder
-    "emotion_start": "<|emotion|>",
-    "emotion_end": "<|/emotion|>",
-    "emotion_neutral": "<|emotion:neutral|>",
-    "emotion_happy": "<|emotion:happy|>",
-    "emotion_sad": "<|emotion:sad|>",
-    "emotion_angry": "<|emotion:angry|>",
-    "emotion_surprised": "<|emotion:surprised|>",
-    "emotion_fearful": "<|emotion:fearful|>",
-    "emotion_disgusted": "<|emotion:disgusted|>",
-    "emotion_calm": "<|emotion:calm|>",
-    "emotion_excited": "<|emotion:excited|>",
-    "emotion_curious": "<|emotion:curious|>",
-    "emotion_sympathetic": "<|emotion:sympathetic|>",
-    "emotion_confident": "<|emotion:confident|>",
-
-    # === HIDDEN PROSODY MARKERS (for TTS - stripped from text output) ===
-    # These control speech characteristics like speed, pitch, volume
-    # Format: <|prosody:TYPE|> - hidden from user, used by TTS decoder
-    "prosody_start": "<|prosody|>",
-    "prosody_end": "<|/prosody|>",
-    "prosody_fast": "<|prosody:fast|>",
-    "prosody_slow": "<|prosody:slow|>",
-    "prosody_normal_speed": "<|prosody:normal_speed|>",
-    "prosody_loud": "<|prosody:loud|>",
-    "prosody_soft": "<|prosody:soft|>",
-    "prosody_whisper": "<|prosody:whisper|>",
-    "prosody_normal_volume": "<|prosody:normal_volume|>",
-    "prosody_high_pitch": "<|prosody:high_pitch|>",
-    "prosody_low_pitch": "<|prosody:low_pitch|>",
-    "prosody_normal_pitch": "<|prosody:normal_pitch|>",
-    "prosody_emphasis": "<|prosody:emphasis|>",
-    "prosody_pause_short": "<|prosody:pause_short|>",
-    "prosody_pause_long": "<|prosody:pause_long|>",
+    
+    # === AUDIO PROMPTING (for zero-shot voice cloning) ===
+    "audio_prompt_start": "<|audio_prompt|>",
+    "audio_prompt_end": "<|/audio_prompt|>",
+    "speaker_ref_start": "<|speaker_ref|>",
+    "speaker_ref_end": "<|/speaker_ref|>",
     
     # === STRUCTURED DATA TOKENS ===
     # Tables (markdown/CSV)
@@ -642,19 +611,8 @@ UNCERTAINTY_TOKENS = {
 }
 
 # Hidden tokens that should be stripped from user-visible output
-# These are used internally by the model (e.g., for TTS) but not shown to users
+# These are used internally by the model but not shown to users
 HIDDEN_TOKENS = [
-    # Emotion tokens - control TTS emotional tone
-    "emotion_start", "emotion_end",
-    "emotion_neutral", "emotion_happy", "emotion_sad", "emotion_angry",
-    "emotion_surprised", "emotion_fearful", "emotion_disgusted", "emotion_calm",
-    "emotion_excited", "emotion_curious", "emotion_sympathetic", "emotion_confident",
-    # Prosody tokens - control TTS speech characteristics
-    "prosody_start", "prosody_end",
-    "prosody_fast", "prosody_slow", "prosody_normal_speed",
-    "prosody_loud", "prosody_soft", "prosody_whisper", "prosody_normal_volume",
-    "prosody_high_pitch", "prosody_low_pitch", "prosody_normal_pitch",
-    "prosody_emphasis", "prosody_pause_short", "prosody_pause_long",
     # Internal verification tokens - used for self-checking but not shown to users
     "verify_start", "verify_end",
     "fact_check", "self_correct",
@@ -668,6 +626,9 @@ HIDDEN_TOKENS = [
     "projection_start", "projection_end",
     "state_begin", "state_end",
     "modal_switch", "modal_switch_end",
+    # Audio prompting (internal)
+    "audio_prompt_start", "audio_prompt_end",
+    "speaker_ref_start", "speaker_ref_end",
 ]
 
 # Sequence control tokens
@@ -930,25 +891,24 @@ def get_hidden_tokens():
     """Get all hidden tokens that should be stripped from user-visible output.
     
     Includes:
-    - Emotion tokens (TTS emotional tone control)
-    - Prosody tokens (TTS speech characteristics)
     - Internal verification tokens (fact_check, self_correct, etc.)
     - Internal grounding markers (grounded, ungrounded, knowledge boundaries)
     - Internal control signals (encoder, decoder, projection, modal_switch)
+    - Audio prompting tokens (internal)
     """
     return {k: SPECIAL_TOKENS[k] for k in HIDDEN_TOKENS if k in SPECIAL_TOKENS}
 
 
-def get_emotion_tokens():
-    """Get all emotion tokens for TTS."""
-    emotion_keys = [k for k in SPECIAL_TOKENS.keys() if k.startswith('emotion_')]
-    return {k: SPECIAL_TOKENS[k] for k in emotion_keys}
-
-
-def get_prosody_tokens():
-    """Get all prosody tokens for TTS."""
-    prosody_keys = [k for k in SPECIAL_TOKENS.keys() if k.startswith('prosody_')]
-    return {k: SPECIAL_TOKENS[k] for k in prosody_keys}
+def get_audio_prompting_tokens():
+    """Get all audio prompting tokens for zero-shot voice cloning."""
+    audio_keys = [
+        'audio_prompt_start', 'audio_prompt_end',
+        'speaker_ref_start', 'speaker_ref_end',
+        'listen_start', 'listen_end',
+        'speak_start', 'speak_end',
+        'audio_start', 'audio_end',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in audio_keys if k in SPECIAL_TOKENS}
 
 
 def get_sequence_tokens():
@@ -961,10 +921,10 @@ def strip_hidden_tokens(text: str) -> str:
     Remove hidden tokens from text for user display.
     
     Strips all tokens in HIDDEN_TOKENS including:
-    - Emotion/prosody tokens (TTS control)
     - Internal verification tokens (fact_check, self_correct, etc.)
     - Internal grounding markers (grounded, ungrounded, knowledge boundaries)
     - Internal control signals (encoder, decoder, projection, modal_switch)
+    - Audio prompting tokens (internal)
     """
     import re
     hidden_values = get_hidden_tokens().values()
@@ -1183,11 +1143,9 @@ def print_special_tokens():
                       'note_start', 'note_end', 'step_start', 'step_end',
                       'reflection_start', 'reflection_end', 'hypothesis_start', 'hypothesis_end',
                       'conclusion_start', 'conclusion_end'],
-        'Voice': ['listen_start', 'listen_end', 'speak_start', 'speak_end', 'audio_start', 'audio_end'],
-        'Emotion (Hidden)': ['emotion_neutral', 'emotion_happy', 'emotion_sad', 'emotion_angry',
-                            'emotion_surprised', 'emotion_calm', 'emotion_excited', 'emotion_curious'],
-        'Prosody (Hidden)': ['prosody_fast', 'prosody_slow', 'prosody_loud', 'prosody_soft',
-                            'prosody_high_pitch', 'prosody_low_pitch', 'prosody_emphasis'],
+        'Voice/Audio': ['listen_start', 'listen_end', 'speak_start', 'speak_end', 
+                       'audio_start', 'audio_end', 'audio_prompt_start', 'audio_prompt_end',
+                       'speaker_ref_start', 'speaker_ref_end'],
     }
     for cat, keys in categories.items():
         tokens = [SPECIAL_TOKENS[k] for k in keys if k in SPECIAL_TOKENS]

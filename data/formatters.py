@@ -16,21 +16,12 @@ class MultimodalFormatter:
     Token structure (ALWAYS used):
     - <|bos|> ... <|eos|> wraps entire sequence
     - <|system|>, <|user|>, <|assistant|> for conversation roles
-    - Emotion/prosody tokens are embedded in assistant responses for TTS
+    - Audio prompting tokens for zero-shot voice cloning
     """
 
     def __init__(self, tokens: Dict[str, str], image_processor=None):
         self.t = tokens
         self.image_processor = image_processor
-        
-        # Emotion options for TTS training
-        self.emotions = ['neutral', 'happy', 'sad', 'calm', 'excited', 'curious', 'confident']
-        # Prosody options for TTS training  
-        self.prosody_options = {
-            'speed': ['normal_speed', 'fast', 'slow'],
-            'volume': ['normal_volume', 'loud', 'soft'],
-            'pitch': ['normal_pitch', 'high_pitch', 'low_pitch'],
-        }
     
     def _wrap_sequence(self, text: str) -> str:
         """Wrap text with BOS/EOS tokens. ALWAYS applied."""
@@ -47,39 +38,13 @@ class MultimodalFormatter:
         text = "\n".join(parts)
         return self._wrap_sequence(text) if wrap else text
     
-    def _add_emotion_token(self, text: str, emotion: str = None) -> str:
-        """Add emotion token for TTS training."""
-        if emotion is None:
-            return text
-        emotion_key = f"emotion_{emotion}"
-        if emotion_key in self.t:
-            return f"{self.t[emotion_key]}{text}"
-        return text
-    
-    def _add_prosody_tokens(self, text: str, speed: str = None, volume: str = None, pitch: str = None) -> str:
-        """Add prosody tokens for TTS training."""
-        prefix = ""
-        if speed and f"prosody_{speed}" in self.t:
-            prefix += self.t[f"prosody_{speed}"]
-        if volume and f"prosody_{volume}" in self.t:
-            prefix += self.t[f"prosody_{volume}"]
-        if pitch and f"prosody_{pitch}" in self.t:
-            prefix += self.t[f"prosody_{pitch}"]
-        return f"{prefix}{text}" if prefix else text
-    
-    def _get_random_emotion(self) -> str:
-        """Get a random emotion for training variety."""
-        return random.choice(self.emotions)
-    
-    def _get_random_prosody(self) -> Dict[str, str]:
-        """Get random prosody settings for training variety."""
-        return {
-            'speed': random.choice(self.prosody_options['speed']),
-            'volume': random.choice(self.prosody_options['volume']),
-            'pitch': random.choice(self.prosody_options['pitch']),
-        }
+    def _wrap_with_audio_prompt(self, text: str, has_speaker_ref: bool = False) -> str:
+        """Wrap text with audio prompting tokens for zero-shot voice cloning."""
+        if has_speaker_ref:
+            return f"{self.t.get('speaker_ref_start', '')}{text}{self.t.get('speaker_ref_end', '')}"
+        return f"{self.t.get('audio_prompt_start', '')}{text}{self.t.get('audio_prompt_end', '')}"
 
-    # === NEW TOKEN HELPER METHODS ===
+    # === TOKEN HELPER METHODS ===
     
     def _wrap_with_planning(self, plan_steps: List[str], content: str) -> str:
         """Wrap content with planning tokens showing the steps before execution."""
