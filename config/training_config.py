@@ -77,6 +77,11 @@ class TrainingConfig:
     # Chain-of-thought training settings
     cot_loss_weight: float = 1.5  # Higher weight for reasoning tokens
     
+    # Special token loss weights (SOTA: weighted loss for important token groups)
+    tool_loss_weight: float = 1.3  # Tool calling tokens (critical for agentic behavior)
+    anti_hallucination_loss_weight: float = 1.2  # Uncertainty, citations tokens
+    code_exec_loss_weight: float = 1.2  # Code execution tokens
+    
     # Modality loss weights (SOTA: balanced multi-task learning)
     llm_loss_weight: float = 1.0
     image_diffusion_loss_weight: float = 0.1
@@ -85,15 +90,18 @@ class TrainingConfig:
     tts_loss_weight: float = 0.1
     moe_aux_loss_weight: float = 0.02
     
-    # Video training settings
-    temporal_consistency_weight: float = 0.01  # Encourage smooth motion
+    # Video training settings (TODO: implement temporal consistency in trainer)
+    # temporal_consistency_weight: float = 0.01  # Encourage smooth motion - NOT YET IMPLEMENTED
     
-    # Classifier-free guidance training
-    cfg_dropout_rate: float = 0.1  # Probability of dropping context during training
+    # Classifier-free guidance training (TODO: implement CFG dropout in trainer)
+    # cfg_dropout_rate: float = 0.1  # Probability of dropping context - NOT YET IMPLEMENTED
+    
+    # Debug settings
+    debug_nan_checks: bool = False  # Enable expensive NaN/Inf checks (causes CPU-GPU sync)
 
-    # Checkpointing
-    save_steps: int = 500
-    logging_steps: int = 50
+    # Checkpointing & Logging
+    # save_steps: int = 500  # NOT USED - checkpoints saved per epoch instead
+    logging_steps: int = 50  # Used in trainer_state.json for HuggingFace compatibility
     
     # Evaluation/validation settings
     # Eval runs at END of each epoch (not at step intervals)
@@ -161,12 +169,13 @@ class TrainingConfig:
         print(f"   Zero Grad set_to_none: {self.set_to_none}")
         print(f"\n🎯 Loss Weights:")
         print(f"   LLM: {self.llm_loss_weight}")
-        print(f"   CoT: {self.cot_loss_weight}x")
+        print(f"   CoT: {self.cot_loss_weight}x | Tool: {self.tool_loss_weight}x | Anti-Hallucination: {self.anti_hallucination_loss_weight}x | Code: {self.code_exec_loss_weight}x")
         print(f"   Image Diffusion: {self.image_diffusion_loss_weight}")
         print(f"   Video Diffusion: {self.video_diffusion_loss_weight}")
-        print(f"   ASR: {self.asr_loss_weight}")
-        print(f"   TTS: {self.tts_loss_weight}")
+        print(f"   ASR: {self.asr_loss_weight} | TTS: {self.tts_loss_weight}")
         print(f"   MoE Aux: {self.moe_aux_loss_weight}")
+        print(f"\n🔧 Debug Settings:")
+        print(f"   NaN checks: {self.debug_nan_checks}")
         print(f"\n🔧 LoRA+ Settings:")
         print(f"   Enabled: {self.use_lora_plus}")
         print(f"   LR Ratio (B/A): {self.lora_plus_lr_ratio}x")
@@ -204,15 +213,16 @@ class TrainingConfig:
             'use_lora_plus': self.use_lora_plus,
             'lora_plus_lr_ratio': self.lora_plus_lr_ratio,
             'cot_loss_weight': self.cot_loss_weight,
+            'tool_loss_weight': self.tool_loss_weight,
+            'anti_hallucination_loss_weight': self.anti_hallucination_loss_weight,
+            'code_exec_loss_weight': self.code_exec_loss_weight,
             'llm_loss_weight': self.llm_loss_weight,
             'image_diffusion_loss_weight': self.image_diffusion_loss_weight,
             'video_diffusion_loss_weight': self.video_diffusion_loss_weight,
             'asr_loss_weight': self.asr_loss_weight,
             'tts_loss_weight': self.tts_loss_weight,
             'moe_aux_loss_weight': self.moe_aux_loss_weight,
-            'temporal_consistency_weight': self.temporal_consistency_weight,
-            'cfg_dropout_rate': self.cfg_dropout_rate,
-            'save_steps': self.save_steps,
+            'debug_nan_checks': self.debug_nan_checks,
             'logging_steps': self.logging_steps,
             'max_per_dataset_eval': self.max_per_dataset_eval,
             'device': self.device,
