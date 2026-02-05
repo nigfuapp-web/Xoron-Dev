@@ -6,6 +6,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red?style=for-the-badge&logo=pytorch)
+![Version](https://img.shields.io/badge/Version-2.0_SOTA-purple?style=for-the-badge)
 
 **A unified multimodal AI model that can understand and generate text, images, video, and audio.**
 
@@ -15,26 +16,49 @@
 
 ---
 
+## 🆕 Version 2.0 - SOTA Architecture Upgrade
+
+### LLM Backbone
+- **MLA (Multi-Head Latent Attention)** - Compressed KV cache for memory efficiency
+- **YaRN/LongRoPE** - Superior 128K+ context extrapolation
+- **Ring Attention** - Distributed FP16 sequence processing (replaces sliding window)
+- **Aux-Lossless MoE** - No auxiliary loss, load balance through architecture
+- **Isolated Shared Expert** - Dedicated always-active expert
+
+### Image Generation
+- **MoE-DiT** - Diffusion Transformer with patch-based MoE
+- **Flow Matching** - Replaces DDPM/DDIM for superior quality
+- **2D-RoPE** - Flexible aspect ratio support
+- **Symmetric Dual-Stream Attention** - SD3/Flux-style parallel streams
+
+### Video Generation
+- **Flow Matching + CFG** - Optimal transport paths
+- **3D-RoPE** - Flexible (x, y, t) positional encodings
+- **Temporal Expert Routing** - Motion-aware MoE
+- **3D Causal Transformers** - Autoregressive video generation
+
+---
+
 ## 🌟 Features
 
 ### 🧠 **Multimodal Understanding**
 - **Vision**: Image understanding via SigLIP-2 encoder (384x384)
 - **Video**: Temporal video understanding with up to 32 frames
 - **Audio**: Speech-to-text (ASR) with Conformer encoder
-- **Text**: 128K context length with sliding window attention
+- **Text**: 128K context length with Ring Attention (FP16)
 
 ### 🎨 **Multimodal Generation**
-- **Image Generation**: MobileDiffusion with classifier-free guidance
-- **Video Generation**: Temporal-aware video diffusion
+- **Image Generation**: MoE-DiT with Flow Matching + Dual-Stream Attention
+- **Video Generation**: 3D Causal Transformers with Temporal MoE
 - **Text-to-Speech**: Neural TTS with emotion and speaker control
-- **Text Generation**: MoE-based LLM with chain-of-thought reasoning
+- **Text Generation**: MLA-based MoE LLM with chain-of-thought reasoning
 
 ### ⚡ **SOTA Training Features**
-- **Mixture of Experts (MoE)**: 8 experts with DeepSeek-style shared expert
+- **Mixture of Experts (MoE)**: 8 experts with Aux-Lossless load balancing + Isolated Shared Expert
 - **LoRA+**: Efficient fine-tuning with rank-stabilized scaling
-- **Flash Attention**: Memory-efficient attention computation
-- **Weighted Loss**: Higher weights for reasoning, tool-calling, and anti-hallucination tokens
-- **Multi-GPU Support**: Model parallelism for distributed training
+- **Ring Attention**: Memory-efficient 128K context with FP16 stability
+- **Flow Matching**: Superior generation quality for image/video
+- **Multi-GPU Support**: Model parallelism optimized for 2x T4 GPUs (Kaggle)
 
 ### 🛠️ **Agentic Capabilities**
 - **Tool Calling**: Function/tool invocation with structured outputs
@@ -46,11 +70,11 @@
 
 ## 🏗️ Architecture
 
-### High-Level Overview
+### High-Level Overview (v2.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           XORON-DEV MULTIMODAL MODEL                        │
+│                      XORON-DEV v2.0 MULTIMODAL MODEL                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
@@ -73,19 +97,24 @@
 │                                │                                           │
 │                                ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                     MoE LLM Backbone                                │   │
+│  │                     MoE LLM Backbone (v2.0 SOTA)                    │   │
 │  │  ┌─────────────────────────────────────────────────────────────┐   │   │
 │  │  │  12 Transformer Layers (1024d, 16 heads)                    │   │   │
 │  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  MoE Layer (every 2nd layer)                        │    │   │   │
-│  │  │  │  • 8 Routed Experts (top-2 routing)                 │    │   │   │
-│  │  │  │  • 1 Shared Expert (DeepSeek-style)                 │    │   │   │
-│  │  │  │  • Load Balancing Auxiliary Loss                    │    │   │   │
+│  │  │  │  MLA (Multi-Head Latent Attention)                  │    │   │   │
+│  │  │  │  • Compressed KV cache (512 latent dim)             │    │   │   │
+│  │  │  │  • YaRN/LongRoPE for 128K+ extrapolation           │    │   │   │
 │  │  │  └─────────────────────────────────────────────────────┘    │   │   │
 │  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  Sliding Window Attention (4096 tokens)             │    │   │   │
-│  │  │  │  • Efficient 128K context support                   │    │   │   │
-│  │  │  │  • Flash Attention enabled                          │    │   │   │
+│  │  │  │  Aux-Lossless MoE (every 2nd layer)                 │    │   │   │
+│  │  │  │  • 8 Routed Experts (top-2 routing)                 │    │   │   │
+│  │  │  │  • 1 Isolated Shared Expert (always active)         │    │   │   │
+│  │  │  │  • No auxiliary loss needed                         │    │   │   │
+│  │  │  └─────────────────────────────────────────────────────┘    │   │   │
+│  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
+│  │  │  │  Ring Attention (4096 chunk size)                   │    │   │   │
+│  │  │  │  • Efficient 128K context with FP16                 │    │   │   │
+│  │  │  │  • Distributed sequence processing                  │    │   │   │
 │  │  │  └─────────────────────────────────────────────────────┘    │   │   │
 │  │  └─────────────────────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────┬───────────────────────────────────────┘   │
@@ -95,7 +124,9 @@
 │  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐            │
 │  │    Image    │        │    Video    │        │    Audio    │            │
 │  │  Generator  │        │  Generator  │        │   Decoder   │            │
-│  │ (Diffusion) │        │ (Diffusion) │        │   (TTS)     │            │
+│  │  (MoE-DiT)  │        │(3D Causal)  │        │   (TTS)     │            │
+│  │ Flow Match  │        │ Flow Match  │        │             │            │
+│  │ Dual-Stream │        │  3D-RoPE    │        │             │            │
 │  └─────────────┘        └─────────────┘        └─────────────┘            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -117,19 +148,21 @@
 
 ## 📊 Model Configuration
 
-### Default Configuration
+### Default Configuration (v2.0)
 
 | Component | Configuration |
 |-----------|--------------|
-| **LLM Backbone** | 1024 hidden, 12 layers, 16 heads |
-| **Context Length** | 128K tokens (sliding window: 4096) |
-| **MoE** | 8 experts, top-2 routing, shared expert |
+| **LLM Backbone** | 1024 hidden, 12 layers, 16 heads, MLA attention |
+| **Context Length** | 128K tokens (Ring Attention: 4096 chunks) |
+| **Position Encoding** | YaRN/LongRoPE for extrapolation |
+| **MoE** | 8 experts, top-2 routing, Aux-Lossless + Isolated Shared Expert |
 | **Vision Encoder** | SigLIP-SO400M (384x384) |
 | **Video Frames** | Up to 32 frames |
-| **Image Generation** | 256x256, 20 inference steps |
-| **Video Generation** | 256x256, 16 frames |
+| **Image Generation** | MoE-DiT + Flow Matching, 256x256, 50 steps, Dual-Stream |
+| **Video Generation** | 3D Causal Transformer + Flow Matching, 256x256, 16 frames |
 | **Audio** | 16kHz, 80 mel bins |
 | **Vocabulary** | 151,643 tokens (Qwen2.5) |
+| **Word Embeddings** | Tied (input/output share weights) |
 
 ### Special Tokens
 
@@ -406,7 +439,7 @@ export_to_gguf(
 
 ## 🔧 Configuration Reference
 
-### XoronConfig
+### XoronConfig (v2.0)
 
 ```python
 @dataclass
@@ -418,27 +451,35 @@ class XoronConfig:
     intermediate_size: int = 2048
     vocab_size: int = 151643
     max_position_embeddings: int = 131072  # 128K
+    tie_word_embeddings: bool = True  # Share input/output embeddings
     
-    # Sliding Window
-    use_sliding_window: bool = True
-    sliding_window: int = 4096
+    # Ring Attention (replaces Sliding Window)
+    use_ring_attention: bool = True
+    ring_attention_chunk_size: int = 4096  # FP16 compatible
     
-    # MoE
+    # MoE (Aux-Lossless)
     use_moe: bool = True
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2
-    use_shared_expert: bool = True  # DeepSeek-style
+    use_shared_expert: bool = True  # Isolated Shared Expert
     
     # Vision
     vision_model_name: str = "google/siglip-so400m-patch14-384"
     num_vision_tokens: int = 64
     max_video_frames: int = 32
     
-    # Generation
+    # Generation (Flow Matching)
     enable_generation: bool = True
     generation_image_size: int = 256
     generation_cfg_scale: float = 7.5
+    generation_use_flow_matching: bool = True  # MoE-DiT + Flow Matching
+    generation_inference_steps: int = 50
+    generation_num_experts: int = 4
+    
+    # Video Generation (3D Causal)
+    generation_video_use_flow_matching: bool = True
+    generation_video_num_experts: int = 4
     
     # LoRA
     use_lora: bool = True
