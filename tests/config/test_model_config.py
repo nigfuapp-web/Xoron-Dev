@@ -77,12 +77,17 @@ class TestXoronConfig(unittest.TestCase):
         self.assertEqual(config.generation_num_frames, 16)
         
     def test_audio_configuration(self):
-        """Test audio-related configuration."""
+        """Test SOTA audio-related configuration."""
         config = XoronConfig()
         
         self.assertEqual(config.audio_sample_rate, 16000)
         self.assertEqual(config.audio_n_mels, 80)
-        self.assertEqual(config.audio_num_emotions, 13)
+        self.assertEqual(config.audio_num_speakers, 256)
+        self.assertTrue(config.use_raw_waveform)
+        self.assertEqual(config.audio_kv_lora_rank, 256)
+        self.assertEqual(config.audio_speaker_embed_dim, 256)
+        self.assertTrue(config.use_mas)
+        self.assertTrue(config.use_in_context_audio_prompting)
         
     def test_post_init_validation_hidden_size(self):
         """Test __post_init__ validates hidden_size divisibility."""
@@ -138,11 +143,14 @@ class TestXoronConfig(unittest.TestCase):
         self.assertEqual(original.use_moe, restored.use_moe)
         
     def test_sliding_window_configuration(self):
-        """Test sliding window attention configuration."""
+        """Test Ring Attention configuration (replaces sliding window)."""
         config = XoronConfig()
         
-        self.assertTrue(config.use_sliding_window)
-        self.assertEqual(config.sliding_window, 4096)
+        # Ring Attention is the new default (sliding window deprecated)
+        self.assertTrue(config.use_ring_attention)
+        self.assertEqual(config.ring_attention_chunk_size, 4096)
+        self.assertFalse(config.use_sliding_window)  # Deprecated
+        self.assertEqual(config.sliding_window, 4096)  # Legacy compat
         
     def test_cross_attention_configuration(self):
         """Test cross-attention configuration."""

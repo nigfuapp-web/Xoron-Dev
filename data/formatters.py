@@ -22,6 +22,20 @@ class MultimodalFormatter:
     def __init__(self, tokens: Dict[str, str], image_processor=None):
         self.t = tokens
         self.image_processor = image_processor
+        
+        # Emotion list for TTS/voice synthesis
+        self.emotions = [
+            'neutral', 'happy', 'sad', 'angry', 'surprised',
+            'fearful', 'disgusted', 'excited', 'calm', 'whisper',
+            'amused', 'confused', 'curious'
+        ]
+        
+        # Prosody options for TTS
+        self.prosody_options = {
+            'speed': ['fast', 'slow', 'normal_speed'],
+            'volume': ['loud', 'soft', 'normal_volume'],
+            'pitch': ['high_pitch', 'low_pitch', 'normal_pitch'],
+        }
     
     def _wrap_sequence(self, text: str) -> str:
         """Wrap text with BOS/EOS tokens. ALWAYS applied."""
@@ -125,6 +139,42 @@ class MultimodalFormatter:
         if to_scene:
             parts.append(f"To: {to_scene}")
         return " ".join(parts)
+    
+    # === EMOTION AND PROSODY METHODS ===
+    
+    def _add_emotion_token(self, text: str, emotion: Optional[str]) -> str:
+        """Add emotion token prefix to text for TTS/voice synthesis."""
+        if emotion is None:
+            return text
+        token_key = f"emotion_{emotion}"
+        if token_key in self.t:
+            return f"{self.t[token_key]}{text}"
+        return text
+    
+    def _get_random_emotion(self) -> str:
+        """Get a random emotion from the emotions list."""
+        return random.choice(self.emotions)
+    
+    def _add_prosody_tokens(self, text: str, speed: str = None, 
+                           volume: str = None, pitch: str = None) -> str:
+        """Add prosody tokens (speed, volume, pitch) to text for TTS."""
+        prefixes = []
+        if speed and f"prosody_{speed}" in self.t:
+            prefixes.append(self.t[f"prosody_{speed}"])
+        if volume and f"prosody_{volume}" in self.t:
+            prefixes.append(self.t[f"prosody_{volume}"])
+        if pitch and f"prosody_{pitch}" in self.t:
+            prefixes.append(self.t[f"prosody_{pitch}"])
+        prefix = "".join(prefixes)
+        return f"{prefix}{text}" if prefix else text
+    
+    def _get_random_prosody(self) -> Dict[str, str]:
+        """Get random prosody settings for TTS."""
+        return {
+            'speed': random.choice(self.prosody_options['speed']),
+            'volume': random.choice(self.prosody_options['volume']),
+            'pitch': random.choice(self.prosody_options['pitch']),
+        }
     
     def _wrap_with_table(self, headers: List[str], rows: List[List[str]]) -> str:
         """Format data as a table with proper tokens."""

@@ -439,7 +439,7 @@ class TestIsolatedSharedExpert(unittest.TestCase):
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
 class TestAuxLosslessMoELayer(unittest.TestCase):
-    """Test cases for AuxLosslessMoELayer."""
+    """Test cases for AuxLosslessMoELayer (Aux-Lossless with Isolated Shared Expert)."""
     
     def setUp(self):
         """Set up test fixtures."""
@@ -452,7 +452,7 @@ class TestAuxLosslessMoELayer(unittest.TestCase):
             hidden_size=256,
             intermediate_size=1024,
             num_experts=8,
-            top_k=2,
+            num_experts_per_tok=2,  # SOTA: uses num_experts_per_tok not top_k
         )
         
         self.assertEqual(len(moe.experts), 8)
@@ -465,7 +465,7 @@ class TestAuxLosslessMoELayer(unittest.TestCase):
             hidden_size=256,
             intermediate_size=1024,
             num_experts=8,
-            top_k=2,
+            num_experts_per_tok=2,  # SOTA: uses num_experts_per_tok
         )
         hidden_states = torch.randn(2, 64, 256)
         
