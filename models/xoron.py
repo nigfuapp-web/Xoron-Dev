@@ -581,6 +581,7 @@ class XoronMultimodalModel(nn.Module):
         best_loss: float = float('inf'),
         sharded: bool = False,
         max_shard_size: int = 2 * 1024 * 1024 * 1024,  # 2GB default
+        save_separately: bool = True,  # Default to component-wise saving
     ):
         """
         Save model and optionally training state for resuming.
@@ -594,13 +595,19 @@ class XoronMultimodalModel(nn.Module):
             best_loss: Best loss achieved so far
             sharded: If True, save model in multiple .safetensors files
             max_shard_size: Maximum size per shard in bytes (default 2GB)
+            save_separately: If True, save each component as separate .safetensors files (default)
+                           This avoids safetensors issues with shared storage in LSTM weights
         """
         os.makedirs(path, exist_ok=True)
         
-        if sharded:
+        if save_separately:
+            # Save components separately - handles LSTM shared storage properly
+            self._save_components_safe(path)
+        elif sharded:
             self._save_sharded(path, max_shard_size)
         else:
-            save_model(self, os.path.join(path, "model.safetensors"))
+            # Fallback with clone to handle shared storage
+            self._save_single_file_safe(path)
 
         config_dict = self.config.to_dict()
         config_dict['has_audio_encoder'] = True
@@ -625,6 +632,106 @@ class XoronMultimodalModel(nn.Module):
             print(f"   💾 Training state saved (step {global_step}, epoch {epoch})")
 
         print(f"✅ Model saved to {path}")
+
+    def _save_single_file_safe(self, path: str):
+        """
+        Save model as single safetensors file with cloned tensors.
+        Cloning breaks shared storage that causes safetensors errors.
+        
+        Args:
+            path: Directory to save the model
+        """
+        from safetensors.torch import save_file
+        
+        state_dict = self.state_dict()
+        
+        # Clone all tensors and make contiguous to break shared storage
+        # This fixes LSTM weight sharing issues
+        safe_state_dict = {}
+        for key, tensor in state_dict.items():
+            safe_state_dict[key] = tensor.clone().contiguous()
+        
+        save_file(safe_state_dict, os.path.join(path, "model.safetensors"))
+        size_mb = sum(t.numel() * t.element_size() for t in safe_state_dict.values()) / (1024 * 1024)
+        print(f"   💾 Saved model.safetensors ({size_mb:.1f} MB)")
+
+    def _save_components_safe(self, path: str):
+        """
+        Save model components as separate .safetensors files with cloned tensors.
+        This is the default and most robust saving method that:
+        1. Handles LSTM weight sharing issues in safetensors
+        2. Allows surgical component loading/updates
+        3. Better for debugging and inspection
+        
+        Args:
+            path: Directory to save component files
+        """
+        from safetensors.torch import save_file
+        
+        os.makedirs(path, exist_ok=True)
+        
+        component_map = {
+            'llm': self.llm,
+            'vision_encoder': self.vision_encoder,
+            'video_encoder': self.video_encoder,
+            'audio_encoder': self.audio_encoder,
+            'audio_decoder': self.audio_decoder,
+            'projector': self.projector,
+            'audio_projector': self.audio_projector,
+        }
+        
+        if self.cross_attention_layers is not None:
+            component_map['cross_attention'] = self.cross_attention_layers
+        if self.generator is not None:
+            component_map['generator'] = self.generator
+        if self.video_generator is not None:
+            component_map['video_generator'] = self.video_generator
+        
+        saved_files = []
+        total_size = 0
+        
+        for comp_name, component in component_map.items():
+            if component is None:
+                continue
+            
+            comp_state = component.state_dict()
+            if not comp_state:
+                continue
+            
+            # Clone and make contiguous to break shared storage (LSTM fix)
+            safe_comp_state = {}
+            for key, tensor in comp_state.items():
+                safe_comp_state[key] = tensor.clone().contiguous()
+            
+            comp_path = os.path.join(path, f"{comp_name}.safetensors")
+            save_file(safe_comp_state, comp_path)
+            
+            size_mb = sum(t.numel() * t.element_size() for t in safe_comp_state.values()) / (1024 * 1024)
+            total_size += size_mb
+            print(f"   💾 Saved {comp_name}: {size_mb:.1f} MB")
+            saved_files.append(comp_name)
+        
+        # Save modality markers separately (clone for safety)
+        markers = {
+            'image_start': self.image_start.data.clone().contiguous(),
+            'image_end': self.image_end.data.clone().contiguous(),
+            'video_start': self.video_start.data.clone().contiguous(),
+            'video_end': self.video_end.data.clone().contiguous(),
+            'audio_start': self.audio_start.data.clone().contiguous(),
+            'audio_end': self.audio_end.data.clone().contiguous(),
+        }
+        save_file(markers, os.path.join(path, "modality_markers.safetensors"))
+        print(f"   💾 Saved modality_markers")
+        
+        # Save component manifest
+        manifest = {
+            "components": saved_files + ["modality_markers"],
+            "save_format": "components",  # Mark as component-based save
+        }
+        with open(os.path.join(path, "components.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        
+        print(f"   📋 Total size: {total_size:.1f} MB across {len(saved_files)} components")
 
     def _save_sharded(self, path: str, max_shard_size: int):
         """
@@ -692,8 +799,8 @@ class XoronMultimodalModel(nn.Module):
             shard_name = f"model-{i+1:05d}-of-{total_shards:05d}.safetensors"
             shard_path = os.path.join(path, shard_name)
             
-            # Convert to contiguous for safetensors
-            shard_contiguous = {k: v.contiguous() for k, v in shard.items()}
+            # Clone and convert to contiguous to fix LSTM shared storage issue
+            shard_contiguous = {k: v.clone().contiguous() for k, v in shard.items()}
             save_file(shard_contiguous, shard_path)
             
             for key in shard.keys():
@@ -721,6 +828,8 @@ class XoronMultimodalModel(nn.Module):
         """
         Save model components as separate .safetensors files.
         Useful for surgical component updates and debugging.
+        
+        NOTE: This method now clones tensors to handle LSTM shared storage issues.
         
         Args:
             path: Directory to save component files
@@ -756,8 +865,8 @@ class XoronMultimodalModel(nn.Module):
             if not comp_state:
                 continue
             
-            # Convert to contiguous
-            comp_state = {k: v.contiguous() for k, v in comp_state.items()}
+            # Clone and convert to contiguous to fix LSTM shared storage issue
+            comp_state = {k: v.clone().contiguous() for k, v in comp_state.items()}
             
             comp_path = os.path.join(path, f"{comp_name}.safetensors")
             save_file(comp_state, comp_path)
@@ -766,14 +875,14 @@ class XoronMultimodalModel(nn.Module):
             print(f"   💾 Saved {comp_name}: {size_mb:.1f} MB")
             saved_files.append(comp_name)
         
-        # Save modality markers separately
+        # Save modality markers separately (clone for safety)
         markers = {
-            'image_start': self.image_start.data.contiguous(),
-            'image_end': self.image_end.data.contiguous(),
-            'video_start': self.video_start.data.contiguous(),
-            'video_end': self.video_end.data.contiguous(),
-            'audio_start': self.audio_start.data.contiguous(),
-            'audio_end': self.audio_end.data.contiguous(),
+            'image_start': self.image_start.data.clone().contiguous(),
+            'image_end': self.image_end.data.clone().contiguous(),
+            'video_start': self.video_start.data.clone().contiguous(),
+            'video_end': self.video_end.data.clone().contiguous(),
+            'audio_start': self.audio_start.data.clone().contiguous(),
+            'audio_end': self.audio_end.data.clone().contiguous(),
         }
         save_file(markers, os.path.join(path, "modality_markers.safetensors"))
         print(f"   💾 Saved modality_markers")
@@ -833,9 +942,17 @@ class XoronMultimodalModel(nn.Module):
         # Create model
         model = cls(config, device_map=device_map)
         
-        # Load weights
+        # Check for component-based format first (default for new saves)
+        components_json = os.path.join(path, "components.json")
         model_path = os.path.join(path, "model.safetensors")
-        if os.path.exists(model_path):
+        
+        if os.path.exists(components_json):
+            # Load from component-based format (new default)
+            print(f"   📦 Loading from component-based format...")
+            model._load_components(path, strict=strict)
+            model.lora_applied = lora_was_applied
+            
+        elif os.path.exists(model_path):
             print(f"   📦 Loading weights from safetensors...")
             
             try:
@@ -957,6 +1074,90 @@ class XoronMultimodalModel(nn.Module):
         model._print_stats()
         
         return model
+
+    def _load_components(self, path: str, strict: bool = False):
+        """
+        Load model from component-based safetensors files.
+        
+        Args:
+            path: Directory containing component files
+            strict: If True, require exact match; if False, allow partial loading
+        """
+        from safetensors import safe_open
+        
+        # Component mapping from file to model attribute
+        component_map = {
+            'llm': self.llm,
+            'vision_encoder': self.vision_encoder,
+            'video_encoder': self.video_encoder,
+            'audio_encoder': self.audio_encoder,
+            'audio_decoder': self.audio_decoder,
+            'projector': self.projector,
+            'audio_projector': self.audio_projector,
+        }
+        
+        if self.cross_attention_layers is not None:
+            component_map['cross_attention'] = self.cross_attention_layers
+        if self.generator is not None:
+            component_map['generator'] = self.generator
+        if self.video_generator is not None:
+            component_map['video_generator'] = self.video_generator
+        
+        total_loaded = 0
+        total_params = sum(len(list(c.parameters())) for c in component_map.values() if c is not None)
+        
+        for comp_name, component in component_map.items():
+            if component is None:
+                continue
+                
+            comp_path = os.path.join(path, f"{comp_name}.safetensors")
+            if not os.path.exists(comp_path):
+                print(f"   ⚠️ Component file not found: {comp_name}.safetensors")
+                continue
+            
+            try:
+                checkpoint_state = {}
+                with safe_open(comp_path, framework="pt", device="cpu") as f:
+                    for key in f.keys():
+                        checkpoint_state[key] = f.get_tensor(key)
+                
+                if strict:
+                    component.load_state_dict(checkpoint_state)
+                    loaded = len(checkpoint_state)
+                else:
+                    # Filter by shape for non-strict loading
+                    model_state = component.state_dict()
+                    filtered_state = {}
+                    for key, tensor in checkpoint_state.items():
+                        if key in model_state and tensor.shape == model_state[key].shape:
+                            filtered_state[key] = tensor
+                    
+                    component.load_state_dict(filtered_state, strict=False)
+                    loaded = len(filtered_state)
+                
+                size_mb = sum(t.numel() * t.element_size() for t in checkpoint_state.values()) / (1024 * 1024)
+                print(f"   ✅ Loaded {comp_name}: {loaded} params ({size_mb:.1f} MB)")
+                total_loaded += loaded
+                
+            except Exception as e:
+                print(f"   ⚠️ Error loading {comp_name}: {e}")
+        
+        # Load modality markers
+        markers_path = os.path.join(path, "modality_markers.safetensors")
+        if os.path.exists(markers_path):
+            try:
+                with safe_open(markers_path, framework="pt", device="cpu") as f:
+                    self.image_start.data = f.get_tensor('image_start')
+                    self.image_end.data = f.get_tensor('image_end')
+                    self.video_start.data = f.get_tensor('video_start')
+                    self.video_end.data = f.get_tensor('video_end')
+                    self.audio_start.data = f.get_tensor('audio_start')
+                    self.audio_end.data = f.get_tensor('audio_end')
+                print(f"   ✅ Loaded modality_markers")
+            except Exception as e:
+                print(f"   ⚠️ Error loading modality_markers: {e}")
+        
+        print(f"   📋 Total: {total_loaded} parameters loaded across {len(component_map)} components")
 
     @staticmethod
     def load_training_state(path: str) -> Optional[Dict]:
