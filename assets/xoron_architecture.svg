@@ -74,10 +74,10 @@
 
   <!-- Title -->
   <text x="960" y="50" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="36" font-weight="bold">
-    <tspan fill="#3b82f6">XORON</tspan><tspan fill="#ffffff">-DEV</tspan><tspan fill="#a855f7"> v2.0</tspan>
+    <tspan fill="#3b82f6">XORON</tspan><tspan fill="#ffffff">-DEV</tspan>
   </text>
   <text x="960" y="80" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="16">
-    SOTA Multimodal AI • MLA • YaRN • Ring Attention • Flow Matching • 3D-RoPE
+    Unified Multimodal AI Architecture
   </text>
 
 
@@ -89,14 +89,14 @@
     <rect x="100" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_blue)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="102" y="162" width="216" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
     <text x="210" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">👁️ Vision Encoder</text>
-    <text x="210" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">SigLIP-SO400M</text>
-    <text x="210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384×384 → 64 tokens</text>
+    <text x="210" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">SigLIP-2 + TiTok + 2D-RoPE</text>
+    <text x="210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384² → 256 tokens</text>
     <rect x="348" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
     <rect x="350" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="352" y="162" width="216" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
     <text x="460" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Encoder</text>
-    <text x="460" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Temporal Processing</text>
-    <text x="460" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Up to 32 frames</text>
+    <text x="460" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D-RoPE + Temporal MoE</text>
+    <text x="460" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">3D Causal • 32 frames</text>
     <rect x="598" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
     <rect x="600" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="602" y="162" width="216" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
@@ -148,7 +148,7 @@
   <!-- Self-Attention -->
     <rect x="145" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
     <text x="230" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Self-Attention</text>
-    <text x="230" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Sliding Window: 4096</text>
+    <text x="230" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Ring Attention: 4096</text>
   
   <!-- FFN -->
     <rect x="325" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
@@ -173,7 +173,7 @@
     <text x="615" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Router</text>
     <text x="615" y="695" text-anchor="middle" fill="#f59e0b" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Top-2</text>
     <text x="615" y="711" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Routing</text>
-    <text x="615" y="727" text-anchor="middle" fill="#10b981" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Aux Loss</text>
+    <text x="615" y="727" text-anchor="middle" fill="#10b981" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Aux-Lossless</text>
   
   <!-- Expert Grid -->
 
@@ -196,7 +196,7 @@
 
   <!-- Shared Expert -->
     <rect x="680" y="762" width="198" height="28" rx="6" fill="#10b981"/>
-    <text x="779" y="780" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="bold">Isolated Shared Expert (Aux-Lossless)</text>
+    <text x="779" y="780" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="bold">Isolated Shared Expert</text>
 
 
   <!-- LoRA Section -->
@@ -233,14 +233,14 @@
     <rect x="660" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_blue)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="662" y="867" width="276" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
     <text x="800" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎨 Image Generator</text>
-    <text x="800" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">MoE-DiT + Flow Matching</text>
-    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">256×256 • 2D-RoPE • Dual-Stream</text>
+    <text x="800" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">MoE-DiT + Flow + Dual-Stream</text>
+    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">256² • 2D-RoPE • CFG=7.5</text>
     <rect x="978" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
     <rect x="980" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="982" y="867" width="276" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
     <text x="1120" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Generator</text>
-    <text x="1120" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D Causal + Flow Matching</text>
-    <text x="1120" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16 frames • 3D-RoPE • Temporal MoE</text>
+    <text x="1120" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D Causal + Flow + Temporal MoE</text>
+    <text x="1120" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16 frames • 3D-RoPE</text>
     <rect x="1298" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
     <rect x="1300" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="1302" y="867" width="276" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
@@ -262,7 +262,7 @@
 
   <!-- Footer -->
   <text x="960" y="1170" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="12">
-    Xoron-Dev v2.0 • MLA • YaRN • Ring Attention • Flow Matching • 3D-RoPE • github.com/nigfuapp-web/Xoron-Dev
+    Xoron-Dev • State-of-the-Art Multimodal AI • github.com/nigfuapp-web/Xoron-Dev
   </text>
 
 </svg>

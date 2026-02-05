@@ -195,14 +195,14 @@ def generate_svg() -> str:
     # Vision Encoder
     svg_parts.append(create_component_box(
         100, encoder_y, encoder_w, encoder_h,
-        'Vision Encoder', 'SigLIP-SO400M', '384×384 → 64 tokens',
+        'Vision Encoder', 'SigLIP-2 + TiTok + 2D-RoPE', '384² → 256 tokens',
         'grad_blue', '👁️'
     ))
     
     # Video Encoder
     svg_parts.append(create_component_box(
         100 + encoder_w + gap, encoder_y, encoder_w, encoder_h,
-        'Video Encoder', 'Temporal Processing', 'Up to 32 frames',
+        'Video Encoder', '3D-RoPE + Temporal MoE', '3D Causal • 32 frames',
         'grad_purple', '🎬'
     ))
     
@@ -285,7 +285,7 @@ def generate_svg() -> str:
   <!-- Self-Attention -->
 {rounded_rect(145, inner_y + 40, 170, 55, 8, '#0f0f15')}
 {text_element(230, inner_y + 62, 'Self-Attention', 13, COLORS['text_secondary'])}
-{text_element(230, inner_y + 80, 'Sliding Window: 4096', 10, COLORS['text_muted'])}
+{text_element(230, inner_y + 80, 'Ring Attention: 4096', 10, COLORS['text_muted'])}
   
   <!-- FFN -->
 {rounded_rect(325, inner_y + 40, 170, 55, 8, '#0f0f15')}
@@ -313,7 +313,7 @@ def generate_svg() -> str:
 {text_element(moe_inner_x + 65, inner_y + 62, 'Router', 13, COLORS['text_secondary'])}
 {text_element(moe_inner_x + 65, inner_y + 80, 'Top-2', 11, COLORS['accent_orange'])}
 {text_element(moe_inner_x + 65, inner_y + 96, 'Routing', 11, COLORS['text_muted'])}
-{text_element(moe_inner_x + 65, inner_y + 112, 'Aux Loss', 10, COLORS['accent_green'])}
+{text_element(moe_inner_x + 65, inner_y + 112, 'Aux-Lossless', 10, COLORS['accent_green'])}
   
   <!-- Expert Grid -->
 ''')
@@ -336,7 +336,7 @@ def generate_svg() -> str:
     svg_parts.append(f'''
   <!-- Shared Expert -->
 {rounded_rect(expert_start_x, shared_expert_y, shared_expert_width, 28, 6, COLORS['accent_green'])}
-{text_element(expert_start_x + shared_expert_width//2, shared_expert_y + 18, 'Shared Expert (DeepSeek)', 10, COLORS['text_primary'], 'bold')}
+{text_element(expert_start_x + shared_expert_width//2, shared_expert_y + 18, 'Isolated Shared Expert', 10, COLORS['text_primary'], 'bold')}
 ''')
 
     # LoRA Section
@@ -388,14 +388,14 @@ def generate_svg() -> str:
     # Image Generator
     svg_parts.append(create_component_box(
         out_start_x + out_w + out_gap, output_y, out_w, out_h,
-        'Image Generator', 'MobileDiffusion', '256×256 • CFG=7.5 • 20 steps',
+        'Image Generator', 'MoE-DiT + Flow + Dual-Stream', '256² • 2D-RoPE • CFG=7.5',
         'grad_blue', '🎨'
     ))
     
     # Video Generator
     svg_parts.append(create_component_box(
         out_start_x + 2*(out_w + out_gap), output_y, out_w, out_h,
-        'Video Generator', 'Temporal Diffusion', '16 frames • 256×256',
+        'Video Generator', '3D Causal + Flow + Temporal MoE', '16 frames • 3D-RoPE',
         'grad_purple', '🎬'
     ))
     

@@ -25,6 +25,18 @@
 - **Aux-Lossless MoE** - No auxiliary loss, load balance through architecture
 - **Isolated Shared Expert** - Dedicated always-active expert
 
+### Vision Encoder (NEW)
+- **SigLIP-2 Backbone** - Best-in-class visual features for MoE
+- **2D-RoPE** - Flexible aspect ratio support (matches generator)
+- **TiTok-style 1D Tokenization** - Efficient patch compression (576→256 tokens)
+- **Symmetric Dual-Stream Attention** - SD3/Flux-style parallel processing
+
+### Video Encoder (NEW)
+- **3D-RoPE** - Flexible (x, y, t) positional encodings
+- **3D Causal Attention** - Temporal understanding with spatial awareness
+- **Temporal-Aware Expert Routing** - Motion pattern MoE
+- **4-Layer 3D Transformer** - Full spatio-temporal processing
+
 ### Image Generation
 - **MoE-DiT** - Diffusion Transformer with patch-based MoE
 - **Flow Matching** - Replaces DDPM/DDIM for superior quality
@@ -42,10 +54,11 @@
 ## 🌟 Features
 
 ### 🧠 **Multimodal Understanding**
-- **Vision**: Image understanding via SigLIP-2 encoder (384x384)
-- **Video**: Temporal video understanding with up to 32 frames
+- **Vision**: SigLIP-2 encoder with 2D-RoPE + TiTok tokenization (384x384)
+- **Video**: 3D-RoPE encoder with Temporal MoE (up to 32 frames)
 - **Audio**: Speech-to-text (ASR) with Conformer encoder
 - **Text**: 128K context length with Ring Attention (FP16)
+
 
 ### 🎨 **Multimodal Generation**
 - **Image Generation**: MoE-DiT with Flow Matching + Dual-Stream Attention
@@ -463,22 +476,32 @@ class XoronConfig:
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2
     use_shared_expert: bool = True  # Isolated Shared Expert
+    use_aux_lossless: bool = True  # No auxiliary loss needed
     
-    # Vision
+    # Vision Encoder (SOTA)
     vision_model_name: str = "google/siglip-so400m-patch14-384"
     num_vision_tokens: int = 64
-    max_video_frames: int = 32
+    use_vision_dual_stream: bool = True  # Symmetric dual-stream
+    use_vision_titok: bool = True  # TiTok 1D tokenization
+    num_vision_titok_tokens: int = 256  # Compressed tokens
     
-    # Generation (Flow Matching)
+    # Video Encoder (SOTA)
+    max_video_frames: int = 32
+    use_video_3d_rope: bool = True  # 3D-RoPE (x,y,t)
+    use_video_temporal_moe: bool = True  # Temporal expert routing
+    num_video_encoder_layers: int = 4  # 3D causal transformer
+    
+    # Image Generation (Flow Matching + Dual-Stream)
     enable_generation: bool = True
     generation_image_size: int = 256
     generation_cfg_scale: float = 7.5
-    generation_use_flow_matching: bool = True  # MoE-DiT + Flow Matching
-    generation_inference_steps: int = 50
+    generation_use_flow_matching: bool = True
+    generation_use_dual_stream: bool = True
     generation_num_experts: int = 4
     
-    # Video Generation (3D Causal)
+    # Video Generation (3D Causal + Temporal MoE)
     generation_video_use_flow_matching: bool = True
+    generation_video_use_3d_rope: bool = True
     generation_video_num_experts: int = 4
     
     # LoRA
@@ -498,8 +521,6 @@ class XoronConfig:
 ---
 
 ## 📈 Performance
-
-### Memory Requirements
 
 | Configuration | VRAM Required |
 |--------------|---------------|
