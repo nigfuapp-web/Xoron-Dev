@@ -1,13 +1,12 @@
 """
-SOTA Video Diffusion Generator with Temporal Attention.
+SOTA Video Generator with Flow Matching, 3D-RoPE, Temporal Expert Routing, 3D Causal Transformers.
 
 Features:
-- AnimateDiff-style motion modules
-- Cross-attention for text conditioning
-- Image-to-video (I2V) support
-- Text-to-video (T2V) support
-- Temporal consistency via motion modules
-- Classifier-free guidance
+- Flow Matching with CFG for superior generation quality
+- 3D-RoPE for flexible (x, y, t) positional encodings
+- Temporal-Aware Expert Routing in transformer blocks
+- 3D Causal Transformers for autoregressive video generation
+- FP16-native numerical stability
 """
 
 import math
@@ -16,359 +15,410 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
 
+EPS = 1e-5
 
-class SinusoidalPositionEmbeddings(nn.Module):
-    """Sinusoidal position embeddings for timesteps."""
-    
-    def __init__(self, dim: int):
+
+class RoPE3D(nn.Module):
+    """
+    3D Rotary Position Embedding for (x, y, t) dimensions.
+    Supports flexible aspect ratios and temporal lengths.
+    """
+
+    def __init__(self, dim: int, max_height: int = 64, max_width: int = 64, max_frames: int = 32, base: float = 10000.0):
         super().__init__()
         self.dim = dim
-        # Register a dummy parameter to track model dtype
-        self.register_buffer('_dtype_tracker', torch.zeros(1))
+        self.max_height = max_height
+        self.max_width = max_width
+        self.max_frames = max_frames
+        self.base = base
         
-    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
-        device = timesteps.device
-        # Use the dtype of the model (tracked via _dtype_tracker buffer)
-        target_dtype = self._dtype_tracker.dtype
-        # Convert timesteps to target dtype for computation
-        timesteps = timesteps.to(target_dtype)
-        half_dim = self.dim // 2
-        embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=target_dtype) * -embeddings)
-        embeddings = timesteps[:, None] * embeddings[None, :]
-        embeddings = torch.cat([torch.sin(embeddings), torch.cos(embeddings)], dim=-1)
-        return embeddings
+        dim_per_axis = dim // 3
+        self.dim_x = dim_per_axis
+        self.dim_y = dim_per_axis
+        self.dim_t = dim - 2 * dim_per_axis
+        
+        inv_freq_x = 1.0 / (base ** (torch.arange(0, self.dim_x, 2, dtype=torch.float32) / self.dim_x))
+        inv_freq_y = 1.0 / (base ** (torch.arange(0, self.dim_y, 2, dtype=torch.float32) / self.dim_y))
+        inv_freq_t = 1.0 / (base ** (torch.arange(0, self.dim_t, 2, dtype=torch.float32) / self.dim_t))
+        
+        self.register_buffer('inv_freq_x', inv_freq_x, persistent=False)
+        self.register_buffer('inv_freq_y', inv_freq_y, persistent=False)
+        self.register_buffer('inv_freq_t', inv_freq_t, persistent=False)
+
+    def forward(self, x: torch.Tensor, height: int, width: int, frames: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        
+        pos_x = torch.arange(width, device=device, dtype=torch.float32)
+        pos_y = torch.arange(height, device=device, dtype=torch.float32)
+        pos_t = torch.arange(frames, device=device, dtype=torch.float32)
+        
+        freqs_x = torch.outer(pos_x, self.inv_freq_x.to(device))
+        freqs_y = torch.outer(pos_y, self.inv_freq_y.to(device))
+        freqs_t = torch.outer(pos_t, self.inv_freq_t.to(device))
+        
+        freqs_x = torch.cat([freqs_x, freqs_x], dim=-1)
+        freqs_y = torch.cat([freqs_y, freqs_y], dim=-1)
+        freqs_t = torch.cat([freqs_t, freqs_t], dim=-1)
+        
+        cos_x = freqs_x.cos().to(dtype)
+        sin_x = freqs_x.sin().to(dtype)
+        cos_y = freqs_y.cos().to(dtype)
+        sin_y = freqs_y.sin().to(dtype)
+        cos_t = freqs_t.cos().to(dtype)
+        sin_t = freqs_t.sin().to(dtype)
+        
+        cos_3d = torch.zeros(frames, height, width, self.dim, device=device, dtype=dtype)
+        sin_3d = torch.zeros(frames, height, width, self.dim, device=device, dtype=dtype)
+        
+        for t in range(frames):
+            for y in range(height):
+                for w in range(width):
+                    cos_3d[t, y, w, :self.dim_x] = cos_x[w]
+                    sin_3d[t, y, w, :self.dim_x] = sin_x[w]
+                    cos_3d[t, y, w, self.dim_x:self.dim_x+self.dim_y] = cos_y[y]
+                    sin_3d[t, y, w, self.dim_x:self.dim_x+self.dim_y] = sin_y[y]
+                    cos_3d[t, y, w, self.dim_x+self.dim_y:] = cos_t[t]
+                    sin_3d[t, y, w, self.dim_x+self.dim_y:] = sin_t[t]
+        
+        cos_3d = cos_3d.view(frames * height * width, self.dim)
+        sin_3d = sin_3d.view(frames * height * width, self.dim)
+        
+        return cos_3d, sin_3d
 
 
-class TemporalAttention(nn.Module):
+def apply_rope_3d(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    rotated = torch.cat((-x2, x1), dim=-1)
+    return x * cos + rotated * sin
+
+
+class TemporalExpertRouter(nn.Module):
     """
-    Temporal attention module (AnimateDiff-style).
-    Applies attention across the time dimension for temporal consistency.
+    Temporal-Aware Expert Router for video generation.
+    Routes tokens based on temporal context and motion patterns.
     """
-    def __init__(self, channels: int, num_heads: int = 8, num_frames: int = 16):
+
+    def __init__(self, hidden_size: int, num_experts: int = 4, top_k: int = 2):
         super().__init__()
-        self.num_heads = num_heads
-        self.channels = channels
-        self.head_dim = channels // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.num_experts = num_experts
+        self.top_k = top_k
         
-        self.norm = nn.GroupNorm(32, channels)
-        self.to_qkv = nn.Linear(channels, channels * 3)
-        self.to_out = nn.Linear(channels, channels)
+        self.temporal_proj = nn.Linear(hidden_size, hidden_size)
+        self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+        nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
+
+    def forward(self, x: torch.Tensor, temporal_context: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        if temporal_context is not None:
+            x = x + self.temporal_proj(temporal_context)
         
-        # Learnable temporal position embeddings
-        self.temporal_pos_embed = nn.Parameter(torch.randn(1, num_frames, channels) * 0.02)
+        router_logits = self.gate(x)
+        router_probs = F.softmax(router_logits, dim=-1, dtype=x.dtype)
+        
+        top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
+        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + EPS)
+        
+        return top_k_probs, top_k_indices
+
+
+class VideoExpert(nn.Module):
+    """Single expert for video processing with SwiGLU."""
+
+    def __init__(self, hidden_size: int, intermediate_size: int):
+        super().__init__()
+        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+        self.act_fn = nn.SiLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, C, T, H, W]"""
-        b, c, t, h, w = x.shape
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+
+class TemporalMoELayer(nn.Module):
+    """
+    Temporal-Aware MoE Layer for video generation.
+    Uses motion-aware routing for expert selection.
+    """
+
+    def __init__(self, hidden_size: int, intermediate_size: int, num_experts: int = 4, top_k: int = 2):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_experts = num_experts
+        self.top_k = top_k
         
-        # Reshape: [B, C, T, H, W] -> [B*H*W, T, C]
-        x_reshaped = x.permute(0, 3, 4, 2, 1).reshape(b * h * w, t, c)
+        self.router = TemporalExpertRouter(hidden_size, num_experts, top_k)
+        self.experts = nn.ModuleList([
+            VideoExpert(hidden_size, intermediate_size)
+            for _ in range(num_experts)
+        ])
+        self.shared_expert = VideoExpert(hidden_size, intermediate_size)
+
+    def forward(self, x: torch.Tensor, temporal_context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        batch_size, seq_len, hidden_size = x.shape
+        x_flat = x.view(-1, hidden_size)
         
-        # Add temporal position embeddings
-        x_reshaped = x_reshaped + self.temporal_pos_embed[:, :t, :]
+        top_k_probs, top_k_indices = self.router(x_flat, temporal_context.view(-1, hidden_size) if temporal_context is not None else None)
         
-        # Normalize
-        x_norm = self.norm(x_reshaped.transpose(1, 2)).transpose(1, 2)
+        output = torch.zeros_like(x_flat)
         
-        # QKV projection
-        qkv = self.to_qkv(x_norm).reshape(b * h * w, t, 3, self.num_heads, self.head_dim)
+        for expert_idx in range(self.num_experts):
+            expert = self.experts[expert_idx]
+            for k in range(self.top_k):
+                mask = (top_k_indices[:, k] == expert_idx)
+                if mask.any():
+                    expert_input = x_flat[mask]
+                    expert_output = expert(expert_input)
+                    weight = top_k_probs[mask, k:k+1]
+                    output[mask] = output[mask] + weight * expert_output
+        
+        shared_output = self.shared_expert(x_flat)
+        output = output + shared_output
+        
+        return output.view(batch_size, seq_len, hidden_size)
+
+
+class Causal3DAttention(nn.Module):
+    """
+    3D Causal Self-Attention with 3D-RoPE.
+    Attends only to past frames and positions for autoregressive generation.
+    """
+
+    def __init__(self, hidden_size: int, num_heads: int = 8, max_frames: int = 32, max_height: int = 64, max_width: int = 64):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.to_qkv = nn.Linear(hidden_size, hidden_size * 3, bias=False)
+        self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
+        
+        self.rope_3d = RoPE3D(self.head_dim, max_height, max_width, max_frames)
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def forward(self, x: torch.Tensor, height: int, width: int, frames: int, causal: bool = True) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+        
+        x = self.norm(x)
+        
+        qkv = self.to_qkv(x).reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.unbind(dim=2)
         
-        # Attention
-        q = q.transpose(1, 2)  # [B*H*W, heads, T, head_dim]
+        cos, sin = self.rope_3d(x, height, width, frames)
+        cos = cos.unsqueeze(0).unsqueeze(2)
+        sin = sin.unsqueeze(0).unsqueeze(2)
+        
+        q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         
+        q = apply_rope_3d(q, cos, sin)
+        k = apply_rope_3d(k, cos, sin)
+        
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        attn = attn.softmax(dim=-1)
+        
+        if causal:
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool), diagonal=1)
+            attn = attn.masked_fill(causal_mask, float('-inf'))
+        
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(x.dtype)
         
         out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).reshape(b * h * w, t, c)
+        out = out.transpose(1, 2).reshape(batch_size, seq_len, self.hidden_size)
         out = self.to_out(out)
         
-        # Reshape back: [B*H*W, T, C] -> [B, C, T, H, W]
-        out = out.reshape(b, h, w, t, c).permute(0, 4, 3, 1, 2)
-        
-        return x + out
-
-
-class MotionModule(nn.Module):
-    """
-    Motion module for temporal modeling (AnimateDiff-style).
-    Combines temporal attention with temporal convolutions.
-    """
-    def __init__(self, channels: int, num_heads: int = 8, num_frames: int = 16):
-        super().__init__()
-        
-        # Temporal attention
-        self.temporal_attn = TemporalAttention(channels, num_heads, num_frames)
-        
-        # Temporal convolution for local motion
-        self.temporal_conv = nn.Sequential(
-            nn.GroupNorm(32, channels),
-            nn.SiLU(),
-            nn.Conv3d(channels, channels, kernel_size=(3, 1, 1), padding=(1, 0, 0)),
-        )
-        
-        # Zero-initialized output projection for stable training
-        self.out_proj = nn.Conv3d(channels, channels, 1)
-        nn.init.zeros_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, C, T, H, W]"""
-        # Temporal attention
-        h = self.temporal_attn(x)
-        
-        # Temporal convolution
-        h = h + self.temporal_conv(h)
-        
-        # Zero-initialized output
-        return x + self.out_proj(h)
+        return out
 
 
 class CrossAttention3D(nn.Module):
     """Cross-attention for text-to-video conditioning."""
-    
-    def __init__(self, query_dim: int, context_dim: int = None, heads: int = 8, dim_head: int = 64):
+
+    def __init__(self, query_dim: int, context_dim: int = None, heads: int = 8):
         super().__init__()
-        inner_dim = dim_head * heads
-        context_dim = context_dim or query_dim
-        
         self.heads = heads
-        self.dim_head = dim_head
-        self.inner_dim = inner_dim
-        self.scale = dim_head ** -0.5
+        context_dim = context_dim or query_dim
+        self.head_dim = query_dim // heads
+        self.scale = self.head_dim ** -0.5
         
-        self.norm = nn.GroupNorm(32, query_dim)
-        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
-        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_out = nn.Linear(inner_dim, query_dim)
-        
+        self.norm = nn.LayerNorm(query_dim)
+        self.to_q = nn.Linear(query_dim, query_dim, bias=False)
+        self.to_k = nn.Linear(context_dim, query_dim, bias=False)
+        self.to_v = nn.Linear(context_dim, query_dim, bias=False)
+        self.to_out = nn.Linear(query_dim, query_dim, bias=False)
+
     def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        """
-        x: [B, C, T, H, W]
-        context: [B, seq_len, context_dim]
-        """
-        b, c, t, h, w = x.shape
-        seq_len = t * h * w
+        batch_size, seq_len, _ = x.shape
         ctx_len = context.shape[1]
         
-        # Reshape to sequence: [B, C, T, H, W] -> [B, T*H*W, C]
-        x_flat = x.permute(0, 2, 3, 4, 1).reshape(b, seq_len, c)
+        x = self.norm(x)
         
-        # Normalize
-        x_norm = self.norm(x_flat.transpose(1, 2)).transpose(1, 2)
+        q = self.to_q(x).reshape(batch_size, seq_len, self.heads, self.head_dim).transpose(1, 2)
+        k = self.to_k(context).reshape(batch_size, ctx_len, self.heads, self.head_dim).transpose(1, 2)
+        v = self.to_v(context).reshape(batch_size, ctx_len, self.heads, self.head_dim).transpose(1, 2)
         
-        # QKV
-        q = self.to_q(x_norm)
-        k = self.to_k(context)
-        v = self.to_v(context)
-        
-        # Reshape for multi-head attention
-        q = q.reshape(b, seq_len, self.heads, self.dim_head).permute(0, 2, 1, 3)
-        k = k.reshape(b, ctx_len, self.heads, self.dim_head).permute(0, 2, 1, 3)
-        v = v.reshape(b, ctx_len, self.heads, self.dim_head).permute(0, 2, 1, 3)
-        
-        # Attention
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        attn = attn.softmax(dim=-1)
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(x.dtype)
         
         out = torch.matmul(attn, v)
-        out = out.permute(0, 2, 1, 3).reshape(b, seq_len, self.inner_dim)
+        out = out.transpose(1, 2).reshape(batch_size, seq_len, -1)
         out = self.to_out(out)
         
-        # Reshape back: [B, T*H*W, C] -> [B, C, T, H, W]
-        out = out.reshape(b, t, h, w, c).permute(0, 4, 1, 2, 3)
-        
-        return x + out
+        return out
 
 
-class ResBlock3D(nn.Module):
-    """3D Residual block with time embedding."""
-    
-    def __init__(self, in_channels: int, out_channels: int, time_emb_dim: int):
-        super().__init__()
-        self.norm1 = nn.GroupNorm(32, in_channels)
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1))
-        self.time_mlp = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(time_emb_dim, out_channels)
-        )
-        self.norm2 = nn.GroupNorm(32, out_channels)
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1))
-        self.skip = nn.Conv3d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
-        
-    def forward(self, x: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
-        h = self.conv1(F.silu(self.norm1(x)))
-        h = h + self.time_mlp(time_emb)[:, :, None, None, None]
-        h = self.conv2(F.silu(self.norm2(h)))
-        return h + self.skip(x)
-
-
-class Conv3DBlock(nn.Module):
+class Causal3DTransformerBlock(nn.Module):
     """
-    SOTA 3D convolution block with motion module and cross-attention.
+    3D Causal Transformer Block with Temporal MoE.
     """
-    def __init__(self, in_ch: int, out_ch: int, time_emb_dim: int, context_dim: int,
-                 use_motion: bool = True, use_cross_attn: bool = True, num_frames: int = 16):
+
+    def __init__(self, hidden_size: int, context_dim: int, num_heads: int = 8, num_experts: int = 4, max_frames: int = 32):
         super().__init__()
         
-        # Spatial processing
-        self.res_block = ResBlock3D(in_ch, out_ch, time_emb_dim)
+        self.self_attn = Causal3DAttention(hidden_size, num_heads, max_frames)
+        self.cross_attn = CrossAttention3D(hidden_size, context_dim, num_heads)
+        self.moe = TemporalMoELayer(hidden_size, hidden_size * 4, num_experts)
         
-        # Motion module for temporal consistency
-        self.motion_module = MotionModule(out_ch, num_frames=num_frames) if use_motion else nn.Identity()
-        
-        # Cross-attention for text conditioning
-        self.cross_attn = CrossAttention3D(out_ch, context_dim) if use_cross_attn else nn.Identity()
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.norm3 = nn.LayerNorm(hidden_size)
 
-    def forward(self, x: torch.Tensor, time_emb: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        x = self.res_block(x, time_emb)
-        x = self.motion_module(x) if not isinstance(self.motion_module, nn.Identity) else x
-        x = self.cross_attn(x, context) if not isinstance(self.cross_attn, nn.Identity) else x
+    def forward(self, x: torch.Tensor, context: torch.Tensor, height: int, width: int, frames: int, temporal_context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = x + self.self_attn(self.norm1(x), height, width, frames, causal=True)
+        x = x + self.cross_attn(self.norm2(x), context)
+        x = x + self.moe(self.norm3(x), temporal_context)
+        
         return x
 
 
-class UNet3D(nn.Module):
+class FlowMatchingScheduler:
     """
-    SOTA 3D UNet for video diffusion with motion modules and cross-attention.
+    Flow Matching scheduler for video generation.
+    Uses optimal transport paths for superior generation quality.
     """
-    def __init__(self, in_channels: int = 4, base_channels: int = 128, context_dim: int = 1024,
-                 num_frames: int = 16, channel_mults: tuple = (1, 2, 4)):
+
+    def __init__(self, num_steps: int = 50, sigma_min: float = 0.002):
+        self.num_steps = num_steps
+        self.sigma_min = sigma_min
+        
+        self.timesteps = torch.linspace(1, 0, num_steps + 1)
+
+    def get_velocity(self, x_t: torch.Tensor, x_0: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Compute target velocity for flow matching."""
+        return x_0 - x_t
+
+    def step(self, model_output: torch.Tensor, t: torch.Tensor, t_prev: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
+        """Single step of flow matching ODE."""
+        dt = t - t_prev
+        x_prev = x_t + model_output * dt.view(-1, 1, 1, 1, 1)
+        return x_prev
+
+    def add_noise(self, x_0: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Add noise for training (linear interpolation)."""
+        noise = torch.randn_like(x_0)
+        t = t.view(-1, 1, 1, 1, 1)
+        x_t = t * noise + (1 - t) * x_0
+        return x_t
+
+
+class VideoUNet3D(nn.Module):
+    """
+    3D U-Net for video generation with Causal Transformers and Temporal MoE.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 4,
+        hidden_size: int = 512,
+        context_dim: int = 1024,
+        num_layers: int = 4,
+        num_heads: int = 8,
+        num_experts: int = 4,
+        num_frames: int = 16,
+    ):
         super().__init__()
+        self.hidden_size = hidden_size
         self.num_frames = num_frames
-        time_emb_dim = base_channels * 4
-
-        # Time embedding
+        
         self.time_embed = nn.Sequential(
-            SinusoidalPositionEmbeddings(base_channels),
-            nn.Linear(base_channels, time_emb_dim),
+            nn.Linear(hidden_size, hidden_size * 4),
             nn.SiLU(),
-            nn.Linear(time_emb_dim, time_emb_dim),
+            nn.Linear(hidden_size * 4, hidden_size),
         )
-
-        # Image conditioning projection (for I2V)
-        self.image_cond_proj = nn.Sequential(
-            nn.Conv2d(in_channels, base_channels, 3, padding=1),
+        
+        self.input_proj = nn.Conv3d(in_channels, hidden_size, kernel_size=3, padding=1)
+        
+        self.transformer_blocks = nn.ModuleList([
+            Causal3DTransformerBlock(hidden_size, context_dim, num_heads, num_experts, num_frames)
+            for _ in range(num_layers)
+        ])
+        
+        self.output_proj = nn.Sequential(
+            nn.GroupNorm(32, hidden_size),
             nn.SiLU(),
-            nn.Conv2d(base_channels, in_channels, 3, padding=1),
+            nn.Conv3d(hidden_size, out_channels, kernel_size=3, padding=1),
         )
+        
+        nn.init.zeros_(self.output_proj[-1].weight)
+        nn.init.zeros_(self.output_proj[-1].bias)
 
-        # Input conv (with image conditioning channel)
-        self.conv_in = nn.Conv3d(in_channels * 2, base_channels, kernel_size=3, padding=1)
+    def forward(self, x: torch.Tensor, timesteps: torch.Tensor, context: torch.Tensor, first_frame_latent: Optional[torch.Tensor] = None) -> torch.Tensor:
+        batch_size, channels, frames, height, width = x.shape
         
-        # Encoder
-        self.down_blocks = nn.ModuleList()
-        ch = base_channels
-        for i, mult in enumerate(channel_mults):
-            out_ch = base_channels * mult
-            self.down_blocks.append(nn.ModuleList([
-                Conv3DBlock(ch, out_ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=(i > 0), num_frames=num_frames),
-                Conv3DBlock(out_ch, out_ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=(i > 0), num_frames=num_frames),
-                nn.Conv3d(out_ch, out_ch, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1))
-            ]))
-            ch = out_ch
-
-        # Middle
-        self.mid_block1 = Conv3DBlock(ch, ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=True, num_frames=num_frames)
-        self.mid_block2 = Conv3DBlock(ch, ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=True, num_frames=num_frames)
-
-        # Decoder
-        self.up_blocks = nn.ModuleList()
-        for i, mult in enumerate(reversed(channel_mults)):
-            out_ch = base_channels * mult
-            self.up_blocks.append(nn.ModuleList([
-                nn.ConvTranspose3d(ch, ch, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-                Conv3DBlock(ch + out_ch, out_ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=(i < len(channel_mults) - 1), num_frames=num_frames),
-                Conv3DBlock(out_ch, out_ch, time_emb_dim, context_dim, use_motion=True, use_cross_attn=(i < len(channel_mults) - 1), num_frames=num_frames),
-            ]))
-            ch = out_ch
-
-        # Output
-        self.norm_out = nn.GroupNorm(32, ch)
-        self.conv_out = nn.Conv3d(ch, in_channels, kernel_size=3, padding=1)
-
-    def forward(self, x: torch.Tensor, timesteps: torch.Tensor, context: torch.Tensor,
-                first_frame_latent: torch.Tensor = None) -> torch.Tensor:
-        """
-        x: [B, C, T, H, W] noisy latents
-        timesteps: [B] diffusion timesteps
-        context: [B, seq_len, context_dim] text embeddings
-        first_frame_latent: [B, C, H, W] first frame latent for I2V
-        """
-        b, c, t, h, w = x.shape
+        half_dim = self.hidden_size // 2
+        t_emb = math.log(10000) / (half_dim - 1)
+        t_emb = torch.exp(torch.arange(half_dim, device=x.device, dtype=x.dtype) * -t_emb)
+        t_emb = timesteps[:, None].to(x.dtype) * t_emb[None, :]
+        t_emb = torch.cat([torch.sin(t_emb), torch.cos(t_emb)], dim=-1)
+        t_emb = self.time_embed(t_emb)
         
-        # Time embedding
-        t_emb = self.time_embed(timesteps)
+        h = self.input_proj(x)
         
-        # Image conditioning
-        if first_frame_latent is not None:
-            img_cond = self.image_cond_proj(first_frame_latent)
-        else:
-            img_cond = torch.zeros(b, c, h, w, device=x.device)
+        h = h.permute(0, 2, 3, 4, 1).reshape(batch_size, frames * height * width, self.hidden_size)
         
-        # Expand image conditioning to all frames
-        img_cond_expanded = img_cond.unsqueeze(2).expand(-1, -1, t, -1, -1)
-        x = torch.cat([x, img_cond_expanded], dim=1)
+        temporal_context = t_emb.unsqueeze(1).expand(-1, frames * height * width, -1)
         
-        # Input
-        x = self.conv_in(x)
+        for block in self.transformer_blocks:
+            h = block(h, context, height, width, frames, temporal_context)
         
-        # Encoder with skip connections
-        skips = []
-        for block1, block2, downsample in self.down_blocks:
-            x = block1(x, t_emb, context)
-            x = block2(x, t_emb, context)
-            skips.append(x)
-            x = downsample(x)
+        h = h.reshape(batch_size, frames, height, width, self.hidden_size).permute(0, 4, 1, 2, 3)
         
-        # Middle
-        x = self.mid_block1(x, t_emb, context)
-        x = self.mid_block2(x, t_emb, context)
+        velocity = self.output_proj(h)
         
-        # Decoder
-        for upsample, block1, block2 in self.up_blocks:
-            x = upsample(x)
-            skip = skips.pop()
-            # Handle size mismatch
-            if x.shape != skip.shape:
-                x = F.interpolate(x, size=skip.shape[2:], mode='trilinear', align_corners=False)
-            x = torch.cat([x, skip], dim=1)
-            x = block1(x, t_emb, context)
-            x = block2(x, t_emb, context)
-        
-        # Output
-        x = self.conv_out(F.silu(self.norm_out(x)))
-        
-        return x
+        return velocity
 
 
-class VideoVAEEncoder(nn.Module):
-    """3D VAE Encoder for video compression."""
-    
+class VideoVAE3D(nn.Module):
+    """3D VAE for video encoding/decoding."""
+
     def __init__(self, in_channels: int = 3, latent_channels: int = 4, base_channels: int = 64):
         super().__init__()
+        
         self.encoder = nn.Sequential(
-            nn.Conv3d(in_channels, base_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(in_channels, base_channels, 3, padding=1),
             nn.SiLU(),
-            nn.Conv3d(base_channels, base_channels, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
+            nn.Conv3d(base_channels, base_channels * 2, 3, stride=(1, 2, 2), padding=1),
             nn.SiLU(),
-            nn.Conv3d(base_channels, base_channels * 2, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(base_channels * 2, base_channels * 4, 3, stride=(1, 2, 2), padding=1),
             nn.SiLU(),
-            nn.Conv3d(base_channels * 2, base_channels * 2, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels * 2, base_channels * 4, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels * 4, base_channels * 4, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels * 4, latent_channels * 2, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(base_channels * 4, latent_channels * 2, 3, padding=1),
         )
         
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self.decoder = nn.Sequential(
+            nn.Conv3d(latent_channels, base_channels * 4, 3, padding=1),
+            nn.SiLU(),
+            nn.Upsample(scale_factor=(1, 2, 2), mode='trilinear', align_corners=False),
+            nn.Conv3d(base_channels * 4, base_channels * 2, 3, padding=1),
+            nn.SiLU(),
+            nn.Upsample(scale_factor=(1, 2, 2), mode='trilinear', align_corners=False),
+            nn.Conv3d(base_channels * 2, base_channels, 3, padding=1),
+            nn.SiLU(),
+            nn.Conv3d(base_channels, in_channels, 3, padding=1),
+        )
+
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = self.encoder(x)
         mean, logvar = h.chunk(2, dim=1)
         logvar = torch.clamp(logvar, -30, 20)
@@ -376,309 +426,179 @@ class VideoVAEEncoder(nn.Module):
         z = mean + std * torch.randn_like(std)
         return z, mean, logvar
 
-
-class VideoVAEDecoder(nn.Module):
-    """3D VAE Decoder for video reconstruction."""
-    
-    def __init__(self, latent_channels: int = 4, out_channels: int = 3, base_channels: int = 64):
-        super().__init__()
-        self.decoder = nn.Sequential(
-            nn.Conv3d(latent_channels, base_channels * 4, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.ConvTranspose3d(base_channels * 4, base_channels * 4, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels * 4, base_channels * 2, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.ConvTranspose3d(base_channels * 2, base_channels * 2, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels * 2, base_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.ConvTranspose3d(base_channels, base_channels, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
-            nn.SiLU(),
-            nn.Conv3d(base_channels, out_channels, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
-            nn.Tanh(),
-        )
-        
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
         return self.decoder(z)
-
-
-class ImageEncoder2D(nn.Module):
-    """2D Image encoder for I2V first frame."""
-    
-    def __init__(self, in_channels: int = 3, latent_channels: int = 4, base_channels: int = 64):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, base_channels, 3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels, base_channels, 4, stride=2, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels, base_channels * 2, 3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels * 2, base_channels * 2, 4, stride=2, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels * 2, base_channels * 4, 3, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels * 4, base_channels * 4, 4, stride=2, padding=1),
-            nn.SiLU(),
-            nn.Conv2d(base_channels * 4, latent_channels, 3, padding=1),
-        )
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.encoder(x)
 
 
 class MobileVideoDiffusion(nn.Module):
     """
-    SOTA Video Diffusion Model for T2V and I2V.
-    
-    Features:
-    - AnimateDiff-style motion modules for temporal consistency
-    - Cross-attention for text conditioning
-    - Classifier-free guidance support
-    - Image-to-video (I2V) with first frame conditioning
-    - Text-to-video (T2V) generation
-    - Temporal consistency loss support
+    SOTA Video Diffusion with Flow Matching, 3D-RoPE, Temporal MoE.
+    Optimized for 2x T4 GPUs with FP16.
     """
 
-    def __init__(self, latent_channels: int = 4, base_channels: int = 128, context_dim: int = 1024,
-                 num_frames: int = 16, image_size: int = 256, num_inference_steps: int = 20,
-                 cfg_scale: float = 7.5):
+    def __init__(
+        self,
+        latent_channels: int = 4,
+        base_channels: int = 64,
+        context_dim: int = 1024,
+        num_frames: int = 16,
+        image_size: int = 256,
+        num_inference_steps: int = 50,
+        cfg_scale: float = 7.5,
+    ):
         super().__init__()
-
         self.latent_channels = latent_channels
+        self.context_dim = context_dim
         self.num_frames = num_frames
         self.image_size = image_size
-        self.latent_size = image_size // 8
+        self.latent_size = image_size // 4
         self.num_inference_steps = num_inference_steps
         self.cfg_scale = cfg_scale
-        self.context_dim = context_dim
-
-        # Video VAE
-        self.vae_encoder = VideoVAEEncoder(3, latent_channels)
-        self.vae_decoder = VideoVAEDecoder(latent_channels, 3)
         
-        # Image encoder for I2V
-        self.image_encoder = ImageEncoder2D(3, latent_channels)
-
-        # 3D UNet with motion modules
-        self.unet = UNet3D(latent_channels, base_channels, context_dim, num_frames)
-
-        # Noise schedule
-        self._init_noise_schedule()
+        self.vae = VideoVAE3D(3, latent_channels, base_channels)
         
-        # Null context for CFG
-        self.register_buffer('null_context', torch.zeros(1, 77, context_dim))
-
-        print(f"   🎬 SOTA VideoDiffusion: {num_frames} frames @ {image_size}x{image_size}")
-        print(f"      Features: Motion modules, Cross-attention, CFG={cfg_scale}")
-        print(f"      Supports: Text-to-Video (T2V) + Image-to-Video (I2V)")
-
-    def _init_noise_schedule(self):
-        """Initialize cosine noise schedule."""
-        steps = 1000
-        s = 0.008
-        t = torch.linspace(0, steps, steps + 1)
-        alphas_cumprod = torch.cos(((t / steps) + s) / (1 + s) * math.pi * 0.5) ** 2
-        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-        betas = torch.clamp(betas, 0.0001, 0.9999)
+        self.unet = VideoUNet3D(
+            in_channels=latent_channels,
+            out_channels=latent_channels,
+            hidden_size=base_channels * 4,
+            context_dim=context_dim,
+            num_layers=4,
+            num_heads=8,
+            num_experts=4,
+            num_frames=num_frames,
+        )
         
-        alphas = 1.0 - betas
-        self.register_buffer('betas', betas)
-        self.register_buffer('alphas', alphas)
-        self.register_buffer('alphas_cumprod', torch.cumprod(alphas, dim=0))
-        self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(self.alphas_cumprod))
-        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - self.alphas_cumprod))
+        self.scheduler = FlowMatchingScheduler(num_inference_steps)
 
-    def encode_video(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode video to latent space. x: [B, C, T, H, W]"""
-        if x.dim() == 5 and x.shape[2] == 3:
-            x = x.permute(0, 2, 1, 3, 4)
-        return self.vae_encoder(x)
+    def encode_video(self, video: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.vae.encode(video * 2 - 1)
 
-    def encode_image(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode single image to latent. x: [B, C, H, W]"""
-        return self.image_encoder(x)
+    def decode_video(self, z: torch.Tensor) -> torch.Tensor:
+        return self.vae.decode(z)
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latents to video. z: [B, C, T, H, W]"""
-        return self.vae_decoder(z)
+    def encode_image(self, image: torch.Tensor) -> torch.Tensor:
+        image_expanded = image.unsqueeze(2)
+        z, _, _ = self.vae.encode(image_expanded)
+        return z.squeeze(2)
 
-    def add_noise(self, x: torch.Tensor, noise: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
-        """Add noise to latents."""
-        # Ensure buffers match input dtype to avoid Float/Half mismatch
-        sqrt_alpha = self.sqrt_alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1).to(x.dtype)
-        sqrt_one_minus_alpha = self.sqrt_one_minus_alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1).to(x.dtype)
-        return sqrt_alpha * x + sqrt_one_minus_alpha * noise
-
-    def training_step(self, video: torch.Tensor, context: torch.Tensor,
-                      first_frame: torch.Tensor = None) -> dict:
-        """
-        Training step with multiple losses.
-        
-        Args:
-            video: [B, C, T, H, W] video tensor
-            context: [B, seq_len, context_dim] text embeddings
-            first_frame: [B, C, H, W] first frame for I2V training
-        """
+    def training_step(self, video: torch.Tensor, context: torch.Tensor, first_frame: Optional[torch.Tensor] = None) -> dict:
         device = video.device
         batch_size = video.shape[0]
         
-        # Encode video
         z, mean, logvar = self.encode_video(video)
         
-        # Encode first frame if provided (I2V mode)
-        first_frame_latent = None
-        if first_frame is not None:
-            first_frame_latent = self.encode_image(first_frame * 2 - 1)
+        t = torch.rand(batch_size, device=device)
         
-        # Sample timesteps
-        timesteps = torch.randint(0, 1000, (batch_size,), device=device)
+        x_t = self.scheduler.add_noise(z, t)
         
-        # Add noise
-        noise = torch.randn_like(z)
-        noisy_z = self.add_noise(z, noise, timesteps)
+        target_velocity = self.scheduler.get_velocity(x_t, z, t)
         
-        # CFG: randomly drop context
-        # Create null context dynamically to match actual context shape
         if self.training:
             drop_mask = torch.rand(batch_size, device=device) < 0.1
             seq_len = context.shape[1]
             null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=context.dtype)
             context = torch.where(drop_mask[:, None, None], null_ctx, context)
         
-        # Predict noise
-        noise_pred = self.unet(noisy_z, timesteps, context, first_frame_latent)
+        pred_velocity = self.unet(x_t, t * 1000, context, None)
         
-        # Losses
-        diffusion_loss = F.mse_loss(noise_pred, noise)
+        flow_loss = F.mse_loss(pred_velocity, target_velocity)
         kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
         
-        # Temporal consistency loss (encourage smooth motion)
         temporal_loss = torch.tensor(0.0, device=device, dtype=z.dtype)
         if z.shape[2] > 1:
             z_diff = z[:, :, 1:] - z[:, :, :-1]
             temporal_loss = torch.mean(z_diff ** 2)
         
-        total_loss = diffusion_loss + 0.0001 * kl_loss + 0.01 * temporal_loss
+        total_loss = flow_loss + 0.0001 * kl_loss + 0.01 * temporal_loss
         
         return {
-            'diffusion_loss': diffusion_loss,
+            'flow_loss': flow_loss,
             'kl_loss': kl_loss,
             'temporal_loss': temporal_loss,
-            'total_loss': total_loss
+            'total_loss': total_loss,
         }
 
     @torch.no_grad()
-    def generate_t2v(self, context: torch.Tensor, num_frames: int = None,
-                     guidance_scale: float = None, num_steps: int = None) -> torch.Tensor:
-        """Text-to-Video generation."""
+    def generate_t2v(self, context: torch.Tensor, num_frames: int = None, guidance_scale: float = None, num_steps: int = None) -> torch.Tensor:
         device = context.device
         batch_size = context.shape[0]
         seq_len = context.shape[1]
         num_frames = num_frames or self.num_frames
         guidance_scale = guidance_scale or self.cfg_scale
         num_steps = num_steps or self.num_inference_steps
-
-        # Initialize latents
+        
         latents = torch.randn(
             batch_size, self.latent_channels, num_frames,
             self.latent_size, self.latent_size, device=device
         )
-
-        timesteps = torch.linspace(999, 0, num_steps, dtype=torch.long, device=device)
-
-        # Prepare for CFG - create null context dynamically to match input context shape
+        
+        timesteps = torch.linspace(1, 0, num_steps + 1, device=device)
+        
         if guidance_scale > 1.0:
             null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=context.dtype)
             context = torch.cat([null_ctx, context])
-
-        for i, t in enumerate(timesteps):
-            t_batch = t.expand(batch_size)
+        
+        for i in range(num_steps):
+            t = timesteps[i]
+            t_prev = timesteps[i + 1]
+            t_batch = t.expand(batch_size) * 1000
             
-            # CFG
             if guidance_scale > 1.0:
                 latent_input = torch.cat([latents, latents])
                 t_input = torch.cat([t_batch, t_batch])
-                noise_pred = self.unet(latent_input, t_input, context, None)
-                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                velocity_pred = self.unet(latent_input, t_input, context, None)
+                velocity_uncond, velocity_cond = velocity_pred.chunk(2)
+                velocity_pred = velocity_uncond + guidance_scale * (velocity_cond - velocity_uncond)
             else:
-                noise_pred = self.unet(latents, t_batch, context, None)
-
-            # DDIM step
-            alpha_t = self.alphas_cumprod[t]
-            alpha_prev = self.alphas_cumprod[timesteps[i + 1]] if i < len(timesteps) - 1 else torch.tensor(1.0, device=device)
-
-            pred_x0 = (latents - torch.sqrt(1 - alpha_t) * noise_pred) / torch.sqrt(alpha_t)
-            pred_x0 = torch.clamp(pred_x0, -1, 1)
-            latents = torch.sqrt(alpha_prev) * pred_x0 + torch.sqrt(1 - alpha_prev) * noise_pred
-
-        video = self.decode(latents)
+                velocity_pred = self.unet(latents, t_batch, context, None)
+            
+            latents = self.scheduler.step(velocity_pred, t, t_prev, latents)
+        
+        video = self.decode_video(latents)
         return torch.clamp((video + 1) / 2, 0, 1)
 
     @torch.no_grad()
-    def generate_i2v(self, first_frame: torch.Tensor, context: torch.Tensor = None,
-                     num_frames: int = None, guidance_scale: float = None,
-                     num_steps: int = None) -> torch.Tensor:
-        """Image-to-Video generation."""
+    def generate_i2v(self, first_frame: torch.Tensor, context: Optional[torch.Tensor] = None, num_frames: int = None, guidance_scale: float = None, num_steps: int = None) -> torch.Tensor:
         device = first_frame.device
         batch_size = first_frame.shape[0]
         num_frames = num_frames or self.num_frames
         guidance_scale = guidance_scale or self.cfg_scale
         num_steps = num_steps or self.num_inference_steps
-
-        # Encode first frame
-        first_frame_norm = first_frame * 2 - 1
-        first_frame_latent = self.encode_image(first_frame_norm)
-
-        # Initialize latents
+        
+        first_frame_latent = self.encode_image(first_frame * 2 - 1)
+        
         latents = torch.randn(
             batch_size, self.latent_channels, num_frames,
             self.latent_size, self.latent_size, device=device
         )
-        
-        # Set first frame
         latents[:, :, 0] = first_frame_latent
-
-        timesteps = torch.linspace(999, 0, num_steps, dtype=torch.long, device=device)
-
-        # Use null context if not provided - default to 77 tokens like CLIP
+        
         if context is None:
             context = torch.zeros(batch_size, 77, self.context_dim, device=device)
         
         seq_len = context.shape[1]
-
-        # Prepare for CFG - create null context dynamically to match input context shape
+        timesteps = torch.linspace(1, 0, num_steps + 1, device=device)
+        
         if guidance_scale > 1.0:
             null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=context.dtype)
             context = torch.cat([null_ctx, context])
-            first_frame_latent_cfg = torch.cat([first_frame_latent, first_frame_latent])
-
-        for i, t in enumerate(timesteps):
-            t_batch = t.expand(batch_size)
+        
+        for i in range(num_steps):
+            t = timesteps[i]
+            t_prev = timesteps[i + 1]
+            t_batch = t.expand(batch_size) * 1000
             
-            # CFG
             if guidance_scale > 1.0:
                 latent_input = torch.cat([latents, latents])
                 t_input = torch.cat([t_batch, t_batch])
-                noise_pred = self.unet(latent_input, t_input, context, first_frame_latent_cfg)
-                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                velocity_pred = self.unet(latent_input, t_input, context, None)
+                velocity_uncond, velocity_cond = velocity_pred.chunk(2)
+                velocity_pred = velocity_uncond + guidance_scale * (velocity_cond - velocity_uncond)
             else:
-                noise_pred = self.unet(latents, t_batch, context, first_frame_latent)
-
-            # DDIM step
-            alpha_t = self.alphas_cumprod[t]
-            alpha_prev = self.alphas_cumprod[timesteps[i + 1]] if i < len(timesteps) - 1 else torch.tensor(1.0, device=device)
-
-            pred_x0 = (latents - torch.sqrt(1 - alpha_t) * noise_pred) / torch.sqrt(alpha_t)
-            pred_x0 = torch.clamp(pred_x0, -1, 1)
-            latents = torch.sqrt(alpha_prev) * pred_x0 + torch.sqrt(1 - alpha_prev) * noise_pred
-
-            # Preserve first frame
+                velocity_pred = self.unet(latents, t_batch, context, None)
+            
+            latents = self.scheduler.step(velocity_pred, t, t_prev, latents)
             latents[:, :, 0] = first_frame_latent
-
-        video = self.decode(latents)
+        
+        video = self.decode_video(latents)
         return torch.clamp((video + 1) / 2, 0, 1)

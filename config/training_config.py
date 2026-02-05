@@ -33,6 +33,14 @@ class TrainingConfig:
     - Chain-of-thought weighted loss for reasoning
     - Temporal consistency loss for video
     - Classifier-free guidance training
+    
+    SOTA Architecture (v2.0):
+    - LLM: MLA (Multi-Head Latent Attention), YaRN/LongRoPE, Ring Attention
+    - MoE: Aux-Lossless with Shared Expert Isolation
+    - Image: MoE-DiT, Flow Matching, 2D-RoPE, Dual-Stream Attention
+    - Video: Flow Matching, 3D-RoPE, Temporal Expert Routing, 3D Causal Transformers
+    
+    Optimized for Kaggle 2x T4 GPUs (32GB total VRAM)
     """
 
     # Environment (auto-detected if not specified)

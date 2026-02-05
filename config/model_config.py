@@ -31,9 +31,12 @@ class XoronConfig:
     max_position_embeddings: int = 131072  # 128K context length
     rms_norm_eps: float = 1e-6
     
-    # Sliding Window Attention (enables efficient 128K context)
-    use_sliding_window: bool = True
-    sliding_window: int = 4096  # Local attention window size
+    # Ring Attention (enables efficient 128K context with FP16)
+    use_ring_attention: bool = True
+    ring_attention_chunk_size: int = 4096  # Ring attention chunk size
+    
+    # Tie word embeddings (parameter efficiency)
+    tie_word_embeddings: bool = True
 
     # MoE Configuration (SOTA: with shared expert)
     use_moe: bool = True
@@ -52,18 +55,22 @@ class XoronConfig:
     projector_type: str = "perceiver"  # "perceiver", "spatial", "c_abstractor", "mlp"
     vision_image_size: int = 384  # SigLIP SO400M uses 384x384
 
-    # Image Generation Configuration (SOTA: with CFG)
+    # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching)
     enable_generation: bool = True
     generation_image_size: int = 256
     generation_latent_channels: int = 4
     generation_base_channels: int = 128
-    generation_inference_steps: int = 20  # More steps for quality
+    generation_inference_steps: int = 50  # Flow Matching needs more steps
     generation_cfg_scale: float = 7.5  # Classifier-free guidance scale
+    generation_use_flow_matching: bool = True  # Use Flow Matching instead of DDPM
+    generation_num_experts: int = 4  # MoE experts in DiT
     
-    # Video Generation Configuration (SOTA: with motion modules)
+    # Video Generation Configuration (SOTA: 3D Causal Transformers with Flow Matching)
     generation_video_size: int = 256
     generation_num_frames: int = 16
     generation_video_cfg_scale: float = 7.5
+    generation_video_use_flow_matching: bool = True
+    generation_video_num_experts: int = 4
 
     # Audio Configuration (SOTA: Conformer)
     audio_sample_rate: int = 16000
@@ -116,8 +123,9 @@ class XoronConfig:
             'vocab_size': self.vocab_size,
             'max_position_embeddings': self.max_position_embeddings,
             'rms_norm_eps': self.rms_norm_eps,
-            'use_sliding_window': self.use_sliding_window,
-            'sliding_window': self.sliding_window,
+            'use_ring_attention': self.use_ring_attention,
+            'ring_attention_chunk_size': self.ring_attention_chunk_size,
+            'tie_word_embeddings': self.tie_word_embeddings,
             'use_moe': self.use_moe,
             'num_experts': self.num_experts,
             'num_experts_per_tok': self.num_experts_per_tok,
@@ -137,9 +145,13 @@ class XoronConfig:
             'generation_base_channels': self.generation_base_channels,
             'generation_inference_steps': self.generation_inference_steps,
             'generation_cfg_scale': self.generation_cfg_scale,
+            'generation_use_flow_matching': self.generation_use_flow_matching,
+            'generation_num_experts': self.generation_num_experts,
             'generation_video_size': self.generation_video_size,
             'generation_num_frames': self.generation_num_frames,
             'generation_video_cfg_scale': self.generation_video_cfg_scale,
+            'generation_video_use_flow_matching': self.generation_video_use_flow_matching,
+            'generation_video_num_experts': self.generation_video_num_experts,
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
             'audio_num_emotions': self.audio_num_emotions,

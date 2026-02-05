@@ -127,14 +127,14 @@ class XoronMultimodalModel(nn.Module):
             num_attention_heads=config.num_heads,
             max_position_embeddings=config.max_position_embeddings,
             rms_norm_eps=1e-6,
-            tie_word_embeddings=False,
+            tie_word_embeddings=getattr(config, 'tie_word_embeddings', True),
             pad_token_id=0,
         )
         llm_config.use_flash_attention = config.use_flash_attention
         
-        # Sliding window attention for efficient 128K context
-        llm_config.use_sliding_window = config.use_sliding_window
-        llm_config.sliding_window = config.sliding_window
+        # Ring Attention for efficient 128K context (replaces sliding window)
+        llm_config.use_ring_attention = getattr(config, 'use_ring_attention', True)
+        llm_config.ring_attention_chunk_size = getattr(config, 'ring_attention_chunk_size', 4096)
 
         moe_config = {
             'use_moe': config.use_moe,
@@ -578,6 +578,8 @@ class XoronMultimodalModel(nn.Module):
         global_step: int = 0,
         epoch: int = 0,
         best_loss: float = float('inf'),
+        sharded: bool = False,
+        max_shard_size: int = 2 * 1024 * 1024 * 1024,  # 2GB default
     ):
         """
         Save model and optionally training state for resuming.
@@ -589,9 +591,15 @@ class XoronMultimodalModel(nn.Module):
             global_step: Current training step
             epoch: Current epoch
             best_loss: Best loss achieved so far
+            sharded: If True, save model in multiple .safetensors files
+            max_shard_size: Maximum size per shard in bytes (default 2GB)
         """
         os.makedirs(path, exist_ok=True)
-        save_model(self, os.path.join(path, "model.safetensors"))
+        
+        if sharded:
+            self._save_sharded(path, max_shard_size)
+        else:
+            save_model(self, os.path.join(path, "model.safetensors"))
 
         config_dict = self.config.to_dict()
         config_dict['has_audio_encoder'] = True
@@ -601,7 +609,6 @@ class XoronMultimodalModel(nn.Module):
         with open(os.path.join(path, "config.json"), "w") as f:
             json.dump(config_dict, f, indent=2)
 
-        # Save training state if provided
         if optimizer is not None or scheduler is not None:
             training_state = {
                 'global_step': global_step,
@@ -617,6 +624,169 @@ class XoronMultimodalModel(nn.Module):
             print(f"   💾 Training state saved (step {global_step}, epoch {epoch})")
 
         print(f"✅ Model saved to {path}")
+
+    def _save_sharded(self, path: str, max_shard_size: int):
+        """
+        Save model weights in sharded .safetensors files.
+        Components are surgically split across shards.
+        
+        Args:
+            path: Directory to save shards
+            max_shard_size: Maximum bytes per shard
+        """
+        from safetensors.torch import save_file
+        
+        state_dict = self.state_dict()
+        
+        # Group tensors by component for surgical splitting
+        component_groups = {
+            'llm': {},
+            'vision_encoder': {},
+            'video_encoder': {},
+            'audio_encoder': {},
+            'audio_decoder': {},
+            'generator': {},
+            'video_generator': {},
+            'projector': {},
+            'cross_attention': {},
+            'other': {},
+        }
+        
+        for key, tensor in state_dict.items():
+            placed = False
+            for comp_name in component_groups.keys():
+                if comp_name != 'other' and key.startswith(comp_name):
+                    component_groups[comp_name][key] = tensor
+                    placed = True
+                    break
+            if not placed:
+                component_groups['other'][key] = tensor
+        
+        # Calculate sizes and create shards
+        shards = []
+        current_shard = {}
+        current_size = 0
+        shard_index_map = {}
+        
+        for comp_name, comp_tensors in component_groups.items():
+            for key, tensor in comp_tensors.items():
+                tensor_size = tensor.numel() * tensor.element_size()
+                
+                if current_size + tensor_size > max_shard_size and current_shard:
+                    shards.append(current_shard)
+                    current_shard = {}
+                    current_size = 0
+                
+                current_shard[key] = tensor
+                current_size += tensor_size
+        
+        if current_shard:
+            shards.append(current_shard)
+        
+        # Save shards with proper naming
+        total_shards = len(shards)
+        weight_map = {}
+        
+        for i, shard in enumerate(shards):
+            shard_name = f"model-{i+1:05d}-of-{total_shards:05d}.safetensors"
+            shard_path = os.path.join(path, shard_name)
+            
+            # Convert to contiguous for safetensors
+            shard_contiguous = {k: v.contiguous() for k, v in shard.items()}
+            save_file(shard_contiguous, shard_path)
+            
+            for key in shard.keys():
+                weight_map[key] = shard_name
+            
+            shard_size_mb = sum(t.numel() * t.element_size() for t in shard.values()) / (1024 * 1024)
+            print(f"   💾 Saved shard {i+1}/{total_shards}: {shard_name} ({shard_size_mb:.1f} MB)")
+        
+        # Save index file
+        index = {
+            "metadata": {
+                "total_size": sum(t.numel() * t.element_size() for t in state_dict.values()),
+                "total_shards": total_shards,
+            },
+            "weight_map": weight_map,
+        }
+        
+        index_path = os.path.join(path, "model.safetensors.index.json")
+        with open(index_path, "w") as f:
+            json.dump(index, f, indent=2)
+        
+        print(f"   📋 Saved index: model.safetensors.index.json")
+
+    def save_components_separately(self, path: str):
+        """
+        Save model components as separate .safetensors files.
+        Useful for surgical component updates and debugging.
+        
+        Args:
+            path: Directory to save component files
+        """
+        from safetensors.torch import save_file
+        
+        os.makedirs(path, exist_ok=True)
+        
+        component_map = {
+            'llm': self.llm,
+            'vision_encoder': self.vision_encoder,
+            'video_encoder': self.video_encoder,
+            'audio_encoder': self.audio_encoder,
+            'audio_decoder': self.audio_decoder,
+            'projector': self.projector,
+            'audio_projector': self.audio_projector,
+        }
+        
+        if self.cross_attention_layers is not None:
+            component_map['cross_attention'] = self.cross_attention_layers
+        if self.generator is not None:
+            component_map['generator'] = self.generator
+        if self.video_generator is not None:
+            component_map['video_generator'] = self.video_generator
+        
+        saved_files = []
+        
+        for comp_name, component in component_map.items():
+            if component is None:
+                continue
+            
+            comp_state = component.state_dict()
+            if not comp_state:
+                continue
+            
+            # Convert to contiguous
+            comp_state = {k: v.contiguous() for k, v in comp_state.items()}
+            
+            comp_path = os.path.join(path, f"{comp_name}.safetensors")
+            save_file(comp_state, comp_path)
+            
+            size_mb = sum(t.numel() * t.element_size() for t in comp_state.values()) / (1024 * 1024)
+            print(f"   💾 Saved {comp_name}: {size_mb:.1f} MB")
+            saved_files.append(comp_name)
+        
+        # Save modality markers separately
+        markers = {
+            'image_start': self.image_start.data.contiguous(),
+            'image_end': self.image_end.data.contiguous(),
+            'video_start': self.video_start.data.contiguous(),
+            'video_end': self.video_end.data.contiguous(),
+            'audio_start': self.audio_start.data.contiguous(),
+            'audio_end': self.audio_end.data.contiguous(),
+        }
+        save_file(markers, os.path.join(path, "modality_markers.safetensors"))
+        print(f"   💾 Saved modality_markers")
+        
+        # Save component manifest
+        manifest = {
+            "components": saved_files + ["modality_markers"],
+            "config": self.config.to_dict(),
+            "lora_applied": self.lora_applied,
+        }
+        with open(os.path.join(path, "components.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        
+        print(f"✅ Components saved to {path}")
 
     @classmethod
     def from_pretrained(
