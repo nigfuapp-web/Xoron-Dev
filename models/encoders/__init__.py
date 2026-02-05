@@ -14,8 +14,13 @@ Video Encoder:
 - Integrates with video generator
 
 Audio Encoder:
-- Conformer-based architecture
-- FastSpeech2/VITS-style decoder
+- Raw Waveform Tokenizer (replaces mel spectrogram)
+- Zero-Shot Speaker Cloning with speaker embedding extraction
+- Monotonic Alignment Search (MAS) for fluid text-to-audio alignment
+- Rotary Multi-Head Latent Attention (RMLA)
+- In-Context Audio Prompting
+- Conformer-based encoder
+- FastSpeech2/VITS-style decoder with variance adaptor
 - Multi-speaker and emotion support
 """
 
@@ -24,6 +29,7 @@ from models.encoders.vision import (
     RoPE2DEncoder,
     TiTokTokenizer,
     DualStreamEncoderAttention,
+    VisionEncoderBlock,
     get_vision_encoder,
     SIGLIP_MODELS,
 )
@@ -32,13 +38,22 @@ from models.encoders.video import (
     RoPE3DEncoder,
     Causal3DAttentionEncoder,
     TemporalMoELayerEncoder,
+    TemporalExpertRouterEncoder,
+    VideoExpertEncoder,
     VideoEncoderBlock,
 )
 from models.encoders.audio import (
     AudioEncoder,
     AudioDecoder,
-    MelSpectrogramExtractor,
+    RawWaveformTokenizer,
+    SpeakerEncoder,
+    MonotonicAlignmentSearch,
+    RotaryMultiHeadLatentAttention,
+    InContextAudioPrompting,
+    ConvolutionModule,
     ConformerBlock,
+    VariancePredictor,
+    FFTBlock,
 )
 
 __all__ = [
@@ -47,6 +62,7 @@ __all__ = [
     'RoPE2DEncoder',
     'TiTokTokenizer',
     'DualStreamEncoderAttention',
+    'VisionEncoderBlock',
     'get_vision_encoder',
     'SIGLIP_MODELS',
     # Video
@@ -54,10 +70,19 @@ __all__ = [
     'RoPE3DEncoder',
     'Causal3DAttentionEncoder',
     'TemporalMoELayerEncoder',
+    'TemporalExpertRouterEncoder',
+    'VideoExpertEncoder',
     'VideoEncoderBlock',
     # Audio
     'AudioEncoder',
     'AudioDecoder',
-    'MelSpectrogramExtractor',
+    'RawWaveformTokenizer',
+    'SpeakerEncoder',
+    'MonotonicAlignmentSearch',
+    'RotaryMultiHeadLatentAttention',
+    'InContextAudioPrompting',
+    'ConvolutionModule',
     'ConformerBlock',
+    'VariancePredictor',
+    'FFTBlock',
 ]
