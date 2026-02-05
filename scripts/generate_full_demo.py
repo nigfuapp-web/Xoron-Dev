@@ -235,7 +235,7 @@ def generate_svg():
             <animate attributeName="cy" values="310;300;310" dur="3s" repeatCount="indefinite"/>
           </circle>
           
-          <text x="50" y="435" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="11">✓ Generated with MobileDiffusion (256×256)</text>
+          <text x="50" y="435" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="11">✓ Generated with MobileDiffusion (384×384)</text>
           <text x="50" y="455" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">20 diffusion steps • CFG 7.5</text>
         </g>
       </g>
@@ -408,7 +408,7 @@ def generate_svg():
             <animate attributeName="width" values="0;380" dur="3s" repeatCount="indefinite"/>
           </rect>
           
-          <text x="50" y="350" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="11">16 frames @ 256×256 • 4 fps</text>
+          <text x="50" y="350" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="11">16 frames @ 384×384 • 4 fps</text>
           
           <!-- Video specs -->
           <rect x="50" y="370" width="380" height="60" rx="8" fill="{C['bg_dark']}" stroke="{C['border']}" stroke-width="1"/>
@@ -595,7 +595,7 @@ def generate_svg():
       <g transform="translate(600, 450)">
         <rect width="640" height="100" rx="10" fill="{C['bg_dark']}" stroke="{C['green']}" stroke-width="2"/>
         <text x="320" y="25" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. VAE Decoder</text>
-        <text x="20" y="55" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Latent (32×32×4) → Image (256×256×3)</text>
+        <text x="20" y="55" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Latent (96×96×4) → Image (384×384×3)</text>
         <text x="20" y="75" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Upscaling factor: 8x</text>
         <text x="20" y="95" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">✓ Final image generated</text>
       </g>
@@ -810,7 +810,7 @@ def generate_svg():
       <g transform="translate(600, 430)">
         <rect width="640" height="80" rx="10" fill="{C['bg_dark']}" stroke="{C['green']}" stroke-width="2"/>
         <text x="320" y="25" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">3. Output Processing</text>
-        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">16 frames @ 256×256 • 4 fps • Duration: 4 seconds</text>
+        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">16 frames @ 384×384 • 4 fps • Duration: 4 seconds</text>
         <text x="20" y="70" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">✓ Video generated successfully • Style coherence: 97%</text>
       </g>
     </g>

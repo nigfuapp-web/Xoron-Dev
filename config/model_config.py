@@ -78,7 +78,7 @@ class XoronConfig:
 
     # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching + 2D-RoPE)
     enable_generation: bool = True
-    generation_image_size: int = 256
+    generation_image_size: int = 384  # Match SigLIP 384x384
     generation_latent_channels: int = 4
     generation_base_channels: int = 128
     generation_inference_steps: int = 50  # Flow Matching needs more steps
@@ -88,7 +88,7 @@ class XoronConfig:
     generation_use_dual_stream: bool = True  # Symmetric dual-stream attention
     
     # Video Generation Configuration (SOTA: 3D Causal Transformers + Flow Matching + 3D-RoPE)
-    generation_video_size: int = 256
+    generation_video_size: int = 384  # Match SigLIP 384x384
     generation_num_frames: int = 16
     generation_video_cfg_scale: float = 7.5
     generation_video_use_flow_matching: bool = True

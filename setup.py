@@ -140,8 +140,8 @@ def show_current_config(config: Dict[str, Any]):
     print(f"   MoE Experts: {model.get('num_experts', 8)}")
     print(f"   LoRA Rank: {model.get('lora_r', 32)}")
     print(f"   Video Frames: {model.get('max_video_frames', 32)}")
-    print(f"   Image Gen Size: {model.get('generation_image_size', 256)}")
-    print(f"   Video Gen Size: {model.get('generation_video_size', 256)}")
+    print(f"   Image Gen Size: {model.get('generation_image_size', 384)}")
+    print(f"   Video Gen Size: {model.get('generation_video_size', 384)}")
 
     print("\n⚙️ Training Configuration:")
     training = config['training']
@@ -302,8 +302,8 @@ def configure_model(config: Dict[str, Any]):
     model['lora_r'] = get_input("LoRA rank", model.get('lora_r', 32), int)
     model['lora_alpha'] = get_input("LoRA alpha", model.get('lora_alpha', 64), int)
     model['max_video_frames'] = get_input("Max video frames", model.get('max_video_frames', 32), int)
-    model['generation_image_size'] = get_input("Image generation size", model.get('generation_image_size', 256), int)
-    model['generation_video_size'] = get_input("Video generation size", model.get('generation_video_size', 256), int)
+    model['generation_image_size'] = get_input("Image generation size", model.get('generation_image_size', 384), int)
+    model['generation_video_size'] = get_input("Video generation size", model.get('generation_video_size', 384), int)
 
     use_moe = get_input("Enable MoE? (y/n)", 'y' if model.get('use_moe', True) else 'n')
     model['use_moe'] = use_moe.lower() in ('y', 'yes', 'true', '1')

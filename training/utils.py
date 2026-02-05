@@ -297,7 +297,7 @@ def create_optimizer_and_scheduler(
     return optimizer, scheduler
 
 
-def train_image_diffusion_step(generator, images, text_context, target_size=256, sample_types=None, mask=None):
+def train_image_diffusion_step(generator, images, text_context, target_size=384, sample_types=None, mask=None):
     """
     Train SOTA image diffusion on text-image pairs.
     
@@ -310,7 +310,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         generator: Image generator model (MobileDiffusionGenerator)
         images: Batch of images (B, C, H, W) in [0, 1] range
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target image size for diffusion
+        target_size: Target image size for diffusion (default 384 to match SigLIP)
         sample_types: List of sample types to filter valid samples
         mask: Optional inpainting mask (B, 1, H, W)
     
@@ -406,7 +406,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         return None
 
 
-def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
+def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=384, sample_types=None):
     """
     Train SOTA video diffusion on video data.
     
@@ -420,7 +420,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_generator: Video generator model (MobileVideoDiffusion)
         video_frames: Batch of video frames (B, T, C, H, W) or (B, C, T, H, W)
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target frame size for diffusion
+        target_size: Target frame size for diffusion (default 384 to match SigLIP)
         sample_types: List of sample types to filter valid samples
     
     Returns:
@@ -709,14 +709,14 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, audio_encoder=N
 # These are inference-only versions without gradient computation
 # ============================================================================
 
-def eval_image_diffusion_step(generator, images, text_context, target_size=256, sample_types=None, mask=None):
+def eval_image_diffusion_step(generator, images, text_context, target_size=384, sample_types=None, mask=None):
     """Evaluate image diffusion: compute loss without gradient tracking.
     
     Args:
         generator: Image diffusion generator model
         images: Input images (B, C, H, W)
         text_context: Text embeddings for conditioning
-        target_size: Target image size for generation
+        target_size: Target image size for generation (default 384 to match SigLIP)
         sample_types: List of sample types for filtering
         mask: Optional mask for inpainting/editing tasks
         
@@ -800,14 +800,14 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
         return None
 
 
-def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
+def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=384, sample_types=None):
     """Evaluate video diffusion: compute loss without gradient tracking.
     
     Args:
         video_generator: Video diffusion generator model
         video_frames: Input video frames (B, T, C, H, W)
         text_context: Text embeddings for conditioning
-        target_size: Target frame size
+        target_size: Target frame size (default 384 to match SigLIP)
         sample_types: List of sample types for filtering
         
     Returns:

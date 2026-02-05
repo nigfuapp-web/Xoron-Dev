@@ -442,7 +442,7 @@ class MobileVideoDiffusion(nn.Module):
         base_channels: int = 64,
         context_dim: int = 1024,
         num_frames: int = 16,
-        image_size: int = 256,
+        image_size: int = 384,  # Match SigLIP 384x384
         num_inference_steps: int = 50,
         cfg_scale: float = 7.5,
     ):

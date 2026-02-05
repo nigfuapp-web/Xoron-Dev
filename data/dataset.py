@@ -43,7 +43,7 @@ class TrueStreamingDataset(IterableDataset):
         sample_repeat: int = 1,
         voice_processor=None,
         max_video_frames: int = 32,
-        video_size: int = 256,
+        video_size: int = 384,  # Match SigLIP 384x384
         resume_state_path: str = None,
     ):
         self.tokenizer = tokenizer
@@ -1099,7 +1099,7 @@ def create_train_eval_datasets(
     sample_repeat: int = 4,
     voice_processor=None,
     max_video_frames: int = 32,
-    video_size: int = 256,
+    video_size: int = 384,  # Match SigLIP 384x384
 ):
     """
     Create separate train and eval datasets that sample INDEPENDENTLY from each dataset.

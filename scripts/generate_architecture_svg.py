@@ -388,7 +388,7 @@ def generate_svg() -> str:
     # Image Generator
     svg_parts.append(create_component_box(
         out_start_x + out_w + out_gap, output_y, out_w, out_h,
-        'Image Generator', 'MoE-DiT + Flow + Dual-Stream', '256² • 2D-RoPE • CFG=7.5',
+        'Image Generator', 'MoE-DiT + Flow + Dual-Stream', '384² • 2D-RoPE • CFG=7.5',
         'grad_blue', '🎨'
     ))
     
