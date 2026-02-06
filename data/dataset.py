@@ -747,8 +747,8 @@ class TrueStreamingDataset(IterableDataset):
             return None
         
         # Debug first 5 video samples
-        MultimodalStreamingDataset._video_extract_debug_count += 1
-        debug_this = MultimodalStreamingDataset._video_extract_debug_count <= 5
+        TrueStreamingDataset._video_extract_debug_count += 1
+        debug_this = TrueStreamingDataset._video_extract_debug_count <= 5
         
         if debug_this:
             print(f"      [VIDEO_EXTRACT] dtype={dtype}, keys={list(sample.keys())[:10]}")
