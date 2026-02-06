@@ -406,9 +406,9 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         return None
 
 
-def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
+def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=128, sample_types=None):
     """
-    Train SOTA video diffusion on video data.
+    Train SOTA video diffusion on video data - MEMORY OPTIMIZED.
     
     Uses the generator's training_step method which includes:
     - Diffusion loss (noise prediction)
@@ -420,13 +420,17 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_generator: Video generator model (MobileVideoDiffusion)
         video_frames: Batch of video frames (B, T, C, H, W) or (B, C, T, H, W)
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target frame size for diffusion (default 256 - reduced from 384 for memory)
+        target_size: Target frame size for diffusion (default 128 for memory efficiency)
+                     128x128 -> 32x32 latent -> 1024 spatial tokens (vs 4096 at 256x256)
         sample_types: List of sample types to filter valid samples
     
     Returns:
         Total loss or None if no valid samples
     
-    Note: Uses 256x256 during training to save GPU memory. Inference can use larger sizes.
+    Memory optimization:
+    - Uses 128x128 (latent 32x32) instead of 256x256 (latent 64x64) = 4x less memory
+    - Processes only 1 sample at a time to avoid OOM
+    - Limited to 4 frames during training
     """
     if video_generator is None or video_frames is None:
         return None
@@ -467,8 +471,9 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if C != 3 or T < 1:
             return None
         
-        # Limit frames during training to save memory (max 8 frames for training)
-        max_train_frames = 8
+        # MEMORY OPTIMIZATION: Limit frames to 4 (not 8) to fit in 15GB GPU
+        # 4 frames at 32x32 latent = 4*1024 = 4096 tokens total (manageable)
+        max_train_frames = 4
         if T > max_train_frames:
             # Sample frames evenly
             frame_indices = torch.linspace(0, T - 1, max_train_frames).long()
@@ -485,66 +490,53 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         B = video_frames.shape[0]
         del valid_mask
 
-        # Resize frames to target size - ensure dtype is preserved
-        # Use memory-efficient processing
-        video_frames = video_frames.contiguous().view(B * T, C, H, W)
-        video_frames = F.interpolate(video_frames.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
-        video_frames = video_frames.contiguous().view(B, C, T, target_size, target_size)
+        # MEMORY OPTIMIZATION: Process only 1 sample at a time
+        # Accumulate losses and average them
+        total_loss = torch.tensor(0.0, device=gen_device, dtype=gen_dtype)
+        num_processed = 0
+        
+        for i in range(B):
+            try:
+                # Extract single sample
+                single_video = video_frames[i:i+1]  # [1, C, T, H, W]
+                single_context = text_context[i:i+1]  # [1, seq_len, dim]
+                
+                # Resize frames to target size (128x128 -> 32x32 latent)
+                single_video = single_video.contiguous().view(T, C, H, W)
+                single_video = F.interpolate(single_video.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
+                single_video = single_video.contiguous().view(1, C, T, target_size, target_size)
 
-        # Normalize to [-1, 1] for diffusion
-        video_frames_norm = video_frames * 2 - 1
-        del video_frames  # Free memory immediately
+                # Normalize to [-1, 1] for diffusion
+                video_norm = single_video * 2 - 1
+                del single_video
 
-        # Extract first frame for I2V training (50% of the time)
-        first_frame = None
-        if torch.rand(1).item() > 0.5:
-            first_frame = (video_frames_norm[:, :, 0] + 1) / 2  # Back to [0, 1] for encode_image
+                # Extract first frame for I2V training (50% of the time)
+                first_frame = None
+                if torch.rand(1).item() > 0.5:
+                    first_frame = (video_norm[:, :, 0] + 1) / 2
 
-        # Use generator's training_step if available (SOTA method)
-        if hasattr(video_generator, 'training_step'):
-            # Ensure all inputs are correct dtype
-            losses = video_generator.training_step(video_frames_norm.to(gen_dtype), text_context.to(gen_dtype), first_frame.to(gen_dtype) if first_frame is not None else None)
-            loss = losses['total_loss']
-            del losses, video_frames_norm, first_frame  # Clean up
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()  # Force memory cleanup
-            return loss
+                # Use generator's training_step
+                if hasattr(video_generator, 'training_step'):
+                    losses = video_generator.training_step(video_norm, single_context, first_frame)
+                    total_loss = total_loss + losses['total_loss']
+                    num_processed += 1
+                    del losses, video_norm, first_frame
+                
+                # Force memory cleanup after each sample
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    continue  # Skip this sample, try next
+                raise
         
-        # Fallback to manual training - ensure correct dtype
-        video_frames_norm = video_frames_norm.to(gen_dtype)
-        z, mean, logvar = video_generator.encode_video(video_frames_norm)
-        del video_frames_norm  # No longer needed
-        
-        batch_size = z.shape[0]
-        timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
-        noise = torch.randn_like(z)
-        
-        # Add noise
-        if hasattr(video_generator, 'add_noise'):
-            noisy_z = video_generator.add_noise(z, noise, timesteps)
-        else:
-            alpha_t = video_generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1, 1).to(gen_dtype)
-            noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
-        
-        first_frame_latent = z[:, :, 0] if first_frame is not None else None
-        noise_pred = video_generator.unet(noisy_z, timesteps, text_context.to(gen_dtype), first_frame_latent)
-        del noisy_z, first_frame_latent  # Clean up
-        
-        # Losses
-        diff_loss = F.mse_loss(noise_pred, noise)
-        del noise_pred, noise  # Clean up
-        
-        kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-        
-        # Temporal consistency loss
-        temporal_loss = torch.tensor(0.0, device=gen_device, dtype=gen_dtype)
-        if z.shape[2] > 1:
-            z_diff = z[:, :, 1:] - z[:, :, :-1]
-            temporal_loss = torch.mean(z_diff ** 2)
-        
-        del z, mean, logvar  # Clean up
-        
-        return diff_loss + 0.0001 * kl_loss + 0.01 * temporal_loss
+        if num_processed == 0:
+            return None
+            
+        return total_loss / num_processed
         
     except Exception as e:
         print(f"      ⚠️ Video diffusion training error: {type(e).__name__}: {str(e)[:100]}")
