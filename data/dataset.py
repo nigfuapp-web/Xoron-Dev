@@ -727,46 +727,74 @@ class TrueStreamingDataset(IterableDataset):
                 return sample[field]
         return None
 
-    _video_extract_debug_count = 0
-    
     def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
-        """Extract raw video data from sample."""
+        """Extract raw video data from sample.
+        
+        Supports various dataset formats:
+        - Pexels: column1 (video URL)
+        - MiraData: video_url
+        - Video-MME: url (YouTube)
+        - VideoInstruct-100K: video_id (just ID)
+        - Sora-Likert: Video (URL)
+        - T2V-Preferences: video1, video2
+        - Panda-70M: url (YouTube)
+        - OpenVid-1M: video (filename)
+        - Vript: meta.video_id
+        """
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
         
-        # Debug: log sample keys for first 10 video samples
-        MultimodalStreamingDataset._video_extract_debug_count += 1
-        debug_this = MultimodalStreamingDataset._video_extract_debug_count <= 10
-        
-        if debug_this:
-            print(f"      [VIDEO_DEBUG] dtype={dtype}, sample_keys={list(sample.keys())[:15]}")
-        
-        # Direct video data fields
+        # Direct video data fields (binary/frames)
         video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
         for field in video_fields:
             if field in sample and sample[field] is not None:
-                if debug_this:
-                    val = sample[field]
-                    print(f"      [VIDEO_DEBUG] found '{field}': type={type(val).__name__}")
-                return sample[field]
+                val = sample[field]
+                # If it's a filename (not URL), skip - we need actual data or URL
+                if isinstance(val, str) and not val.startswith('http') and not val.endswith(('.mp4', '.webm', '.avi')):
+                    continue
+                return val
         
-        # URL fields - expanded to cover more dataset formats
-        url_fields = ["contentUrl", "video_url", "videoUrl", "url", "Video", "video1", "video2",
-                      "video_link", "mp4_url", "media_url", "content_url", "asset", "video_asset",
-                      "column1", "column2"]  # Pexels format uses column1 for video
+        # URL fields - ordered by specificity
+        url_fields = [
+            "Video",        # Rapidata Sora-Likert
+            "video_url",    # MiraData
+            "video1",       # T2V-Preferences (first video)
+            "column1",      # Pexels (video column)
+            "contentUrl",   # WebVid
+            "url",          # Video-MME, Panda-70M (YouTube)
+            "video_link",
+            "mp4_url",
+            "media_url",
+        ]
+        
         for field in url_fields:
             if field in sample and sample[field]:
                 url = sample[field]
-                if isinstance(url, str) and (url.startswith('http') or url.endswith('.mp4') or url.endswith('.webm')):
-                    if debug_this:
-                        print(f"      [VIDEO_DEBUG] found URL in '{field}': {url[:80]}...")
+                if isinstance(url, str) and url.startswith('http'):
                     return url
         
-        if debug_this:
-            # Show what values look like URLs
-            for k, v in sample.items():
-                if isinstance(v, str) and ('http' in v or '.mp4' in v or 'video' in v.lower()):
-                    print(f"      [VIDEO_DEBUG] potential video in '{k}': {str(v)[:80]}...")
+        # Handle nested meta dict (Vript format)
+        if "meta" in sample and isinstance(sample["meta"], dict):
+            meta = sample["meta"]
+            if "video_id" in meta:
+                # Vript uses video_id in meta, might need YouTube URL construction
+                vid_id = meta["video_id"]
+                if vid_id:
+                    return f"https://www.youtube.com/watch?v={vid_id}"
+        
+        # VideoInstruct-100K uses video_id directly
+        if "video_id" in sample:
+            vid_id = sample["video_id"]
+            if vid_id and isinstance(vid_id, str):
+                # Check if it looks like a YouTube video ID
+                if len(vid_id) == 11 or vid_id.startswith("v_"):
+                    return f"https://www.youtube.com/watch?v={vid_id}"
+        
+        # videoID field (Panda-70M style)
+        if "videoID" in sample:
+            vid_id = sample["videoID"]
+            if vid_id and isinstance(vid_id, str):
+                return f"https://www.youtube.com/watch?v={vid_id}"
         
         return None
 
