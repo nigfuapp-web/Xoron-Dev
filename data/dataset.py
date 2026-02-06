@@ -315,7 +315,7 @@ class TrueStreamingDataset(IterableDataset):
 
             if self.image_processor:
                 processed = self.image_processor(img, return_tensors="pt")
-                return processed['pixel_values'].squeeze(0)
+                tensor = processed['pixel_values'].squeeze(0)
             else:
                 # Fallback: use 384x384 for SigLIP compatibility with proper normalization
                 # SigLIP uses ImageNet mean/std normalization
@@ -325,7 +325,11 @@ class TrueStreamingDataset(IterableDataset):
                 mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
                 std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
                 tensor = (tensor - mean) / std
-                return tensor
+            
+            # Ensure no inf/nan values that cause training instability
+            tensor = torch.nan_to_num(tensor, nan=0.0, posinf=10.0, neginf=-10.0)
+            tensor = torch.clamp(tensor, min=-10.0, max=10.0)
+            return tensor
 
         except Exception:
             return None
@@ -510,11 +514,15 @@ class TrueStreamingDataset(IterableDataset):
 
             frames = frames[:self.max_video_frames]
 
-            # Resize frames
+            # Resize frames and ensure valid values (no inf/nan)
             frame_tensors = []
             for f in frames:
                 if f.shape[1] != self.video_size or f.shape[2] != self.video_size:
                     f = F.interpolate(f.unsqueeze(0), size=(self.video_size, self.video_size), mode='bilinear', align_corners=False).squeeze(0)
+                # Clamp to prevent inf/nan values that cause training instability
+                f = torch.clamp(f, min=-10.0, max=10.0)
+                # Replace any nan with 0
+                f = torch.nan_to_num(f, nan=0.0, posinf=10.0, neginf=-10.0)
                 frame_tensors.append(f)
 
             return torch.stack(frame_tensors)
