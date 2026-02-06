@@ -207,8 +207,10 @@ class Causal3DAttention(nn.Module):
         q, k, v = qkv.unbind(dim=2)
         
         cos, sin = self.rope_3d(x, height, width, frames)
-        cos = cos.unsqueeze(0).unsqueeze(2)
-        sin = sin.unsqueeze(0).unsqueeze(2)
+        # cos/sin shape: [seq_len, head_dim] -> [1, 1, seq_len, head_dim]
+        # to broadcast with q/k shape: [B, num_heads, seq_len, head_dim]
+        cos = cos.unsqueeze(0).unsqueeze(1)
+        sin = sin.unsqueeze(0).unsqueeze(1)
         
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
