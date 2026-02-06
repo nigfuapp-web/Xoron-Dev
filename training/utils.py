@@ -406,9 +406,9 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         return None
 
 
-def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=128, sample_types=None):
+def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """
-    Train SOTA video diffusion on video data - MEMORY OPTIMIZED.
+    Train SOTA video diffusion on video data.
     
     Uses the generator's training_step method which includes:
     - Diffusion loss (noise prediction)
@@ -420,17 +420,15 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_generator: Video generator model (MobileVideoDiffusion)
         video_frames: Batch of video frames (B, T, C, H, W) or (B, C, T, H, W)
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target frame size for diffusion (default 128 for memory efficiency)
-                     128x128 -> 32x32 latent -> 1024 spatial tokens (vs 4096 at 256x256)
+        target_size: Target frame size for diffusion (default 256)
         sample_types: List of sample types to filter valid samples
     
     Returns:
         Total loss or None if no valid samples
     
     Memory optimization:
-    - Uses 128x128 (latent 32x32) instead of 256x256 (latent 64x64) = 4x less memory
     - Processes only 1 sample at a time to avoid OOM
-    - Limited to 4 frames during training
+    - Video generator should be on GPU 0 (separate from LLM on GPU 1)
     """
     if video_generator is None or video_frames is None:
         return None
@@ -471,9 +469,8 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if C != 3 or T < 1:
             return None
         
-        # MEMORY OPTIMIZATION: Limit frames to 4 (not 8) to fit in 15GB GPU
-        # 4 frames at 32x32 latent = 4*1024 = 4096 tokens total (manageable)
-        max_train_frames = 4
+        # Limit frames during training (max 16 frames)
+        max_train_frames = 16
         if T > max_train_frames:
             # Sample frames evenly
             frame_indices = torch.linspace(0, T - 1, max_train_frames).long()
