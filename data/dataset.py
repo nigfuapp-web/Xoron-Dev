@@ -336,8 +336,8 @@ class TrueStreamingDataset(IterableDataset):
         try:
             import tempfile
             
-            # Check if it's a YouTube URL
-            if 'youtube.com' in url or 'youtu.be' in url:
+            # Check if it's a YouTube or TikTok URL - use yt-dlp
+            if 'youtube.com' in url or 'youtu.be' in url or 'tiktok.com' in url:
                 return self._download_youtube_video(url)
             
             import requests
@@ -852,21 +852,26 @@ class TrueStreamingDataset(IterableDataset):
                 return url
         
         # Handle nested meta dict (Vript format)
-        # Vript stores YouTube video IDs in meta.video_id
+        # Vript stores video IDs in meta.video_id - can be YouTube (11 chars) or TikTok (long numeric)
         if "meta" in sample and isinstance(sample["meta"], dict):
             meta = sample["meta"]
             if "video_id" in meta:
                 vid_id = str(meta["video_id"])
-                # Check if it's a YouTube video ID (11 characters, alphanumeric with - and _)
+                # Check if it's a YouTube video ID (11 characters)
                 if len(vid_id) == 11:
                     url = f"https://www.youtube.com/watch?v={vid_id}"
                     if debug_this:
                         print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from meta.video_id: {url}")
                     return url
-                else:
-                    # Longer numeric IDs might be internal - log and skip
+                # Long numeric IDs are TikTok video IDs - yt-dlp can download these
+                elif vid_id.isdigit() and len(vid_id) > 15:
+                    url = f"https://www.tiktok.com/@user/video/{vid_id}"
                     if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ⚠️ Vript ID not YouTube format: {vid_id}")
+                        print(f"      [VIDEO_EXTRACT] ✅ Built TikTok URL from meta.video_id: {url}")
+                    return url
+                else:
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ⚠️ Unknown video_id format: {vid_id}")
         
         if debug_this:
             print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
