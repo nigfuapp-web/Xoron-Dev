@@ -489,7 +489,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
 
         # MEMORY OPTIMIZATION: Process only 1 sample at a time
         # Accumulate losses and average them
-        total_loss = torch.tensor(0.0, device=gen_device, dtype=gen_dtype)
+        total_loss = None
         num_processed = 0
         
         for i in range(B):
@@ -515,7 +515,11 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                 # Use generator's training_step
                 if hasattr(video_generator, 'training_step'):
                     losses = video_generator.training_step(video_norm, single_context, first_frame)
-                    total_loss = total_loss + losses['total_loss']
+                    step_loss = losses['total_loss']
+                    if total_loss is None:
+                        total_loss = step_loss
+                    else:
+                        total_loss = total_loss + step_loss
                     num_processed += 1
                     del losses, video_norm, first_frame
                 
@@ -530,7 +534,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                     continue  # Skip this sample, try next
                 raise
         
-        if num_processed == 0:
+        if num_processed == 0 or total_loss is None:
             return None
             
         return total_loss / num_processed
