@@ -869,12 +869,26 @@ class TrueStreamingDataset(IterableDataset):
         for field in video_fields:
             if field in sample and sample[field] is not None:
                 val = sample[field]
-                # If it's a filename (not URL), skip - we need actual data or URL
-                if isinstance(val, str) and not val.startswith('http') and not val.endswith(('.mp4', '.webm', '.avi')):
-                    continue
-                if debug_this:
-                    print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
-                return val
+                # Accept: URLs, video file extensions, bytes, lists, dicts
+                if isinstance(val, str):
+                    # Accept if it's a URL or has video extension
+                    if val.startswith('http') or val.endswith(('.mp4', '.webm', '.avi', '.gif', '.mov', '.mkv')):
+                        if debug_this:
+                            print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__} (path/url)")
+                        return val
+                    # Also accept if it looks like an S3/cloud path
+                    elif val.startswith('s3://') or val.startswith('gs://') or '/videos/' in val:
+                        if debug_this:
+                            print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__} (cloud path)")
+                        return val
+                    else:
+                        if debug_this:
+                            print(f"      [VIDEO_EXTRACT] ⚠️ Skipping '{field}': str without video ext ({val[:50]}...)")
+                        continue
+                elif isinstance(val, (bytes, list, dict)):
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
+                    return val
         
         # URL fields - ordered by specificity
         url_fields = [
@@ -892,13 +906,32 @@ class TrueStreamingDataset(IterableDataset):
         for field in url_fields:
             if field in sample and sample[field]:
                 url = sample[field]
-                if isinstance(url, str) and url.startswith('http'):
-                    # Skip header row values
-                    if url in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
-                        continue
+                if isinstance(url, str):
+                    # Accept http/https URLs
+                    if url.startswith('http'):
+                        # Skip header row values
+                        if url in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
+                            continue
+                        if debug_this:
+                            print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
+                        return url
+                    # Also debug non-http URLs
+                    elif debug_this and field == 'url':
+                        print(f"      [VIDEO_EXTRACT] ⚠️ '{field}' is not http URL: {url[:60]}...")
+        
+        # Handle clip_id (WebVid-style datasets often use this)
+        # Some datasets store clip IDs that can be converted to YouTube URLs
+        if "clip_id" in sample:
+            clip_id = sample["clip_id"]
+            if clip_id and isinstance(clip_id, str):
+                # If clip_id looks like a YouTube video ID (11 chars alphanumeric)
+                if len(clip_id) == 11 and clip_id.replace('-', '').replace('_', '').isalnum():
+                    url = f"https://www.youtube.com/watch?v={clip_id}"
                     if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from clip_id: {url}")
                     return url
+                elif debug_this:
+                    print(f"      [VIDEO_EXTRACT] ⚠️ clip_id not a YouTube ID: {clip_id[:30]}...")
         
         # VideoInstruct-100K uses video_id with "v_" prefix
         # Format: v_{youtube_id} -> strip v_ and use as YouTube ID
