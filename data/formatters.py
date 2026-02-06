@@ -1065,12 +1065,45 @@ class MultimodalFormatter:
 
     def format_video_caption_sample(self, sample: Dict) -> Optional[Dict]:
         try:
-            # Video-MME format (has domain, sub_category, question, answer)
+            # Video-MME format (has url, videoID, task_type, question, options, a)
+            # Dataset: lmms-lab/Video-MME
+            # Columns: category, url, videoID, task_type, question, options, a
+            # - url: Full YouTube URL (https://www.youtube.com/watch?v=...)
+            # - videoID: YouTube video ID (11 chars)
+            # - options: List like ["A. 3.", "B. 4.", "C. 5.", "D. 6."]
+            # - a: Correct answer letter ("A", "B", "C", or "D")
+            if "question" in sample and "options" in sample:
+                question = sample.get("question", "")
+                options = sample.get("options", [])
+                # Get the answer - Video-MME uses 'a' field for the answer letter
+                answer_letter = sample.get("a", sample.get("answer", ""))
+                
+                if question and options:
+                    # Format options as part of the question
+                    options_text = "\n".join(options) if isinstance(options, list) else str(options)
+                    
+                    # Find the full answer text from options based on the answer letter
+                    answer = answer_letter  # Default to just the letter
+                    if isinstance(options, list) and answer_letter:
+                        # Options format: ["A. text", "B. text", ...] - find matching option
+                        for opt in options:
+                            if isinstance(opt, str) and opt.startswith(f"{answer_letter}."):
+                                answer = opt
+                                break
+                    
+                    text = (
+                        f"{self.t['user_start']}\n{self.t['video_start']}[VIDEO]{self.t['video_end']}\n"
+                        f"{question}\n\nOptions:\n{options_text}\n{self.t['user_end']}\n"
+                        f"{self.t['assistant_start']}\n{answer}\n{self.t['assistant_end']}"
+                    )
+                    return {"text": self._wrap_sequence(text), "type": "video_caption", "has_video": True}
+            
+            # Fallback: domain/sub_category format
             if "domain" in sample and "sub_category" in sample:
-                # If it has question/answer, treat as QA
-                if "question" in sample and "answer" in sample:
+                # If it has question/answer directly, treat as QA
+                if "question" in sample and ("answer" in sample or "a" in sample):
                     question = sample.get("question", "")
-                    answer = sample.get("answer", "")
+                    answer = sample.get("answer", sample.get("a", ""))
                     if question and answer:
                         text = (
                             f"{self.t['user_start']}\n{self.t['video_start']}[VIDEO]{self.t['video_end']}\n"

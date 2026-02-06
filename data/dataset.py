@@ -381,40 +381,75 @@ class TrueStreamingDataset(IterableDataset):
                     pass
             return None
 
+    _yt_dlp_fail_count = 0
+    _yt_dlp_success_count = 0
+    _yt_dlp_logged = False
+    
     def _download_youtube_video(self, url: str) -> Optional[str]:
         """Download YouTube video using yt-dlp."""
         try:
             import tempfile
             import subprocess
+            import shutil
+            
+            # Check if yt-dlp is available
+            if not shutil.which('yt-dlp'):
+                if not TrueStreamingDataset._yt_dlp_logged:
+                    print(f"      [YT-DLP] ⚠️ yt-dlp not installed! Run: pip install yt-dlp")
+                    TrueStreamingDataset._yt_dlp_logged = True
+                return None
             
             # Create temp file for output
             fd, temp_path = tempfile.mkstemp(suffix='.mp4')
             os.close(fd)
             
-            # Use yt-dlp to download
+            # Use yt-dlp to download with multiple fallback formats
+            # Try formats in order: mp4 480p, any 480p, webm, any format
             cmd = [
                 'yt-dlp',
-                '-f', 'best[height<=480][ext=mp4]/best[height<=480]/best',  # Limit quality for speed
+                '-f', 'best[height<=480][ext=mp4]/best[height<=480]/bestvideo[height<=480]+bestaudio/best',
                 '-o', temp_path,
                 '--no-playlist',
                 '--quiet',
                 '--no-warnings',
                 '--socket-timeout', '30',
+                '--retries', '3',
+                '--fragment-retries', '3',
+                '--extractor-retries', '3',
                 url
             ]
             
-            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, timeout=180)
             
             if result.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                TrueStreamingDataset._yt_dlp_success_count += 1
                 return temp_path
             else:
+                TrueStreamingDataset._yt_dlp_fail_count += 1
+                # Log first few failures for debugging
+                if TrueStreamingDataset._yt_dlp_fail_count <= 3:
+                    stderr = result.stderr.decode('utf-8', errors='ignore')[:200] if result.stderr else "no error"
+                    print(f"      [YT-DLP] ❌ Download failed for {url[:50]}... (code={result.returncode})")
+                    if stderr and stderr.strip():
+                        print(f"      [YT-DLP] stderr: {stderr[:100]}")
+                elif TrueStreamingDataset._yt_dlp_fail_count == 4:
+                    print(f"      [YT-DLP] ⚠️ Suppressing further download failure messages...")
+                
                 # Clean up failed download
                 try:
                     os.remove(temp_path)
                 except:
                     pass
                 return None
-        except Exception:
+        except subprocess.TimeoutExpired:
+            TrueStreamingDataset._yt_dlp_fail_count += 1
+            if TrueStreamingDataset._yt_dlp_fail_count <= 3:
+                print(f"      [YT-DLP] ⏱️ Timeout downloading {url[:50]}...")
+            return None
+        except Exception as e:
+            TrueStreamingDataset._yt_dlp_fail_count += 1
+            if TrueStreamingDataset._yt_dlp_fail_count <= 3:
+                print(f"      [YT-DLP] ❌ Exception: {type(e).__name__}: {str(e)[:50]}")
             return None
 
     def _extract_frames_from_video(self, video_path: str) -> List[torch.Tensor]:

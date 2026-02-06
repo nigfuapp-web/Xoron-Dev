@@ -153,6 +153,9 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 for b in batch:
                     vf = b["video_frames"]
                     if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
+                        # Ensure no inf/nan values that cause training instability
+                        vf = torch.nan_to_num(vf, nan=0.0, posinf=10.0, neginf=-10.0)
+                        vf = torch.clamp(vf, min=-10.0, max=10.0)
                         video_frames_list.append(vf)
                     else:
                         video_frames_list.append(torch.zeros(video_frames, 3, video_size, video_size))
@@ -503,11 +506,14 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
             T = max_train_frames
 
         # Filter to only samples with valid (non-zero) video frames
-        valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6
+        # Use mean instead of sum to avoid overflow in FP16
+        # (sum over 14M elements can overflow FP16's max ~65504)
+        frame_means = video_frames.abs().mean(dim=(1, 2, 3, 4))
+        valid_mask = frame_means > 1e-6
         num_valid = valid_mask.sum().item()
         if debug_this:
-            frame_sums = video_frames.abs().sum(dim=(1, 2, 3, 4))
-            print(f"      [VIDEO_TRAIN] valid={num_valid}/{B}, frame_energy={frame_sums.min().item():.1f}-{frame_sums.max().item():.1f}")
+            # Safe energy calculation: use mean and report as such
+            print(f"      [VIDEO_TRAIN] valid={num_valid}/{B}, frame_mean={frame_means.min().item():.4f}-{frame_means.max().item():.4f}")
         if not valid_mask.any():
             if debug_this:
                 print(f"      [VIDEO_TRAIN] ❌ all frames are zeros!")
