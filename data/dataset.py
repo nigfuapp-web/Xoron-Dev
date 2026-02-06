@@ -725,10 +725,15 @@ class TrueStreamingDataset(IterableDataset):
         # Image_Prompt: TIP-I2V dataset
         # source_img: image editing datasets
         # prompt_asset: UI/design datasets
-        image_fields = ["image", "Image_Prompt", "jpg", "source_img", "original_image", "input_image", "prompt_asset"]
+        # column0: Pexels dataset (thumbnail URL)
+        image_fields = ["image", "Image_Prompt", "jpg", "source_img", "original_image", "input_image", "prompt_asset", "column0"]
         for field in image_fields:
             if field in sample and sample[field] is not None:
-                return sample[field]
+                val = sample[field]
+                # Skip header row values (Pexels has 'thumbnail_loc' as header)
+                if isinstance(val, str) and val in ['thumbnail_loc', 'content_loc', 'image', 'url']:
+                    continue
+                return val
         return None
 
     _video_extract_debug_count = 0
@@ -737,15 +742,17 @@ class TrueStreamingDataset(IterableDataset):
         """Extract raw video data from sample.
         
         Supports various dataset formats:
-        - Pexels: column1 (video URL)
-        - MiraData: video_url
+        - Pexels: column1 (Vimeo video URL)
+        - MiraData: video_url (YouTube)
         - Video-MME: url (YouTube)
-        - VideoInstruct-100K: video_id (just ID)
-        - Sora-Likert: Video (URL)
-        - T2V-Preferences: video1, video2
-        - Panda-70M: url (YouTube)
-        - OpenVid-1M: video (filename)
-        - Vript: meta.video_id
+        - Sora-Likert: Video (direct URL)
+        - T2V-Preferences: video1, video2 (direct URLs)
+        - WebVid: contentUrl (direct URL)
+        
+        NOTE: Some datasets only provide video IDs without downloadable URLs:
+        - VideoInstruct-100K: video_id like "v_xxx" (ActivityNet, not downloadable)
+        - Vript: meta.video_id (numeric internal ID, not downloadable)
+        These are skipped since we can't download the actual video content.
         """
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
@@ -769,14 +776,13 @@ class TrueStreamingDataset(IterableDataset):
                     print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
                 return val
         
-        # URL fields - ordered by specificity
+        # URL fields - ordered by specificity (direct downloadable URLs only)
         url_fields = [
-            "Video",        # Rapidata Sora-Likert
-            "video_url",    # MiraData
-            "video1",       # T2V-Preferences (first video)
-            "column1",      # Pexels (video column)
-            "contentUrl",   # WebVid
-            "url",          # Video-MME, Panda-70M (YouTube)
+            "Video",        # Rapidata Sora-Likert (direct S3 URLs)
+            "video_url",    # MiraData (YouTube)
+            "video1",       # T2V-Preferences (direct URLs)
+            "column1",      # Pexels (Vimeo mp4 URLs)
+            "contentUrl",   # WebVid (direct URLs)
             "video_link",
             "mp4_url",
             "media_url",
@@ -786,44 +792,32 @@ class TrueStreamingDataset(IterableDataset):
             if field in sample and sample[field]:
                 url = sample[field]
                 if isinstance(url, str) and url.startswith('http'):
+                    # Validate it's a usable URL (not just a header row value)
+                    if url in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
+                        continue  # Skip header values
                     if debug_this:
                         print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
                     return url
         
-        # Handle nested meta dict (Vript format)
-        if "meta" in sample and isinstance(sample["meta"], dict):
-            meta = sample["meta"]
-            if "video_id" in meta:
-                # Vript uses video_id in meta, might need YouTube URL construction
-                vid_id = meta["video_id"]
-                if vid_id:
-                    url = f"https://www.youtube.com/watch?v={vid_id}"
+        # Check 'url' field separately - only if it looks like a direct video URL
+        # (YouTube URLs would need yt-dlp to download, which is slow/unreliable)
+        if "url" in sample and sample["url"]:
+            url = sample["url"]
+            if isinstance(url, str) and url.startswith('http'):
+                # Skip YouTube URLs - they require yt-dlp and are often blocked/slow
+                if 'youtube.com' not in url and 'youtu.be' not in url:
                     if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from meta.video_id: {url}")
+                        print(f"      [VIDEO_EXTRACT] ✅ Found direct URL: {url[:60]}...")
                     return url
         
-        # VideoInstruct-100K uses video_id directly
-        if "video_id" in sample:
-            vid_id = sample["video_id"]
-            if vid_id and isinstance(vid_id, str):
-                # Check if it looks like a YouTube video ID
-                if len(vid_id) == 11 or vid_id.startswith("v_"):
-                    url = f"https://www.youtube.com/watch?v={vid_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
-                    return url
-        
-        # videoID field (Panda-70M style)
-        if "videoID" in sample:
-            vid_id = sample["videoID"]
-            if vid_id and isinstance(vid_id, str):
-                url = f"https://www.youtube.com/watch?v={vid_id}"
-                if debug_this:
-                    print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from videoID: {url}")
-                return url
+        # NOTE: We intentionally skip video_id fields that would require:
+        # - YouTube downloads (slow, often blocked, needs yt-dlp)
+        # - ActivityNet lookups (v_xxx format, not publicly downloadable)
+        # - Vript internal IDs (numeric, not downloadable)
+        # These datasets need the actual video files hosted somewhere accessible.
         
         if debug_this:
-            print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
+            print(f"      [VIDEO_EXTRACT] ❌ No downloadable video URL found")
         
         return None
 
