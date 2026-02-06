@@ -344,7 +344,8 @@ class FlowMatchingScheduler:
 
     def add_noise(self, x_0: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         noise = torch.randn_like(x_0)
-        t = t.view(-1, 1, 1, 1)
+        # Ensure t has same dtype as x_0 for consistent math
+        t = t.to(x_0.dtype).view(-1, 1, 1, 1)
         x_t = t * noise + (1 - t) * x_0
         return x_t
 
@@ -543,11 +544,13 @@ class MobileDiffusionGenerator(nn.Module):
 
     def training_step(self, images: torch.Tensor, context: torch.Tensor, mask: Optional[torch.Tensor] = None) -> dict:
         device = images.device
+        dtype = images.dtype  # Match dtype to input (FP16/BF16/FP32)
         batch_size = images.shape[0]
         
         z, mean, logvar = self.encode(images * 2 - 1)
         
-        t = torch.rand(batch_size, device=device)
+        # CRITICAL: Use same dtype as input to avoid "mat1 and mat2 must have the same dtype" errors
+        t = torch.rand(batch_size, device=device, dtype=dtype)
         
         x_t = self.scheduler.add_noise(z, t)
         target_velocity = self.scheduler.get_velocity(x_t, z, t)
@@ -555,10 +558,10 @@ class MobileDiffusionGenerator(nn.Module):
         if self.training:
             drop_mask = torch.rand(batch_size, device=device) < 0.1
             seq_len = context.shape[1]
-            null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=context.dtype)
+            null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=dtype)
             context = torch.where(drop_mask[:, None, None], null_ctx, context)
         
-        pred_velocity = self.unet(x_t, t * 1000, context, mask)
+        pred_velocity = self.unet(x_t, (t * 1000).to(dtype), context, mask)
         
         flow_loss = F.mse_loss(pred_velocity, target_velocity)
         kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())

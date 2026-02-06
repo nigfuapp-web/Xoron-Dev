@@ -873,15 +873,27 @@ class AudioEncoder(nn.Module):
             speaker_embedding: [B, hidden_size//4] speaker embedding (if speaker_ref provided)
         """
         # Encode audio
-        if self.use_raw_waveform and audio_input.dim() == 2:
+        if self.use_raw_waveform and self.waveform_tokenizer is not None:
+            # Raw waveform input - use waveform tokenizer
+            if audio_input.dim() == 3:
+                # If mel spectrogram shape [B, n_mels, T], take mean across mel bins as pseudo-waveform
+                audio_input = audio_input.mean(dim=1)  # [B, T]
             x, commitment_loss = self.waveform_tokenizer(audio_input)
-        else:
-            # Mel spectrogram input
+        elif hasattr(self, 'conv_subsample') and self.conv_subsample is not None:
+            # Mel spectrogram input - use conv subsample
             if audio_input.dim() == 2:
                 audio_input = audio_input.unsqueeze(1)
             x = self.conv_subsample(audio_input)
             x = x.transpose(1, 2)
             commitment_loss = None
+        else:
+            # Fallback: use waveform tokenizer even for mel input by averaging
+            if audio_input.dim() == 3:
+                audio_input = audio_input.mean(dim=1)  # [B, T]
+            if self.waveform_tokenizer is not None:
+                x, commitment_loss = self.waveform_tokenizer(audio_input)
+            else:
+                raise RuntimeError("AudioEncoder: No encoder available (neither waveform_tokenizer nor conv_subsample)")
 
         # Extract speaker embedding if reference provided
         speaker_embedding = None
