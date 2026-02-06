@@ -406,6 +406,8 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         return None
 
 
+_video_train_debug_count = [0]
+
 def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """
     Train SOTA video diffusion on video data.
@@ -430,16 +432,32 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
     - Processes only 1 sample at a time to avoid OOM
     - Video generator should be on GPU 0 (separate from LLM on GPU 1)
     """
-    if video_generator is None or video_frames is None:
+    _video_train_debug_count[0] += 1
+    debug_this = _video_train_debug_count[0] <= 5
+    
+    if video_generator is None:
+        if debug_this:
+            print(f"      [VIDEO_TRAIN] ❌ video_generator is None")
+        return None
+    if video_frames is None:
+        if debug_this:
+            print(f"      [VIDEO_TRAIN] ❌ video_frames is None")
         return None
     try:
         if not isinstance(video_frames, torch.Tensor):
+            if debug_this:
+                print(f"      [VIDEO_TRAIN] ❌ video_frames not tensor: {type(video_frames)}")
             return None
         if video_frames.numel() == 0:
+            if debug_this:
+                print(f"      [VIDEO_TRAIN] ❌ video_frames empty")
             return None
 
         gen_device = next(video_generator.parameters()).device
         gen_dtype = next(video_generator.parameters()).dtype
+        
+        if debug_this:
+            print(f"      [VIDEO_TRAIN] shape={video_frames.shape}, types={sample_types[:3] if sample_types else None}...")
         
         # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
         video_frames = video_frames.to(device=gen_device, dtype=gen_dtype)
@@ -451,6 +469,8 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if sample_types is not None:
             type_mask = torch.tensor([t in video_sample_types for t in sample_types], device=gen_device)
             if not type_mask.any():
+                if debug_this:
+                    print(f"      [VIDEO_TRAIN] ❌ no video sample types in batch")
                 return None
             video_frames = video_frames[type_mask]
             text_context = text_context[type_mask]
@@ -463,11 +483,15 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         elif video_frames.dim() == 4:
             video_frames = video_frames.unsqueeze(2)  # Add time dimension
         else:
+            if debug_this:
+                print(f"      [VIDEO_TRAIN] ❌ wrong dims: {video_frames.dim()}")
             return None
 
         B, C, T, H, W = video_frames.shape
 
         if C != 3 or T < 1:
+            if debug_this:
+                print(f"      [VIDEO_TRAIN] ❌ invalid C={C}, T={T}")
             return None
         
         # Limit frames during training (max 16 frames)
@@ -480,7 +504,13 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
 
         # Filter to only samples with valid (non-zero) video frames
         valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6
+        num_valid = valid_mask.sum().item()
+        if debug_this:
+            frame_sums = video_frames.abs().sum(dim=(1, 2, 3, 4))
+            print(f"      [VIDEO_TRAIN] valid={num_valid}/{B}, frame_energy={frame_sums.min().item():.1f}-{frame_sums.max().item():.1f}")
         if not valid_mask.any():
+            if debug_this:
+                print(f"      [VIDEO_TRAIN] ❌ all frames are zeros!")
             return None
         
         video_frames = video_frames[valid_mask]

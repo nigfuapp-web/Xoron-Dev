@@ -727,6 +727,8 @@ class TrueStreamingDataset(IterableDataset):
                 return sample[field]
         return None
 
+    _video_extract_debug_count = 0
+    
     def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
         """Extract raw video data from sample.
         
@@ -744,6 +746,13 @@ class TrueStreamingDataset(IterableDataset):
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
         
+        # Debug first 5 video samples
+        MultimodalStreamingDataset._video_extract_debug_count += 1
+        debug_this = MultimodalStreamingDataset._video_extract_debug_count <= 5
+        
+        if debug_this:
+            print(f"      [VIDEO_EXTRACT] dtype={dtype}, keys={list(sample.keys())[:10]}")
+        
         # Direct video data fields (binary/frames)
         video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
         for field in video_fields:
@@ -752,6 +761,8 @@ class TrueStreamingDataset(IterableDataset):
                 # If it's a filename (not URL), skip - we need actual data or URL
                 if isinstance(val, str) and not val.startswith('http') and not val.endswith(('.mp4', '.webm', '.avi')):
                     continue
+                if debug_this:
+                    print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
                 return val
         
         # URL fields - ordered by specificity
@@ -771,6 +782,8 @@ class TrueStreamingDataset(IterableDataset):
             if field in sample and sample[field]:
                 url = sample[field]
                 if isinstance(url, str) and url.startswith('http'):
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
                     return url
         
         # Handle nested meta dict (Vript format)
@@ -780,7 +793,10 @@ class TrueStreamingDataset(IterableDataset):
                 # Vript uses video_id in meta, might need YouTube URL construction
                 vid_id = meta["video_id"]
                 if vid_id:
-                    return f"https://www.youtube.com/watch?v={vid_id}"
+                    url = f"https://www.youtube.com/watch?v={vid_id}"
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from meta.video_id: {url}")
+                    return url
         
         # VideoInstruct-100K uses video_id directly
         if "video_id" in sample:
@@ -788,13 +804,22 @@ class TrueStreamingDataset(IterableDataset):
             if vid_id and isinstance(vid_id, str):
                 # Check if it looks like a YouTube video ID
                 if len(vid_id) == 11 or vid_id.startswith("v_"):
-                    return f"https://www.youtube.com/watch?v={vid_id}"
+                    url = f"https://www.youtube.com/watch?v={vid_id}"
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
+                    return url
         
         # videoID field (Panda-70M style)
         if "videoID" in sample:
             vid_id = sample["videoID"]
             if vid_id and isinstance(vid_id, str):
-                return f"https://www.youtube.com/watch?v={vid_id}"
+                url = f"https://www.youtube.com/watch?v={vid_id}"
+                if debug_this:
+                    print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from videoID: {url}")
+                return url
+        
+        if debug_this:
+            print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
         
         return None
 
