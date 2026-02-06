@@ -409,6 +409,8 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         return None
 
 
+_video_sample_count = [0]
+
 def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """Train video diffusion on video data."""
     if video_generator is None or video_frames is None:
@@ -460,8 +462,10 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         valid_mask = frame_means > 1e-6
         num_valid = valid_mask.sum().item()
         
-        # Log frame_mean for each batch
-        print(f"      [VIDEO] valid={num_valid}/{B}, frame_mean={frame_means.min().item():.4f}-{frame_means.max().item():.4f}")
+        # Log frame_mean for first 100 samples only
+        _video_sample_count[0] += 1
+        if _video_sample_count[0] <= 100:
+            print(f"      [VIDEO] valid={num_valid}/{B}, frame_mean={frame_means.min().item():.4f}-{frame_means.max().item():.4f}")
         
         if not valid_mask.any():
             return None
