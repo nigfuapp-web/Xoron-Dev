@@ -62,6 +62,9 @@ class TrueStreamingDataset(IterableDataset):
         self.use_raw_waveform = use_raw_waveform  # SOTA audio mode
 
         self.total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
+        
+        # Cache for Vript video metadata (video_id -> URL mapping)
+        self._vript_meta_cache = None
 
         # Dataset sources list - will be populated in _init_iterators
         self._dataset_sources = []
@@ -767,6 +770,38 @@ class TrueStreamingDataset(IterableDataset):
                 return val
         return None
 
+    def _get_vript_video_url(self, video_id: str) -> Optional[str]:
+        """Look up video URL from Vript metadata cache.
+        
+        Vript stores video metadata in JSON files on HuggingFace:
+        - vript_meta/vript_short_videos_meta.json
+        - vript_meta/vript_long_videos_meta.json
+        
+        Each entry contains 'webpage_url' or 'original_url' with the actual video URL.
+        """
+        # Lazy load the metadata cache
+        if self._vript_meta_cache is None:
+            self._vript_meta_cache = {}
+            try:
+                import requests
+                # Load short videos meta
+                short_url = "https://huggingface.co/datasets/Mutonix/Vript/resolve/main/vript_meta/vript_short_videos_meta.json"
+                resp = requests.get(short_url, timeout=60)
+                if resp.status_code == 200:
+                    self._vript_meta_cache.update(resp.json())
+                    print(f"   📥 Loaded Vript short videos metadata: {len(self._vript_meta_cache)} entries")
+            except Exception as e:
+                print(f"   ⚠️ Failed to load Vript metadata: {e}")
+        
+        # Look up the video ID
+        if video_id in self._vript_meta_cache:
+            meta = self._vript_meta_cache[video_id]
+            # Prefer original_url (YouTube Shorts), then webpage_url
+            url = meta.get('original_url') or meta.get('webpage_url')
+            return url
+        
+        return None
+
     _video_extract_debug_count = 0
     
     def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
@@ -860,12 +895,20 @@ class TrueStreamingDataset(IterableDataset):
                 return url
         
         # Handle nested meta dict (Vript format)
-        # Vript stores video IDs in meta.video_id - can be YouTube (11 chars) or TikTok (long numeric)
+        # Vript stores video IDs in meta.video_id - look up actual URL from metadata
         if "meta" in sample and isinstance(sample["meta"], dict):
             meta = sample["meta"]
             if "video_id" in meta:
                 vid_id = str(meta["video_id"])
-                # Check if it's a YouTube video ID (11 characters)
+                
+                # Try to get URL from Vript metadata cache
+                url = self._get_vript_video_url(vid_id)
+                if url:
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Found Vript URL for {vid_id}: {url[:60]}...")
+                    return url
+                
+                # Fallback: Check if it's a YouTube video ID (11 characters)
                 if len(vid_id) == 11:
                     url = f"https://www.youtube.com/watch?v={vid_id}"
                     if debug_this:
