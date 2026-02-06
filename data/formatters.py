@@ -1065,18 +1065,18 @@ class MultimodalFormatter:
 
     def format_video_caption_sample(self, sample: Dict) -> Optional[Dict]:
         try:
-            # Video-MME format (has url, videoID, task_type, question, options, a)
+            # Video-MME format (has url, videoID, task_type, question, options, answer)
             # Dataset: lmms-lab/Video-MME
-            # Columns: category, url, videoID, task_type, question, options, a
+            # Columns: category, url, videoID, task_type, question, options, answer
             # - url: Full YouTube URL (https://www.youtube.com/watch?v=...)
             # - videoID: YouTube video ID (11 chars)
-            # - options: List like ["A. 3.", "B. 4.", "C. 5.", "D. 6."]
-            # - a: Correct answer letter ("A", "B", "C", or "D")
+            # - options: List like ["A. 1.", "B. 4.", "C. 5.", "D. 6."]
+            # - answer: Correct answer letter ("A", "B", "C", or "D")
             if "question" in sample and "options" in sample:
                 question = sample.get("question", "")
                 options = sample.get("options", [])
-                # Get the answer - Video-MME uses 'a' field for the answer letter
-                answer_letter = sample.get("a", sample.get("answer", ""))
+                # Get the answer - Video-MME uses 'answer' field (or 'a' in some versions)
+                answer_letter = sample.get("answer") or sample.get("a", "")
                 
                 if question and options:
                     # Format options as part of the question
