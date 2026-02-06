@@ -60,7 +60,7 @@ class XoronConfig:
     vision_model_name: str = "google/siglip-so400m-patch14-384"  # SigLIP 2 - best for MoE
     freeze_vision: bool = False
     num_vision_tokens: int = 64
-    max_video_frames: int = 32
+    max_video_frames: int = 16
     projector_type: str = "perceiver"  # "perceiver", "spatial", "c_abstractor", "mlp"
     vision_image_size: int = 384  # SigLIP SO400M uses 384x384
     
@@ -88,7 +88,7 @@ class XoronConfig:
     generation_use_dual_stream: bool = True  # Symmetric dual-stream attention
     
     # Video Generation Configuration (SOTA: 3D Causal Transformers + Flow Matching + 3D-RoPE)
-    generation_video_size: int = 384  # Match SigLIP 384x384
+    generation_video_size: int = 256  # 256x256 for efficient training
     generation_num_frames: int = 16
     generation_video_cfg_scale: float = 7.5
     generation_video_use_flow_matching: bool = True

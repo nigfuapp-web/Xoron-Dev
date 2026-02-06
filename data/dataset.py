@@ -42,8 +42,8 @@ class TrueStreamingDataset(IterableDataset):
         max_per_dataset: int = 500,
         sample_repeat: int = 1,
         voice_processor=None,
-        max_video_frames: int = 32,
-        video_size: int = 384,  # Match SigLIP 384x384
+        max_video_frames: int = 16,
+        video_size: int = 256,  # 256x256 for efficient training
         resume_state_path: str = None,
         use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
     ):
@@ -1271,8 +1271,8 @@ def create_train_eval_datasets(
     max_per_dataset_eval: int = 10,
     sample_repeat: int = 4,
     voice_processor=None,
-    max_video_frames: int = 32,
-    video_size: int = 384,  # Match SigLIP 384x384
+    max_video_frames: int = 16,
+    video_size: int = 256,  # 256x256 for efficient training
     use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
 ):
     """
