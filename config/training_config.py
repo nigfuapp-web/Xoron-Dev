@@ -252,17 +252,20 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'primary': 'cuda:0',
         }
     elif num_gpus == 2:
+        # MEMORY OPTIMIZED: Spread heavy models across GPUs
+        # GPU 0: Encoders + VIDEO generator (video uses most memory during training)
+        # GPU 1: LLM + IMAGE generator (LLM is heavy but image gen is lighter)
         return {
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:1',
+            'audio_decoder': 'cuda:0',  # Moved to GPU 0 (smaller model)
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:1',
             'cross_attention': 'cuda:1',
-            'generator': 'cuda:1',
-            'video_generator': 'cuda:1',
+            'generator': 'cuda:1',  # Image generator stays on GPU 1
+            'video_generator': 'cuda:0',  # VIDEO generator moved to GPU 0 (more free space)
             'modality_markers': 'cuda:1',
             'primary': 'cuda:0',
         }
