@@ -18,76 +18,78 @@ from typing import Optional, Tuple
 EPS = 1e-5
 
 
-class RoPE3D(nn.Module):
+class RoPE2D(nn.Module):
     """
-    3D Rotary Position Embedding for (x, y, t) dimensions.
-    Supports flexible aspect ratios and temporal lengths.
+    2D Rotary Position Embedding for spatial dimensions (memory efficient).
+    Used for spatial attention in factorized video attention.
     """
 
-    def __init__(self, dim: int, max_height: int = 64, max_width: int = 64, max_frames: int = 32, base: float = 10000.0):
+    def __init__(self, dim: int, max_height: int = 64, max_width: int = 64, base: float = 10000.0):
         super().__init__()
         self.dim = dim
-        self.max_height = max_height
-        self.max_width = max_width
-        self.max_frames = max_frames
-        self.base = base
-        
-        dim_per_axis = dim // 3
-        self.dim_x = dim_per_axis
-        self.dim_y = dim_per_axis
-        self.dim_t = dim - 2 * dim_per_axis
+        self.dim_x = dim // 2
+        self.dim_y = dim - self.dim_x
         
         inv_freq_x = 1.0 / (base ** (torch.arange(0, self.dim_x, 2, dtype=torch.float32) / self.dim_x))
         inv_freq_y = 1.0 / (base ** (torch.arange(0, self.dim_y, 2, dtype=torch.float32) / self.dim_y))
-        inv_freq_t = 1.0 / (base ** (torch.arange(0, self.dim_t, 2, dtype=torch.float32) / self.dim_t))
         
         self.register_buffer('inv_freq_x', inv_freq_x, persistent=False)
         self.register_buffer('inv_freq_y', inv_freq_y, persistent=False)
-        self.register_buffer('inv_freq_t', inv_freq_t, persistent=False)
 
-    def forward(self, x: torch.Tensor, height: int, width: int, frames: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, height: int, width: int) -> Tuple[torch.Tensor, torch.Tensor]:
         device = x.device
         dtype = x.dtype
         
+        # Vectorized computation (no loops)
         pos_x = torch.arange(width, device=device, dtype=torch.float32)
         pos_y = torch.arange(height, device=device, dtype=torch.float32)
-        pos_t = torch.arange(frames, device=device, dtype=torch.float32)
         
-        freqs_x = torch.outer(pos_x, self.inv_freq_x.to(device))
-        freqs_y = torch.outer(pos_y, self.inv_freq_y.to(device))
-        freqs_t = torch.outer(pos_t, self.inv_freq_t.to(device))
+        freqs_x = torch.outer(pos_x, self.inv_freq_x.to(device))  # [W, dim_x/2]
+        freqs_y = torch.outer(pos_y, self.inv_freq_y.to(device))  # [H, dim_y/2]
         
-        freqs_x = torch.cat([freqs_x, freqs_x], dim=-1)
-        freqs_y = torch.cat([freqs_y, freqs_y], dim=-1)
-        freqs_t = torch.cat([freqs_t, freqs_t], dim=-1)
+        # Expand for broadcasting: create [H, W, dim] tensors
+        cos_x = torch.cat([freqs_x.cos(), freqs_x.cos()], dim=-1)  # [W, dim_x]
+        sin_x = torch.cat([freqs_x.sin(), freqs_x.sin()], dim=-1)
+        cos_y = torch.cat([freqs_y.cos(), freqs_y.cos()], dim=-1)  # [H, dim_y]
+        sin_y = torch.cat([freqs_y.sin(), freqs_y.sin()], dim=-1)
         
-        cos_x = freqs_x.cos().to(dtype)
-        sin_x = freqs_x.sin().to(dtype)
-        cos_y = freqs_y.cos().to(dtype)
-        sin_y = freqs_y.sin().to(dtype)
-        cos_t = freqs_t.cos().to(dtype)
-        sin_t = freqs_t.sin().to(dtype)
+        # Build 2D position embeddings via broadcasting
+        cos_2d = torch.zeros(height, width, self.dim, device=device, dtype=dtype)
+        sin_2d = torch.zeros(height, width, self.dim, device=device, dtype=dtype)
         
-        cos_3d = torch.zeros(frames, height, width, self.dim, device=device, dtype=dtype)
-        sin_3d = torch.zeros(frames, height, width, self.dim, device=device, dtype=dtype)
+        cos_2d[:, :, :self.dim_x] = cos_x.unsqueeze(0).expand(height, -1, -1)
+        sin_2d[:, :, :self.dim_x] = sin_x.unsqueeze(0).expand(height, -1, -1)
+        cos_2d[:, :, self.dim_x:] = cos_y.unsqueeze(1).expand(-1, width, -1)
+        sin_2d[:, :, self.dim_x:] = sin_y.unsqueeze(1).expand(-1, width, -1)
         
-        for t in range(frames):
-            for y in range(height):
-                for w in range(width):
-                    cos_3d[t, y, w, :self.dim_x] = cos_x[w]
-                    sin_3d[t, y, w, :self.dim_x] = sin_x[w]
-                    cos_3d[t, y, w, self.dim_x:self.dim_x+self.dim_y] = cos_y[y]
-                    sin_3d[t, y, w, self.dim_x:self.dim_x+self.dim_y] = sin_y[y]
-                    cos_3d[t, y, w, self.dim_x+self.dim_y:] = cos_t[t]
-                    sin_3d[t, y, w, self.dim_x+self.dim_y:] = sin_t[t]
-        
-        cos_3d = cos_3d.view(frames * height * width, self.dim)
-        sin_3d = sin_3d.view(frames * height * width, self.dim)
-        
-        return cos_3d, sin_3d
+        return cos_2d.view(height * width, self.dim).to(dtype), sin_2d.view(height * width, self.dim).to(dtype)
 
 
-def apply_rope_3d(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+class RoPE1D(nn.Module):
+    """
+    1D Rotary Position Embedding for temporal dimension.
+    Used for temporal attention in factorized video attention.
+    """
+
+    def __init__(self, dim: int, max_len: int = 64, base: float = 10000.0):
+        super().__init__()
+        self.dim = dim
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        self.register_buffer('inv_freq', inv_freq, persistent=False)
+
+    def forward(self, x: torch.Tensor, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = x.device
+        dtype = x.dtype
+        
+        pos = torch.arange(seq_len, device=device, dtype=torch.float32)
+        freqs = torch.outer(pos, self.inv_freq.to(device))  # [seq_len, dim/2]
+        freqs = torch.cat([freqs, freqs], dim=-1)  # [seq_len, dim]
+        
+        return freqs.cos().to(dtype), freqs.sin().to(dtype)
+
+
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Apply rotary position embedding."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2:]
     rotated = torch.cat((-x2, x1), dim=-1)
@@ -179,13 +181,13 @@ class TemporalMoELayer(nn.Module):
         return output.view(batch_size, seq_len, hidden_size)
 
 
-class Causal3DAttention(nn.Module):
+class SpatialAttention(nn.Module):
     """
-    3D Causal Self-Attention with 3D-RoPE.
-    Attends only to past frames and positions for autoregressive generation.
+    Spatial self-attention: each frame attends only within itself.
+    Memory: O(T * (H*W)^2) instead of O((T*H*W)^2)
     """
 
-    def __init__(self, hidden_size: int, num_heads: int = 8, max_frames: int = 32, max_height: int = 64, max_width: int = 64):
+    def __init__(self, hidden_size: int, num_heads: int = 8, max_height: int = 64, max_width: int = 64):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -194,44 +196,134 @@ class Causal3DAttention(nn.Module):
         
         self.to_qkv = nn.Linear(hidden_size, hidden_size * 3, bias=False)
         self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
-        
-        self.rope_3d = RoPE3D(self.head_dim, max_height, max_width, max_frames)
+        self.rope_2d = RoPE2D(self.head_dim, max_height, max_width)
         self.norm = nn.LayerNorm(hidden_size)
 
-    def forward(self, x: torch.Tensor, height: int, width: int, frames: int, causal: bool = True) -> torch.Tensor:
-        batch_size, seq_len, _ = x.shape
+    def forward(self, x: torch.Tensor, height: int, width: int, frames: int) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape  # seq_len = T * H * W
+        spatial_len = height * width
         
         x = self.norm(x)
         
-        qkv = self.to_qkv(x).reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim)
+        # Reshape to [B*T, H*W, hidden] for per-frame attention
+        x = x.view(batch_size * frames, spatial_len, self.hidden_size)
+        
+        qkv = self.to_qkv(x).reshape(batch_size * frames, spatial_len, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.unbind(dim=2)
         
-        cos, sin = self.rope_3d(x, height, width, frames)
-        # cos/sin shape: [seq_len, head_dim] -> [1, 1, seq_len, head_dim]
-        # to broadcast with q/k shape: [B, num_heads, seq_len, head_dim]
-        cos = cos.unsqueeze(0).unsqueeze(1)
+        # Get 2D RoPE for spatial positions
+        cos, sin = self.rope_2d(x, height, width)
+        cos = cos.unsqueeze(0).unsqueeze(1)  # [1, 1, H*W, head_dim]
         sin = sin.unsqueeze(0).unsqueeze(1)
         
-        q = q.transpose(1, 2)
+        q = q.transpose(1, 2)  # [B*T, heads, H*W, head_dim]
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         
-        q = apply_rope_3d(q, cos, sin)
-        k = apply_rope_3d(k, cos, sin)
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
         
+        # Attention only within each frame: [B*T, heads, H*W, H*W]
+        attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(x.dtype)
+        
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).reshape(batch_size * frames, spatial_len, self.hidden_size)
+        out = self.to_out(out)
+        
+        # Reshape back to [B, T*H*W, hidden]
+        return out.view(batch_size, seq_len, self.hidden_size)
+
+
+class TemporalAttention(nn.Module):
+    """
+    Temporal self-attention: each spatial position attends across time.
+    Memory: O(H*W * T^2) instead of O((T*H*W)^2)
+    """
+
+    def __init__(self, hidden_size: int, num_heads: int = 8, max_frames: int = 32):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.to_qkv = nn.Linear(hidden_size, hidden_size * 3, bias=False)
+        self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.rope_1d = RoPE1D(self.head_dim, max_frames)
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def forward(self, x: torch.Tensor, height: int, width: int, frames: int, causal: bool = True) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape  # seq_len = T * H * W
+        spatial_len = height * width
+        
+        x = self.norm(x)
+        
+        # Reshape to [B*H*W, T, hidden] for per-position temporal attention
+        x = x.view(batch_size, frames, spatial_len, self.hidden_size)
+        x = x.permute(0, 2, 1, 3).reshape(batch_size * spatial_len, frames, self.hidden_size)
+        
+        qkv = self.to_qkv(x).reshape(batch_size * spatial_len, frames, 3, self.num_heads, self.head_dim)
+        q, k, v = qkv.unbind(dim=2)
+        
+        # Get 1D RoPE for temporal positions
+        cos, sin = self.rope_1d(x, frames)
+        cos = cos.unsqueeze(0).unsqueeze(1)  # [1, 1, T, head_dim]
+        sin = sin.unsqueeze(0).unsqueeze(1)
+        
+        q = q.transpose(1, 2)  # [B*H*W, heads, T, head_dim]
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        
+        q = apply_rope(q, cos, sin)
+        k = apply_rope(k, cos, sin)
+        
+        # Attention across time for each position: [B*H*W, heads, T, T]
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         
         if causal:
-            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool), diagonal=1)
+            causal_mask = torch.triu(torch.ones(frames, frames, device=x.device, dtype=torch.bool), diagonal=1)
             attn = attn.masked_fill(causal_mask, float('-inf'))
         
         attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(x.dtype)
         
         out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).reshape(batch_size, seq_len, self.hidden_size)
+        out = out.transpose(1, 2).reshape(batch_size * spatial_len, frames, self.hidden_size)
+        
+        # Reshape back to [B, T*H*W, hidden]
+        out = out.view(batch_size, spatial_len, frames, self.hidden_size)
+        out = out.permute(0, 2, 1, 3).reshape(batch_size, seq_len, self.hidden_size)
         out = self.to_out(out)
         
         return out
+
+
+class FactorizedSpatioTemporalAttention(nn.Module):
+    """
+    Factorized Spatial-Temporal Attention (like CogVideo, Open-Sora, SVD).
+    
+    Instead of full 3D attention O((T*H*W)^2), uses:
+    1. Spatial attention per frame: O(T * (H*W)^2)  
+    2. Temporal attention per position: O(H*W * T^2)
+    
+    Total: O(T*(H*W)^2 + H*W*T^2) << O((T*H*W)^2)
+    
+    For T=8, H=W=64: 
+    - Full 3D: 32768^2 = 1B attention scores
+    - Factorized: 8*4096^2 + 4096*64 = 134M attention scores (7.5x less!)
+    """
+
+    def __init__(self, hidden_size: int, num_heads: int = 8, max_frames: int = 32, max_height: int = 64, max_width: int = 64):
+        super().__init__()
+        self.spatial_attn = SpatialAttention(hidden_size, num_heads, max_height, max_width)
+        self.temporal_attn = TemporalAttention(hidden_size, num_heads, max_frames)
+
+    def forward(self, x: torch.Tensor, height: int, width: int, frames: int, causal: bool = True) -> torch.Tensor:
+        # Spatial attention (within each frame)
+        x = x + self.spatial_attn(x, height, width, frames)
+        # Temporal attention (across frames for each position)
+        x = x + self.temporal_attn(x, height, width, frames, causal)
+        return x
 
 
 class CrossAttention3D(nn.Module):
@@ -272,13 +364,20 @@ class CrossAttention3D(nn.Module):
 
 class Causal3DTransformerBlock(nn.Module):
     """
-    3D Causal Transformer Block with Temporal MoE.
+    3D Causal Transformer Block with Factorized Spatial-Temporal Attention.
+    
+    Uses memory-efficient factorized attention instead of full 3D attention:
+    - Spatial: Each frame attends within itself O(T * (H*W)^2)
+    - Temporal: Each position attends across frames O(H*W * T^2)
+    
+    This reduces memory from O((T*H*W)^2) to O(T*(H*W)^2 + H*W*T^2)
     """
 
-    def __init__(self, hidden_size: int, context_dim: int, num_heads: int = 8, num_experts: int = 4, max_frames: int = 32):
+    def __init__(self, hidden_size: int, context_dim: int, num_heads: int = 8, num_experts: int = 4, max_frames: int = 32, max_height: int = 64, max_width: int = 64):
         super().__init__()
         
-        self.self_attn = Causal3DAttention(hidden_size, num_heads, max_frames)
+        # Use factorized attention instead of full 3D attention
+        self.self_attn = FactorizedSpatioTemporalAttention(hidden_size, num_heads, max_frames, max_height, max_width)
         self.cross_attn = CrossAttention3D(hidden_size, context_dim, num_heads)
         self.moe = TemporalMoELayer(hidden_size, hidden_size * 4, num_experts)
         
@@ -287,8 +386,11 @@ class Causal3DTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(hidden_size)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor, height: int, width: int, frames: int, temporal_context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x = x + self.self_attn(self.norm1(x), height, width, frames, causal=True)
+        # Factorized self-attention (spatial + temporal)
+        x = self.self_attn(self.norm1(x), height, width, frames, causal=True)
+        # Cross attention with text context
         x = x + self.cross_attn(self.norm2(x), context)
+        # MoE feedforward
         x = x + self.moe(self.norm3(x), temporal_context)
         
         return x
@@ -327,7 +429,10 @@ class FlowMatchingScheduler:
 
 class VideoUNet3D(nn.Module):
     """
-    3D U-Net for video generation with Causal Transformers and Temporal MoE.
+    3D U-Net for video generation with Factorized Spatial-Temporal Attention.
+    
+    Uses memory-efficient factorized attention that processes spatial and temporal
+    dimensions separately, reducing memory from O((T*H*W)^2) to O(T*(H*W)^2 + H*W*T^2).
     """
 
     def __init__(
@@ -340,6 +445,8 @@ class VideoUNet3D(nn.Module):
         num_heads: int = 8,
         num_experts: int = 4,
         num_frames: int = 16,
+        max_height: int = 64,
+        max_width: int = 64,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -354,7 +461,7 @@ class VideoUNet3D(nn.Module):
         self.input_proj = nn.Conv3d(in_channels, hidden_size, kernel_size=3, padding=1)
         
         self.transformer_blocks = nn.ModuleList([
-            Causal3DTransformerBlock(hidden_size, context_dim, num_heads, num_experts, num_frames)
+            Causal3DTransformerBlock(hidden_size, context_dim, num_heads, num_experts, num_frames, max_height, max_width)
             for _ in range(num_layers)
         ])
         
@@ -435,8 +542,13 @@ class VideoVAE3D(nn.Module):
 
 class MobileVideoDiffusion(nn.Module):
     """
-    SOTA Video Diffusion with Flow Matching, 3D-RoPE, Temporal MoE.
-    Optimized for 2x T4 GPUs with FP16.
+    SOTA Video Diffusion with Flow Matching, Factorized Attention, Temporal MoE.
+    
+    Uses memory-efficient factorized spatial-temporal attention:
+    - Full 3D attention: O((T*H*W)^2) = 1B+ attention scores (OOM!)
+    - Factorized: O(T*(H*W)^2 + H*W*T^2) = ~134M scores (7.5x less memory)
+    
+    Optimized for 2x T4 GPUs (15GB each) with FP16.
     """
 
     def __init__(
@@ -469,6 +581,8 @@ class MobileVideoDiffusion(nn.Module):
             num_heads=8,
             num_experts=4,
             num_frames=num_frames,
+            max_height=self.latent_size,  # Pass spatial dims for factorized attention
+            max_width=self.latent_size,
         )
         
         self.scheduler = FlowMatchingScheduler(num_inference_steps)
