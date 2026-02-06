@@ -743,16 +743,15 @@ class TrueStreamingDataset(IterableDataset):
         
         Supports various dataset formats:
         - Pexels: column1 (Vimeo video URL)
-        - MiraData: video_url (YouTube)
-        - Video-MME: url (YouTube)
+        - MiraData: video_url (YouTube - downloaded via yt-dlp)
+        - Video-MME: url (YouTube - downloaded via yt-dlp)
         - Sora-Likert: Video (direct URL)
         - T2V-Preferences: video1, video2 (direct URLs)
         - WebVid: contentUrl (direct URL)
+        - VideoInstruct-100K: video_id -> ActivityNet URL
+        - Vript: meta.video_id (internal ID, needs special handling)
         
-        NOTE: Some datasets only provide video IDs without downloadable URLs:
-        - VideoInstruct-100K: video_id like "v_xxx" (ActivityNet, not downloadable)
-        - Vript: meta.video_id (numeric internal ID, not downloadable)
-        These are skipped since we can't download the actual video content.
+        YouTube URLs are downloaded using yt-dlp (in requirements.txt).
         """
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
@@ -776,13 +775,14 @@ class TrueStreamingDataset(IterableDataset):
                     print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
                 return val
         
-        # URL fields - ordered by specificity (direct downloadable URLs only)
+        # URL fields - ordered by specificity
         url_fields = [
             "Video",        # Rapidata Sora-Likert (direct S3 URLs)
             "video_url",    # MiraData (YouTube)
             "video1",       # T2V-Preferences (direct URLs)
             "column1",      # Pexels (Vimeo mp4 URLs)
             "contentUrl",   # WebVid (direct URLs)
+            "url",          # General URL field (YouTube, direct, etc.)
             "video_link",
             "mp4_url",
             "media_url",
@@ -792,32 +792,55 @@ class TrueStreamingDataset(IterableDataset):
             if field in sample and sample[field]:
                 url = sample[field]
                 if isinstance(url, str) and url.startswith('http'):
-                    # Validate it's a usable URL (not just a header row value)
+                    # Skip header row values
                     if url in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
-                        continue  # Skip header values
+                        continue
                     if debug_this:
                         print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
                     return url
         
-        # Check 'url' field separately - only if it looks like a direct video URL
-        # (YouTube URLs would need yt-dlp to download, which is slow/unreliable)
-        if "url" in sample and sample["url"]:
-            url = sample["url"]
-            if isinstance(url, str) and url.startswith('http'):
-                # Skip YouTube URLs - they require yt-dlp and are often blocked/slow
-                if 'youtube.com' not in url and 'youtu.be' not in url:
+        # VideoInstruct-100K uses video_id - convert to ActivityNet URL
+        # Format: v_xxxx -> ActivityNet video ID
+        if "video_id" in sample:
+            vid_id = sample["video_id"]
+            if vid_id and isinstance(vid_id, str):
+                if vid_id.startswith("v_"):
+                    # ActivityNet video - construct the download URL
+                    # ActivityNet videos can be accessed via their website or mirrors
+                    activitynet_url = f"http://ec2-52-25-205-214.us-west-2.compute.amazonaws.com/files/activity_net/v1-3/train_val/{vid_id}.mp4"
                     if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Found direct URL: {url[:60]}...")
+                        print(f"      [VIDEO_EXTRACT] ✅ Built ActivityNet URL from video_id: {activitynet_url[:60]}...")
+                    return activitynet_url
+                elif len(vid_id) == 11:
+                    # Looks like a YouTube video ID (11 chars)
+                    url = f"https://www.youtube.com/watch?v={vid_id}"
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
                     return url
         
-        # NOTE: We intentionally skip video_id fields that would require:
-        # - YouTube downloads (slow, often blocked, needs yt-dlp)
-        # - ActivityNet lookups (v_xxx format, not publicly downloadable)
-        # - Vript internal IDs (numeric, not downloadable)
-        # These datasets need the actual video files hosted somewhere accessible.
+        # videoID field (Panda-70M style) - YouTube IDs
+        if "videoID" in sample:
+            vid_id = sample["videoID"]
+            if vid_id and isinstance(vid_id, str) and len(vid_id) == 11:
+                url = f"https://www.youtube.com/watch?v={vid_id}"
+                if debug_this:
+                    print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from videoID: {url}")
+                return url
+        
+        # Handle nested meta dict (Vript format)
+        # Vript uses numeric internal IDs - these need special lookup
+        if "meta" in sample and isinstance(sample["meta"], dict):
+            meta = sample["meta"]
+            if "video_id" in meta:
+                vid_id = meta["video_id"]
+                # Vript IDs are numeric strings like "6902084818440408321"
+                # These are internal IDs, not directly downloadable
+                # Skip for now - would need Vript-specific API
+                if debug_this:
+                    print(f"      [VIDEO_EXTRACT] ⚠️ Vript internal ID (not downloadable): {vid_id}")
         
         if debug_this:
-            print(f"      [VIDEO_EXTRACT] ❌ No downloadable video URL found")
+            print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
         
         return None
 
