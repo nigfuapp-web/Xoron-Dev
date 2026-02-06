@@ -347,7 +347,9 @@ class TrueStreamingDataset(IterableDataset):
             
             # Determine file extension from URL or content-type
             content_type = response.headers.get('content-type', '')
-            if 'mp4' in url.lower() or 'mp4' in content_type:
+            if 'gif' in url.lower() or 'gif' in content_type:
+                ext = '.gif'
+            elif 'mp4' in url.lower() or 'mp4' in content_type:
                 ext = '.mp4'
             elif 'webm' in url.lower() or 'webm' in content_type:
                 ext = '.webm'
@@ -409,9 +411,30 @@ class TrueStreamingDataset(IterableDataset):
             return None
 
     def _extract_frames_from_video(self, video_path: str) -> List[torch.Tensor]:
-        """Extract frames from a video file."""
+        """Extract frames from a video file (mp4, webm, avi) or animated GIF."""
         frames = []
         try:
+            # Handle GIF files with PIL (cv2 doesn't handle animated GIFs well)
+            if video_path.lower().endswith('.gif'):
+                gif = Image.open(video_path)
+                gif_frames = []
+                try:
+                    while True:
+                        gif_frames.append(gif.copy().convert('RGB'))
+                        gif.seek(gif.tell() + 1)
+                except EOFError:
+                    pass
+                
+                if len(gif_frames) > 0:
+                    # Sample frames evenly
+                    indices = np.linspace(0, len(gif_frames) - 1, min(self.max_video_frames, len(gif_frames)), dtype=int)
+                    for idx in indices:
+                        processed = self._process_image(gif_frames[idx])
+                        if processed is not None:
+                            frames.append(processed)
+                return frames
+            
+            # Handle video files with cv2
             import cv2
             cap = cv2.VideoCapture(video_path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
