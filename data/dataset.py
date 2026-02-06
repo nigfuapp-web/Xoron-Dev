@@ -721,7 +721,11 @@ class TrueStreamingDataset(IterableDataset):
 
     def _extract_image_data(self, sample: Dict, dtype: str) -> Any:
         """Extract raw image data from sample."""
-        image_fields = ["image", "jpg", "source_img", "original_image", "input_image", "prompt_asset"]
+        # Common image fields across different datasets
+        # Image_Prompt: TIP-I2V dataset
+        # source_img: image editing datasets
+        # prompt_asset: UI/design datasets
+        image_fields = ["image", "Image_Prompt", "jpg", "source_img", "original_image", "input_image", "prompt_asset"]
         for field in image_fields:
             if field in sample and sample[field] is not None:
                 return sample[field]
@@ -946,6 +950,23 @@ class TrueStreamingDataset(IterableDataset):
                 video_frames = self._process_video_frames(raw_video_data, sample_metadata)
                 if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
                     pixel_values = video_frames[0]
+            
+            # For image_to_video: if no video data but we have an image, create video frames from image
+            # This is the correct behavior for I2V datasets like TIP-I2V that only provide source images
+            if video_frames is None and dtype == 'image_to_video' and raw_image_data is not None:
+                # Create video frames by repeating the source image (the model learns to animate it)
+                img_tensor = self._process_image(raw_image_data)
+                if img_tensor is not None:
+                    # Resize to video size if needed
+                    if img_tensor.shape[1] != self.video_size or img_tensor.shape[2] != self.video_size:
+                        img_tensor = F.interpolate(
+                            img_tensor.unsqueeze(0), 
+                            size=(self.video_size, self.video_size), 
+                            mode='bilinear', 
+                            align_corners=False
+                        ).squeeze(0)
+                    # Repeat image for all video frames (model learns motion from this static input)
+                    video_frames = img_tensor.unsqueeze(0).expand(self.max_video_frames, -1, -1, -1).clone()
             
             if video_frames is None:
                 video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
