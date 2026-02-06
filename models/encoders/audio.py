@@ -872,28 +872,35 @@ class AudioEncoder(nn.Module):
             features: [B, T', hidden_size] audio features
             speaker_embedding: [B, hidden_size//4] speaker embedding (if speaker_ref provided)
         """
-        # Encode audio
+        # Encode audio based on input format
+        # SOTA mode (use_raw_waveform=True): expects [B, T] raw waveform from dataset
+        # Legacy mode (use_raw_waveform=False): expects [B, n_mels, T] mel spectrogram
+        commitment_loss = None
+        
         if self.use_raw_waveform and self.waveform_tokenizer is not None:
-            # Raw waveform input - use waveform tokenizer
-            if audio_input.dim() == 3:
-                # If mel spectrogram shape [B, n_mels, T], take mean across mel bins as pseudo-waveform
-                audio_input = audio_input.mean(dim=1)  # [B, T]
+            # SOTA: Raw waveform input [B, T] or [B, 1, T]
+            if audio_input.dim() == 3 and audio_input.shape[1] == 1:
+                # [B, 1, T] -> [B, T]
+                audio_input = audio_input.squeeze(1)
+            elif audio_input.dim() == 3:
+                # Legacy mel spectrogram accidentally passed - shouldn't happen with proper pipeline
+                # Log warning and convert (not ideal, but prevents crash)
+                audio_input = audio_input.mean(dim=1)  # [B, n_mels, T] -> [B, T]
             x, commitment_loss = self.waveform_tokenizer(audio_input)
         elif hasattr(self, 'conv_subsample') and self.conv_subsample is not None:
-            # Mel spectrogram input - use conv subsample
+            # Legacy: Mel spectrogram input [B, n_mels, T]
             if audio_input.dim() == 2:
+                # [B, T] waveform accidentally passed to mel mode - shouldn't happen
                 audio_input = audio_input.unsqueeze(1)
             x = self.conv_subsample(audio_input)
             x = x.transpose(1, 2)
-            commitment_loss = None
         else:
-            # Fallback: use waveform tokenizer even for mel input by averaging
-            if audio_input.dim() == 3:
-                audio_input = audio_input.mean(dim=1)  # [B, T]
-            if self.waveform_tokenizer is not None:
-                x, commitment_loss = self.waveform_tokenizer(audio_input)
-            else:
-                raise RuntimeError("AudioEncoder: No encoder available (neither waveform_tokenizer nor conv_subsample)")
+            raise RuntimeError(
+                f"AudioEncoder: Incompatible configuration. "
+                f"use_raw_waveform={self.use_raw_waveform}, "
+                f"waveform_tokenizer={self.waveform_tokenizer is not None}, "
+                f"conv_subsample={hasattr(self, 'conv_subsample') and self.conv_subsample is not None}"
+            )
 
         # Extract speaker embedding if reference provided
         speaker_embedding = None

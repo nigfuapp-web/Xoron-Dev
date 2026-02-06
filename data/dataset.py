@@ -45,6 +45,7 @@ class TrueStreamingDataset(IterableDataset):
         max_video_frames: int = 32,
         video_size: int = 384,  # Match SigLIP 384x384
         resume_state_path: str = None,
+        use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -58,6 +59,7 @@ class TrueStreamingDataset(IterableDataset):
         self.voice_processor = voice_processor
         self.max_video_frames = max_video_frames
         self.video_size = video_size
+        self.use_raw_waveform = use_raw_waveform  # SOTA audio mode
 
         self.total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
 
@@ -537,7 +539,13 @@ class TrueStreamingDataset(IterableDataset):
             return None
 
     def _process_audio(self, audio_data, sample: dict) -> Optional[torch.Tensor]:
-        """Process audio data to mel-spectrogram."""
+        """Process audio data to raw waveform (SOTA) or mel-spectrogram (legacy).
+        
+        When use_raw_waveform=True (default, SOTA):
+            Returns: [T] raw waveform tensor for RawWaveformTokenizer
+        When use_raw_waveform=False (legacy):
+            Returns: [n_mels, T] mel spectrogram for conv_subsample
+        """
         if self.voice_processor is None:
             return None
 
@@ -550,8 +558,8 @@ class TrueStreamingDataset(IterableDataset):
         # Get sampling rate from various possible fields
         sampling_rate = sample.get('sampling_rate', sample.get('sample_rate', 16000))
         
-        def _waveform_to_mel(waveform, sr):
-            """Helper to convert waveform to mel spectrogram."""
+        def _preprocess_waveform(waveform, sr):
+            """Preprocess waveform: resample, truncate, normalize."""
             try:
                 # Ensure 1D waveform (mono)
                 if waveform.dim() == 2:
@@ -568,15 +576,38 @@ class TrueStreamingDataset(IterableDataset):
                     return None
                 
                 # Resample if needed
-                if sr != self.voice_processor.sample_rate and self.voice_processor.has_torchaudio:
-                    import torchaudio
-                    resampler = torchaudio.transforms.Resample(int(sr), self.voice_processor.sample_rate)
-                    waveform = resampler(waveform.unsqueeze(0)).squeeze(0)
+                if sr != self.voice_processor.sample_rate:
+                    try:
+                        import torchaudio
+                        resampler = torchaudio.transforms.Resample(int(sr), self.voice_processor.sample_rate)
+                        waveform = resampler(waveform.unsqueeze(0)).squeeze(0)
+                    except ImportError:
+                        pass  # Keep original sample rate if torchaudio not available
                 
                 # Truncate if too long
                 if waveform.shape[-1] > self.voice_processor.max_samples:
                     waveform = waveform[..., :self.voice_processor.max_samples]
                 
+                # Normalize waveform to [-1, 1] range (important for raw waveform tokenizer)
+                max_val = waveform.abs().max()
+                if max_val > 0:
+                    waveform = waveform / max_val
+                
+                return waveform
+            except Exception:
+                return None
+        
+        def _waveform_to_output(waveform, sr):
+            """Convert waveform to appropriate output format based on use_raw_waveform setting."""
+            waveform = _preprocess_waveform(waveform, sr)
+            if waveform is None:
+                return None
+            
+            if self.use_raw_waveform:
+                # SOTA: Return raw waveform [T] for RawWaveformTokenizer
+                return waveform
+            else:
+                # Legacy: Convert to mel spectrogram [n_mels, T]
                 # Ensure minimum length for mel extraction
                 if waveform.shape[-1] < 400:  # Minimum for FFT
                     pad_len = 400 - waveform.shape[-1]
@@ -584,8 +615,6 @@ class TrueStreamingDataset(IterableDataset):
                 
                 mel = self.voice_processor.extract_mel(waveform.unsqueeze(0)).squeeze(0)
                 return mel
-            except Exception:
-                return None
         
         try:
             # Handle torchcodec AudioDecoder (new HuggingFace datasets format)
@@ -594,7 +623,7 @@ class TrueStreamingDataset(IterableDataset):
                     samples = audio_data.get_all_samples()
                     waveform = samples.data.float()
                     sr = samples.sample_rate
-                    return _waveform_to_mel(waveform, sr)
+                    return _waveform_to_output(waveform, sr)
                 except Exception:
                     pass
             
@@ -608,14 +637,14 @@ class TrueStreamingDataset(IterableDataset):
                     except:
                         pass
                     if waveform is not None:
-                        return _waveform_to_mel(waveform, self.voice_processor.sample_rate)
+                        return _waveform_to_output(waveform, self.voice_processor.sample_rate)
                 return None
             
             # Handle file path
             elif isinstance(audio_data, str):
                 waveform = self.voice_processor.load_audio(audio_data)
                 if waveform is not None:
-                    return _waveform_to_mel(waveform, self.voice_processor.sample_rate)
+                    return _waveform_to_output(waveform, self.voice_processor.sample_rate)
                 return None
             
             # Handle dict format (common in HuggingFace datasets)
@@ -635,7 +664,7 @@ class TrueStreamingDataset(IterableDataset):
                         else:
                             waveform = torch.tensor(array).float()
                         
-                        return _waveform_to_mel(waveform, sr)
+                        return _waveform_to_output(waveform, sr)
                     except Exception:
                         pass
                 
@@ -652,11 +681,11 @@ class TrueStreamingDataset(IterableDataset):
                             except:
                                 pass
                             if waveform is not None:
-                                return _waveform_to_mel(waveform, self.voice_processor.sample_rate)
+                                return _waveform_to_output(waveform, self.voice_processor.sample_rate)
                     else:
                         waveform = self.voice_processor.load_audio(audio_path)
                         if waveform is not None:
-                            return _waveform_to_mel(waveform, self.voice_processor.sample_rate)
+                            return _waveform_to_output(waveform, self.voice_processor.sample_rate)
                 
                 # Try bytes field
                 if 'bytes' in audio_data and audio_data['bytes']:
@@ -666,7 +695,7 @@ class TrueStreamingDataset(IterableDataset):
                         audio_buffer = io.BytesIO(audio_data['bytes'])
                         array, sr = sf.read(audio_buffer)
                         waveform = torch.from_numpy(array).float()
-                        return _waveform_to_mel(waveform, sr)
+                        return _waveform_to_output(waveform, sr)
                     except Exception:
                         pass
                 
@@ -675,16 +704,18 @@ class TrueStreamingDataset(IterableDataset):
             # Handle numpy array directly
             elif isinstance(audio_data, np.ndarray):
                 waveform = torch.from_numpy(audio_data.copy()).float()
-                return _waveform_to_mel(waveform, sampling_rate)
+                return _waveform_to_output(waveform, sampling_rate)
             
             # Handle torch tensor directly
             elif isinstance(audio_data, torch.Tensor):
                 waveform = audio_data.float()
-                return _waveform_to_mel(waveform, sampling_rate)
+                return _waveform_to_output(waveform, sampling_rate)
             
-            # Fallback to voice processor's array processing
-            mel = self.voice_processor.process_audio_array(audio_data, sampling_rate)
-            return mel
+            # Fallback - if we got here and use_raw_waveform is False, try legacy mel processing
+            if not self.use_raw_waveform:
+                mel = self.voice_processor.process_audio_array(audio_data, sampling_rate)
+                return mel
+            return None
         except Exception:
             return None
 
@@ -1100,6 +1131,7 @@ def create_train_eval_datasets(
     voice_processor=None,
     max_video_frames: int = 32,
     video_size: int = 384,  # Match SigLIP 384x384
+    use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
 ):
     """
     Create separate train and eval datasets that sample INDEPENDENTLY from each dataset.
@@ -1168,6 +1200,7 @@ def create_train_eval_datasets(
         voice_processor=voice_processor,
         max_video_frames=max_video_frames,
         video_size=video_size,
+        use_raw_waveform=use_raw_waveform,
     )
     
     # Create eval dataset - starts AFTER training samples in the stream
@@ -1186,6 +1219,7 @@ def create_train_eval_datasets(
         voice_processor=voice_processor,
         max_video_frames=max_video_frames,
         video_size=video_size,
+        use_raw_waveform=use_raw_waveform,
     )
     
     # Set initial skip positions for eval dataset

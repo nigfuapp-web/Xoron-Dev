@@ -779,6 +779,9 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     formatter = MultimodalFormatter(SPECIAL_TOKENS, image_processor)
     format_functions = get_format_functions(formatter)
 
+    # Get audio mode from config (SOTA: raw waveform vs legacy mel spectrogram)
+    use_raw_waveform = getattr(xoron_config, 'use_raw_waveform', True)
+    
     # Create streaming dataset with per-dataset limits and sample repetition
     print(f"   📁 Loading train datasets...")
     train_dataset = TrueStreamingDataset(
@@ -795,6 +798,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         max_video_frames=xoron_config.max_video_frames,
         video_size=xoron_config.generation_video_size,
         resume_state_path=resume_streaming_state,
+        use_raw_waveform=use_raw_waveform,
     )
     
     # Set auto-save path for streaming state (saved alongside checkpoints)
@@ -821,6 +825,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         max_video_frames=xoron_config.max_video_frames,
         video_size=xoron_config.generation_video_size,
         resume_state_path=None,  # Don't resume eval dataset
+        use_raw_waveform=use_raw_waveform,
     )
     
     # Set initial skip positions for eval dataset (held-out data)
