@@ -548,6 +548,7 @@ class MobileDiffusionGenerator(nn.Module):
         batch_size = images.shape[0]
         
         z, mean, logvar = self.encode(images * 2 - 1)
+        del images  # Free memory immediately after encoding
         
         # CRITICAL: Use same dtype as input to avoid "mat1 and mat2 must have the same dtype" errors
         t = torch.rand(batch_size, device=device, dtype=dtype)
@@ -555,16 +556,24 @@ class MobileDiffusionGenerator(nn.Module):
         x_t = self.scheduler.add_noise(z, t)
         target_velocity = self.scheduler.get_velocity(x_t, z, t)
         
+        # Classifier-free guidance dropout (10% of the time, drop context)
         if self.training:
             drop_mask = torch.rand(batch_size, device=device) < 0.1
-            seq_len = context.shape[1]
-            null_ctx = torch.zeros(batch_size, seq_len, self.context_dim, device=device, dtype=dtype)
-            context = torch.where(drop_mask[:, None, None], null_ctx, context)
+            # Expand drop_mask to match context shape [B, seq_len, context_dim]
+            # drop_mask: [B] -> [B, 1, 1] for proper broadcasting
+            drop_mask_expanded = drop_mask.view(batch_size, 1, 1).expand_as(context)
+            null_ctx = torch.zeros_like(context)
+            context = torch.where(drop_mask_expanded, null_ctx, context)
+            del drop_mask, drop_mask_expanded, null_ctx
         
         pred_velocity = self.unet(x_t, (t * 1000).to(dtype), context, mask)
+        del x_t, context  # Free memory
         
         flow_loss = F.mse_loss(pred_velocity, target_velocity)
+        del pred_velocity, target_velocity  # Free memory
+        
         kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+        del z, mean, logvar  # Free memory
         
         total_loss = flow_loss + 0.0001 * kl_loss
         

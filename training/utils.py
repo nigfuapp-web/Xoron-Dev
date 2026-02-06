@@ -406,7 +406,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         return None
 
 
-def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=384, sample_types=None):
+def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """
     Train SOTA video diffusion on video data.
     
@@ -420,11 +420,13 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_generator: Video generator model (MobileVideoDiffusion)
         video_frames: Batch of video frames (B, T, C, H, W) or (B, C, T, H, W)
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target frame size for diffusion (default 384 to match SigLIP)
+        target_size: Target frame size for diffusion (default 256 - reduced from 384 for memory)
         sample_types: List of sample types to filter valid samples
     
     Returns:
         Total loss or None if no valid samples
+    
+    Note: Uses 256x256 during training to save GPU memory. Inference can use larger sizes.
     """
     if video_generator is None or video_frames is None:
         return None
@@ -464,6 +466,14 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
 
         if C != 3 or T < 1:
             return None
+        
+        # Limit frames during training to save memory (max 8 frames for training)
+        max_train_frames = 8
+        if T > max_train_frames:
+            # Sample frames evenly
+            frame_indices = torch.linspace(0, T - 1, max_train_frames).long()
+            video_frames = video_frames[:, :, frame_indices]
+            T = max_train_frames
 
         # Filter to only samples with valid (non-zero) video frames
         valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6
@@ -473,17 +483,17 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_frames = video_frames[valid_mask]
         text_context = text_context[valid_mask]
         B = video_frames.shape[0]
+        del valid_mask
 
         # Resize frames to target size - ensure dtype is preserved
+        # Use memory-efficient processing
         video_frames = video_frames.contiguous().view(B * T, C, H, W)
         video_frames = F.interpolate(video_frames.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
         video_frames = video_frames.contiguous().view(B, C, T, target_size, target_size)
 
         # Normalize to [-1, 1] for diffusion
         video_frames_norm = video_frames * 2 - 1
-        
-        # Delete intermediate tensors to save memory
-        del video_frames, valid_mask
+        del video_frames  # Free memory immediately
 
         # Extract first frame for I2V training (50% of the time)
         first_frame = None
@@ -496,6 +506,8 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
             losses = video_generator.training_step(video_frames_norm.to(gen_dtype), text_context.to(gen_dtype), first_frame.to(gen_dtype) if first_frame is not None else None)
             loss = losses['total_loss']
             del losses, video_frames_norm, first_frame  # Clean up
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()  # Force memory cleanup
             return loss
         
         # Fallback to manual training - ensure correct dtype
