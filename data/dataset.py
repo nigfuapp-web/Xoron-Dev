@@ -381,10 +381,6 @@ class TrueStreamingDataset(IterableDataset):
                     pass
             return None
 
-    _yt_dlp_fail_count = 0
-    _yt_dlp_success_count = 0
-    _yt_dlp_logged = False
-    
     def _download_youtube_video(self, url: str) -> Optional[str]:
         """Download YouTube video using yt-dlp."""
         try:
@@ -392,19 +388,12 @@ class TrueStreamingDataset(IterableDataset):
             import subprocess
             import shutil
             
-            # Check if yt-dlp is available
             if not shutil.which('yt-dlp'):
-                if not TrueStreamingDataset._yt_dlp_logged:
-                    print(f"      [YT-DLP] ⚠️ yt-dlp not installed! Run: pip install yt-dlp")
-                    TrueStreamingDataset._yt_dlp_logged = True
                 return None
             
-            # Create temp file for output
             fd, temp_path = tempfile.mkstemp(suffix='.mp4')
             os.close(fd)
             
-            # Use yt-dlp to download with multiple fallback formats
-            # Try formats in order: mp4 480p, any 480p, webm, any format
             cmd = [
                 'yt-dlp',
                 '-f', 'best[height<=480][ext=mp4]/best[height<=480]/bestvideo[height<=480]+bestaudio/best',
@@ -422,34 +411,14 @@ class TrueStreamingDataset(IterableDataset):
             result = subprocess.run(cmd, capture_output=True, timeout=180)
             
             if result.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                TrueStreamingDataset._yt_dlp_success_count += 1
                 return temp_path
             else:
-                TrueStreamingDataset._yt_dlp_fail_count += 1
-                # Log first few failures for debugging
-                if TrueStreamingDataset._yt_dlp_fail_count <= 3:
-                    stderr = result.stderr.decode('utf-8', errors='ignore')[:200] if result.stderr else "no error"
-                    print(f"      [YT-DLP] ❌ Download failed for {url[:50]}... (code={result.returncode})")
-                    if stderr and stderr.strip():
-                        print(f"      [YT-DLP] stderr: {stderr[:100]}")
-                elif TrueStreamingDataset._yt_dlp_fail_count == 4:
-                    print(f"      [YT-DLP] ⚠️ Suppressing further download failure messages...")
-                
-                # Clean up failed download
                 try:
                     os.remove(temp_path)
                 except:
                     pass
                 return None
-        except subprocess.TimeoutExpired:
-            TrueStreamingDataset._yt_dlp_fail_count += 1
-            if TrueStreamingDataset._yt_dlp_fail_count <= 3:
-                print(f"      [YT-DLP] ⏱️ Timeout downloading {url[:50]}...")
-            return None
-        except Exception as e:
-            TrueStreamingDataset._yt_dlp_fail_count += 1
-            if TrueStreamingDataset._yt_dlp_fail_count <= 3:
-                print(f"      [YT-DLP] ❌ Exception: {type(e).__name__}: {str(e)[:50]}")
+        except:
             return None
 
     def _extract_frames_from_video(self, video_path: str) -> List[torch.Tensor]:
@@ -837,163 +806,67 @@ class TrueStreamingDataset(IterableDataset):
         
         return None
 
-    _video_extract_debug_count = 0
-    
     def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
-        """Extract raw video data from sample.
-        
-        Supports various dataset formats:
-        - Pexels: column1 (Vimeo video URL)
-        - MiraData: video_url (YouTube - downloaded via yt-dlp)
-        - Video-MME: url (YouTube - downloaded via yt-dlp)
-        - Sora-Likert: Video (direct URL)
-        - T2V-Preferences: video1, video2 (direct URLs)
-        - WebVid: contentUrl (direct URL)
-        - VideoInstruct-100K: video_id -> ActivityNet URL
-        - Vript: meta.video_id (internal ID, needs special handling)
-        
-        YouTube URLs are downloaded using yt-dlp (in requirements.txt).
-        """
+        """Extract raw video data from sample."""
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
         
-        # Debug first 5 video samples
-        TrueStreamingDataset._video_extract_debug_count += 1
-        debug_this = TrueStreamingDataset._video_extract_debug_count <= 5
-        
-        if debug_this:
-            print(f"      [VIDEO_EXTRACT] dtype={dtype}, keys={list(sample.keys())[:10]}")
-        
-        # Direct video data fields (binary/frames)
+        # Direct video data fields
         video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
         for field in video_fields:
             if field in sample and sample[field] is not None:
                 val = sample[field]
-                # Accept: URLs, video file extensions, bytes, lists, dicts
                 if isinstance(val, str):
-                    # Accept if it's a URL or has video extension
                     if val.startswith('http') or val.endswith(('.mp4', '.webm', '.avi', '.gif', '.mov', '.mkv')):
-                        if debug_this:
-                            print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__} (path/url)")
                         return val
-                    # Also accept if it looks like an S3/cloud path
                     elif val.startswith('s3://') or val.startswith('gs://') or '/videos/' in val:
-                        if debug_this:
-                            print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__} (cloud path)")
                         return val
-                    else:
-                        if debug_this:
-                            print(f"      [VIDEO_EXTRACT] ⚠️ Skipping '{field}': str without video ext ({val[:50]}...)")
-                        continue
                 elif isinstance(val, (bytes, list, dict)):
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Found '{field}': {type(val).__name__}")
                     return val
         
-        # URL fields - ordered by specificity
-        url_fields = [
-            "Video",        # Rapidata Sora-Likert (direct S3 URLs)
-            "video_url",    # MiraData (YouTube)
-            "video1",       # T2V-Preferences (direct URLs)
-            "column1",      # Pexels (Vimeo mp4 URLs)
-            "contentUrl",   # WebVid (direct URLs)
-            "url",          # General URL field (YouTube, direct, etc.)
-            "video_link",
-            "mp4_url",
-            "media_url",
-        ]
-        
+        # URL fields
+        url_fields = ["Video", "video_url", "video1", "column1", "contentUrl", "url", "video_link", "mp4_url", "media_url"]
         for field in url_fields:
             if field in sample and sample[field]:
                 url = sample[field]
-                if isinstance(url, str):
-                    # Accept http/https URLs
-                    if url.startswith('http'):
-                        # Skip header row values
-                        if url in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
-                            continue
-                        if debug_this:
-                            print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
+                if isinstance(url, str) and url.startswith('http'):
+                    if url not in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
                         return url
-                    # Also debug non-http URLs
-                    elif debug_this and field == 'url':
-                        print(f"      [VIDEO_EXTRACT] ⚠️ '{field}' is not http URL: {url[:60]}...")
         
-        # Handle clip_id (WebVid-style datasets often use this)
-        # Some datasets store clip IDs that can be converted to YouTube URLs
+        # clip_id -> YouTube URL
         if "clip_id" in sample:
             clip_id = sample["clip_id"]
-            if clip_id and isinstance(clip_id, str):
-                # If clip_id looks like a YouTube video ID (11 chars alphanumeric)
-                if len(clip_id) == 11 and clip_id.replace('-', '').replace('_', '').isalnum():
-                    url = f"https://www.youtube.com/watch?v={clip_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from clip_id: {url}")
-                    return url
-                elif debug_this:
-                    print(f"      [VIDEO_EXTRACT] ⚠️ clip_id not a YouTube ID: {clip_id[:30]}...")
+            if clip_id and isinstance(clip_id, str) and len(clip_id) == 11:
+                if clip_id.replace('-', '').replace('_', '').isalnum():
+                    return f"https://www.youtube.com/watch?v={clip_id}"
         
-        # VideoInstruct-100K uses video_id with "v_" prefix
-        # Format: v_{youtube_id} -> strip v_ and use as YouTube ID
-        # Example: v_k_ZXmr8pmrs -> https://www.youtube.com/watch?v=k_ZXmr8pmrs
+        # video_id -> YouTube URL
         if "video_id" in sample:
             vid_id = sample["video_id"]
             if vid_id and isinstance(vid_id, str):
                 if vid_id.startswith("v_"):
-                    # Strip the v_ prefix to get the YouTube video ID
-                    youtube_id = vid_id[2:]  # Remove "v_"
-                    url = f"https://www.youtube.com/watch?v={youtube_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
-                    return url
+                    return f"https://www.youtube.com/watch?v={vid_id[2:]}"
                 elif len(vid_id) == 11:
-                    # Already a YouTube video ID (11 chars)
-                    url = f"https://www.youtube.com/watch?v={vid_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
-                    return url
+                    return f"https://www.youtube.com/watch?v={vid_id}"
         
-        # videoID field (Panda-70M style) - YouTube IDs
+        # videoID -> YouTube URL
         if "videoID" in sample:
             vid_id = sample["videoID"]
             if vid_id and isinstance(vid_id, str) and len(vid_id) == 11:
-                url = f"https://www.youtube.com/watch?v={vid_id}"
-                if debug_this:
-                    print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from videoID: {url}")
-                return url
+                return f"https://www.youtube.com/watch?v={vid_id}"
         
-        # Handle nested meta dict (Vript format)
-        # Vript stores video IDs in meta.video_id - look up actual URL from metadata
+        # Vript meta.video_id
         if "meta" in sample and isinstance(sample["meta"], dict):
             meta = sample["meta"]
             if "video_id" in meta:
                 vid_id = str(meta["video_id"])
-                
-                # Try to get URL from Vript metadata cache
                 url = self._get_vript_video_url(vid_id)
                 if url:
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Found Vript URL for {vid_id}: {url[:60]}...")
                     return url
-                
-                # Fallback: Check if it's a YouTube video ID (11 characters)
                 if len(vid_id) == 11:
-                    url = f"https://www.youtube.com/watch?v={vid_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from meta.video_id: {url}")
-                    return url
-                # Long numeric IDs are TikTok video IDs - yt-dlp can download these
+                    return f"https://www.youtube.com/watch?v={vid_id}"
                 elif vid_id.isdigit() and len(vid_id) > 15:
-                    url = f"https://www.tiktok.com/@user/video/{vid_id}"
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built TikTok URL from meta.video_id: {url}")
-                    return url
-                else:
-                    if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ⚠️ Unknown video_id format: {vid_id}")
-        
-        if debug_this:
-            print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
+                    return f"https://www.tiktok.com/@user/video/{vid_id}"
         
         return None
 
@@ -1116,18 +989,17 @@ class TrueStreamingDataset(IterableDataset):
                 pixel_values = torch.zeros(3, 384, 384)
             
             video_frames = None
-            if raw_video_data and dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
+            is_video_dtype = dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']
+            
+            if raw_video_data and is_video_dtype:
                 video_frames = self._process_video_frames(raw_video_data, sample_metadata)
                 if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
                     pixel_values = video_frames[0]
             
             # For image_to_video: if no video data but we have an image, create video frames from image
-            # This is the correct behavior for I2V datasets like TIP-I2V that only provide source images
             if video_frames is None and dtype == 'image_to_video' and raw_image_data is not None:
-                # Create video frames by repeating the source image (the model learns to animate it)
                 img_tensor = self._process_image(raw_image_data)
                 if img_tensor is not None:
-                    # Resize to video size if needed
                     if img_tensor.shape[1] != self.video_size or img_tensor.shape[2] != self.video_size:
                         img_tensor = F.interpolate(
                             img_tensor.unsqueeze(0), 
@@ -1135,8 +1007,12 @@ class TrueStreamingDataset(IterableDataset):
                             mode='bilinear', 
                             align_corners=False
                         ).squeeze(0)
-                    # Repeat image for all video frames (model learns motion from this static input)
                     video_frames = img_tensor.unsqueeze(0).expand(self.max_video_frames, -1, -1, -1).clone()
+            
+            # Skip video samples with no valid frames - get next sample instead
+            if is_video_dtype:
+                if video_frames is None or video_frames.abs().mean() < 1e-6:
+                    return None  # Skip this sample
             
             if video_frames is None:
                 video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
