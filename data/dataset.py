@@ -828,16 +828,21 @@ class TrueStreamingDataset(IterableDataset):
                 return url
         
         # Handle nested meta dict (Vript format)
-        # Vript uses numeric internal IDs - these need special lookup
+        # Vript stores YouTube video IDs in meta.video_id
         if "meta" in sample and isinstance(sample["meta"], dict):
             meta = sample["meta"]
             if "video_id" in meta:
-                vid_id = meta["video_id"]
-                # Vript IDs are numeric strings like "6902084818440408321"
-                # These are internal IDs, not directly downloadable
-                # Skip for now - would need Vript-specific API
-                if debug_this:
-                    print(f"      [VIDEO_EXTRACT] ⚠️ Vript internal ID (not downloadable): {vid_id}")
+                vid_id = str(meta["video_id"])
+                # Check if it's a YouTube video ID (11 characters, alphanumeric with - and _)
+                if len(vid_id) == 11:
+                    url = f"https://www.youtube.com/watch?v={vid_id}"
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from meta.video_id: {url}")
+                    return url
+                else:
+                    # Longer numeric IDs might be internal - log and skip
+                    if debug_this:
+                        print(f"      [VIDEO_EXTRACT] ⚠️ Vript ID not YouTube format: {vid_id}")
         
         if debug_this:
             print(f"      [VIDEO_EXTRACT] ❌ No video data found!")
