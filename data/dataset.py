@@ -799,20 +799,21 @@ class TrueStreamingDataset(IterableDataset):
                         print(f"      [VIDEO_EXTRACT] ✅ Found URL in '{field}': {url[:60]}...")
                     return url
         
-        # VideoInstruct-100K uses video_id - convert to ActivityNet URL
-        # Format: v_xxxx -> ActivityNet video ID
+        # VideoInstruct-100K uses video_id with "v_" prefix
+        # Format: v_{youtube_id} -> strip v_ and use as YouTube ID
+        # Example: v_k_ZXmr8pmrs -> https://www.youtube.com/watch?v=k_ZXmr8pmrs
         if "video_id" in sample:
             vid_id = sample["video_id"]
             if vid_id and isinstance(vid_id, str):
                 if vid_id.startswith("v_"):
-                    # ActivityNet video - construct the download URL
-                    # ActivityNet videos can be accessed via their website or mirrors
-                    activitynet_url = f"http://ec2-52-25-205-214.us-west-2.compute.amazonaws.com/files/activity_net/v1-3/train_val/{vid_id}.mp4"
+                    # Strip the v_ prefix to get the YouTube video ID
+                    youtube_id = vid_id[2:]  # Remove "v_"
+                    url = f"https://www.youtube.com/watch?v={youtube_id}"
                     if debug_this:
-                        print(f"      [VIDEO_EXTRACT] ✅ Built ActivityNet URL from video_id: {activitynet_url[:60]}...")
-                    return activitynet_url
+                        print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
+                    return url
                 elif len(vid_id) == 11:
-                    # Looks like a YouTube video ID (11 chars)
+                    # Already a YouTube video ID (11 chars)
                     url = f"https://www.youtube.com/watch?v={vid_id}"
                     if debug_this:
                         print(f"      [VIDEO_EXTRACT] ✅ Built YouTube URL from video_id: {url}")
