@@ -31,8 +31,6 @@ class TrainingConfig:
     - LoRA+ with different learning rates for A and B matrices
     - Separate loss weights for different modalities
     - Chain-of-thought weighted loss for reasoning
-    - Temporal consistency loss for video
-    - Classifier-free guidance training
     
     SOTA Architecture (v2.0):
     - LLM: MLA (Multi-Head Latent Attention), YaRN/LongRoPE, Ring Attention
