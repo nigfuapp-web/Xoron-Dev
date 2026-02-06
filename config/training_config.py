@@ -89,24 +89,12 @@ class TrainingConfig:
     asr_loss_weight: float = 0.1
     tts_loss_weight: float = 0.1
     moe_aux_loss_weight: float = 0.02
-    
-    # Video training settings (TODO: implement temporal consistency in trainer)
-    # temporal_consistency_weight: float = 0.01  # Encourage smooth motion - NOT YET IMPLEMENTED
-    
-    # Classifier-free guidance training (TODO: implement CFG dropout in trainer)
-    # cfg_dropout_rate: float = 0.1  # Probability of dropping context - NOT YET IMPLEMENTED
-    
+       
     # Debug settings
     debug_nan_checks: bool = False  # Enable expensive NaN/Inf checks (causes CPU-GPU sync)
-
-    # Checkpointing & Logging
-    # save_steps: int = 500  # NOT USED - checkpoints saved per epoch instead
+    
     logging_steps: int = 50  # Used in trainer_state.json for HuggingFace compatibility
     
-    # Evaluation/validation settings
-    # Eval runs at END of each epoch (not at step intervals)
-    # Eval pulls samples SEPARATELY from each dataset for proper validation
-    # Total eval = num_active_datasets * max_per_dataset_eval (no cap)
     max_per_dataset_eval: int = 10  # Samples per dataset for eval (e.g., 10 from each dataset)
 
     # Device settings
