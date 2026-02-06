@@ -727,24 +727,46 @@ class TrueStreamingDataset(IterableDataset):
                 return sample[field]
         return None
 
+    _video_extract_debug_count = 0
+    
     def _extract_video_data(self, sample: Dict, dtype: str) -> Any:
         """Extract raw video data from sample."""
         if dtype not in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']:
             return None
         
+        # Debug: log sample keys for first 10 video samples
+        MultimodalStreamingDataset._video_extract_debug_count += 1
+        debug_this = MultimodalStreamingDataset._video_extract_debug_count <= 10
+        
+        if debug_this:
+            print(f"      [VIDEO_DEBUG] dtype={dtype}, sample_keys={list(sample.keys())[:15]}")
+        
         # Direct video data fields
         video_fields = ["video", "video_path", "video_bytes", "frames", "video_data"]
         for field in video_fields:
             if field in sample and sample[field] is not None:
+                if debug_this:
+                    val = sample[field]
+                    print(f"      [VIDEO_DEBUG] found '{field}': type={type(val).__name__}")
                 return sample[field]
         
-        # URL fields
-        url_fields = ["contentUrl", "video_url", "videoUrl", "url", "Video", "video1", "video2"]
+        # URL fields - expanded to cover more dataset formats
+        url_fields = ["contentUrl", "video_url", "videoUrl", "url", "Video", "video1", "video2",
+                      "video_link", "mp4_url", "media_url", "content_url", "asset", "video_asset",
+                      "column1", "column2"]  # Pexels format uses column1 for video
         for field in url_fields:
             if field in sample and sample[field]:
                 url = sample[field]
-                if isinstance(url, str) and url.startswith('http'):
+                if isinstance(url, str) and (url.startswith('http') or url.endswith('.mp4') or url.endswith('.webm')):
+                    if debug_this:
+                        print(f"      [VIDEO_DEBUG] found URL in '{field}': {url[:80]}...")
                     return url
+        
+        if debug_this:
+            # Show what values look like URLs
+            for k, v in sample.items():
+                if isinstance(v, str) and ('http' in v or '.mp4' in v or 'video' in v.lower()):
+                    print(f"      [VIDEO_DEBUG] potential video in '{k}': {str(v)[:80]}...")
         
         return None
 
