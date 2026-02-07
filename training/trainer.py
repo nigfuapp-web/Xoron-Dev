@@ -795,16 +795,10 @@ class XoronTrainer:
         num_tts = 0
         num_moe = 0  # Batches with MoE aux loss
         total_batches = len(train_loader)
-        
-        # Calculate appropriate logging frequency based on total batches
-        # For small datasets: log every 10 batches, for large: every 100, max 1000
-        log_freq = min(1000, max(10, total_batches // 20)) if total_batches > 0 else 10
-        
-        print(f"🎯 Starting batch processing: {total_batches} total batches (logging every {log_freq})", flush=True)
 
         for batch_idx, batch in enumerate(train_loader):
-            # Log batch progress at calculated frequency
-            if batch_idx == 0 or (batch_idx + 1) % log_freq == 0 or (batch_idx + 1) == total_batches:
+            # Only log every 1000 batches to reduce log spam
+            if (batch_idx + 1) % 1000 == 0 or batch_idx == 0:
                 print(f"🔄 Processing batch {batch_idx + 1}/{total_batches}...", flush=True)
             
             batch_start = time.time()
@@ -956,7 +950,7 @@ class XoronTrainer:
             # CRITICAL: Check LLM loss for NaN/Inf before proceeding
             llm_loss_check = llm_loss.item()
             if llm_loss_check != llm_loss_check or llm_loss_check == float('inf') or llm_loss_check == float('-inf'):
-                if batch_idx % log_freq == 0:
+                if batch_idx % 1000 == 0:
                     print(f"   ⚠️ Batch {batch_idx}: NaN/Inf LLM loss ({llm_loss_check}), skipping batch")
                 num_batches += 1
                 continue
@@ -1091,8 +1085,8 @@ class XoronTrainer:
                     # BF16 or FP32 - no scaling needed
                     scaled_loss.backward()
                 
-                # Log gradient norms periodically
-                if (batch_idx + 1) % log_freq == 0:
+                # Log gradient norms periodically (every 1000 batches)
+                if (batch_idx + 1) % 1000 == 0:
                     total_norm = 0.0
                     embed_norm = 0.0
                     for name, param in self.model.named_parameters():
@@ -1108,7 +1102,7 @@ class XoronTrainer:
                 num_valid_batches += 1
             else:
                 # Skip backward for NaN/Inf loss - log warning
-                if batch_idx % log_freq == 0:
+                if batch_idx % 1000 == 0:
                     print(f"   ⚠️ Batch {batch_idx}: Skipping backward due to invalid loss ({loss_value})")
 
             # Optimizer step with gradient clipping from config
@@ -1246,9 +1240,9 @@ class XoronTrainer:
             batch_time = time.time() - batch_start
             batch_times.append(batch_time)
 
-            # Log batch completion at same frequency as start
-            if (batch_idx + 1) % log_freq == 0 or (batch_idx + 1) == total_batches:
-                print(f"✅ Batch {batch_idx + 1}/{total_batches} completed ({batch_time:.2f}s)", flush=True)
+            # Only log every 1000 batches to reduce log spam
+            if (batch_idx + 1) % 1000 == 0:
+                print(f"✅ Batch {batch_idx + 1} completed", flush=True)
 
             # Clear cache periodically (no sync/gc - too slow for every batch)
             if batch_idx % self.config.empty_cache_freq == 0 and torch.cuda.is_available():
