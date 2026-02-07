@@ -913,12 +913,14 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     total_steps = steps_per_epoch * training_config.num_epochs
 
     # Create optimizer and scheduler
+    # Use 8-bit optimizer to prevent OOM on multi-GPU setups
     optimizer, scheduler = create_optimizer_and_scheduler(
         model,
         training_config.learning_rate,
         training_config.weight_decay,
         training_config.warmup_ratio,
         total_steps,
+        use_8bit_optimizer=training_config.use_8bit_optimizer,
     )
 
     precision = 'BF16' if training_config.bf16 else ('FP16' if training_config.fp16 else 'FP32')

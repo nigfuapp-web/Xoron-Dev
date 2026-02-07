@@ -330,18 +330,9 @@ def create_optimizer_and_scheduler(
     print(f"   📊 Optimizer will track {num_trainable:,} params ({100*num_trainable/num_total:.1f}% of {num_total:,} total)")
     print(f"   💾 Optimizer memory: ~{(num_trainable * 8) / (1024**2):.1f}MB (8 bytes/param for Adam states)")
     
-    # For FP16 models, use FP32OptimizerWrapper to prevent optimizer overflow
-    if is_fp16:
-        # Use FP32OptimizerWrapper which maintains FP32 copies
-        # NOTE: FP32OptimizerWrapper already filters for requires_grad=True internally
-        optimizer = FP32OptimizerWrapper(
-            optimizer_class=AdamW,
-            model=model,
-            lr=learning_rate,
-            weight_decay=weight_decay,
-            eps=eps,
-        )
-    elif use_8bit_optimizer and BNB_AVAILABLE:
+    # PRIORITY: Use 8-bit optimizer if available (saves 75% memory, works with FP16)
+    # This is preferred over FP32OptimizerWrapper for multi-GPU setups to prevent OOM
+    if use_8bit_optimizer and BNB_AVAILABLE:
         # FIXED: Use only trainable params, not model.parameters()
         optimizer = bnb.optim.AdamW8bit(
             trainable_params,  # Only trainable params!
