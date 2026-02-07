@@ -149,14 +149,6 @@ class TrueStreamingDataset(IterableDataset):
                         if "config" in cfg:
                             load_kwargs["name"] = cfg["config"]
                         ds = load_dataset(**load_kwargs)
-                        
-                        # For voice datasets, disable automatic audio decoding to avoid torchcodec issues
-                        if dtype in ['voice_asr', 'voice_tts'] and has_audio_feature:
-                            try:
-                                ds = ds.cast_column('audio', Audio(decode=False))
-                            except Exception:
-                                pass  # Some datasets may not have audio column
-                        
                         break
                     except Exception as e:
                         if attempt < max_retries - 1:
