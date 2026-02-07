@@ -1034,13 +1034,33 @@ class TrueStreamingDataset(IterableDataset):
                 audio_features = self._process_audio(raw_audio_data, sample_metadata)
             
             if audio_features is None:
-                audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
+                # Create zero tensor based on mode
+                if self.use_raw_waveform:
+                    # Raw waveform mode: 1D tensor [T]
+                    max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
+                    audio_features = torch.zeros(max_waveform_samples)
+                else:
+                    # Mel spectrogram mode: 2D tensor [n_mels, T]
+                    audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
             else:
-                if audio_features.shape[1] > self.audio_max_length:
-                    audio_features = audio_features[:, :self.audio_max_length]
-                elif audio_features.shape[1] < self.audio_max_length:
-                    pad = torch.zeros(audio_features.shape[0], self.audio_max_length - audio_features.shape[1])
-                    audio_features = torch.cat([audio_features, pad], dim=1)
+                # Pad/truncate based on mode
+                if self.use_raw_waveform:
+                    # Raw waveform: 1D tensor [T]
+                    max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
+                    if audio_features.dim() == 1:
+                        if audio_features.shape[0] > max_waveform_samples:
+                            audio_features = audio_features[:max_waveform_samples]
+                        elif audio_features.shape[0] < max_waveform_samples:
+                            pad = torch.zeros(max_waveform_samples - audio_features.shape[0])
+                            audio_features = torch.cat([audio_features, pad], dim=0)
+                else:
+                    # Mel spectrogram: 2D tensor [n_mels, T]
+                    if audio_features.dim() == 2:
+                        if audio_features.shape[1] > self.audio_max_length:
+                            audio_features = audio_features[:, :self.audio_max_length]
+                        elif audio_features.shape[1] < self.audio_max_length:
+                            pad = torch.zeros(audio_features.shape[0], self.audio_max_length - audio_features.shape[1])
+                            audio_features = torch.cat([audio_features, pad], dim=1)
             
             # Validate: ensure we have at least some valid labels to train on
             # Samples with ALL -100 labels cause NaN loss and waste compute

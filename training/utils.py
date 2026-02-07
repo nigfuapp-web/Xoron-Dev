@@ -167,30 +167,61 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             # Handle audio_features - use minimal tensor if not needed
             if need_audio:
                 audio_features_list = []
-                max_audio_len = 1000
+                max_audio_len = 1000  # For mel spectrograms
+                max_waveform_samples = 160000  # 10 seconds at 16kHz for raw waveform
                 target_mel_bins = 80
+                
+                # Detect if we're using raw waveform (1D) or mel spectrogram (2D)
+                first_valid = None
                 for b in batch:
-                    af = b["audio_features"]
-                    if af is not None and isinstance(af, torch.Tensor) and af.dim() == 2:
-                        # Handle different number of mel bins by interpolating
-                        if af.shape[0] != target_mel_bins:
-                            af = F.interpolate(
-                                af.unsqueeze(0).unsqueeze(0),
-                                size=(target_mel_bins, af.shape[1]),
-                                mode='bilinear',
-                                align_corners=False
-                            ).squeeze(0).squeeze(0)
-                        
-                        # Handle time dimension
-                        if af.shape[1] != max_audio_len:
-                            if af.shape[1] > max_audio_len:
-                                af = af[:, :max_audio_len]
+                    af = b.get("audio_features")
+                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 0:
+                        first_valid = af
+                        break
+                
+                use_raw_waveform = first_valid is not None and first_valid.dim() == 1
+                
+                for b in batch:
+                    af = b.get("audio_features")
+                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 0:
+                        if use_raw_waveform and af.dim() == 1:
+                            # Raw waveform mode: 1D tensor [T]
+                            if af.shape[0] > max_waveform_samples:
+                                af = af[:max_waveform_samples]
+                            elif af.shape[0] < max_waveform_samples:
+                                pad = torch.zeros(max_waveform_samples - af.shape[0])
+                                af = torch.cat([af, pad], dim=0)
+                            audio_features_list.append(af)
+                        elif not use_raw_waveform and af.dim() == 2:
+                            # Mel spectrogram mode: 2D tensor [mel_bins, time]
+                            if af.shape[0] != target_mel_bins:
+                                af = F.interpolate(
+                                    af.unsqueeze(0).unsqueeze(0),
+                                    size=(target_mel_bins, af.shape[1]),
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).squeeze(0).squeeze(0)
+                            
+                            if af.shape[1] != max_audio_len:
+                                if af.shape[1] > max_audio_len:
+                                    af = af[:, :max_audio_len]
+                                else:
+                                    pad = torch.zeros(target_mel_bins, max_audio_len - af.shape[1])
+                                    af = torch.cat([af, pad], dim=1)
+                            audio_features_list.append(af)
+                        else:
+                            # Mismatched dimension - use zeros
+                            if use_raw_waveform:
+                                audio_features_list.append(torch.zeros(max_waveform_samples))
                             else:
-                                pad = torch.zeros(target_mel_bins, max_audio_len - af.shape[1])
-                                af = torch.cat([af, pad], dim=1)
-                        audio_features_list.append(af)
+                                audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
                     else:
-                        audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                        # No audio - use zeros
+                        if use_raw_waveform:
+                            audio_features_list.append(torch.zeros(max_waveform_samples))
+                        else:
+                            audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                
                 audio_features = torch.stack(audio_features_list)
             else:
                 # Minimal tensor to save memory
@@ -537,7 +568,7 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
     
     Args:
         audio_encoder: Audio encoder model
-        audio_features: Batch of audio mel spectrograms (B, mel_bins, time)
+        audio_features: Batch of audio - either [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
         sample_types: List of sample types to filter valid samples (e.g., ['voice_asr', 'text', ...])
     """
@@ -555,7 +586,8 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
         text_embeds = text_embeds.to(device=enc_device, dtype=enc_dtype)
 
-        if audio_features.dim() != 3:
+        # Accept both 2D (raw waveform [B, T]) and 3D (mel spectrogram [B, mel_bins, time])
+        if audio_features.dim() not in [2, 3]:
             return None
 
         # First filter by sample type if provided - only train on voice_asr samples
@@ -567,9 +599,13 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
             text_embeds = text_embeds[type_mask]
 
         # Then filter to only samples with valid (non-zero) audio
-        # Check each sample in the batch - sum across mel bins and time
-        # Use a very lenient threshold to catch any non-zero audio
-        valid_mask = audio_features.abs().sum(dim=(1, 2)) > 1e-6  # Very lenient threshold
+        # Handle both 2D and 3D tensors
+        if audio_features.dim() == 2:
+            # Raw waveform [B, T] - sum over time dimension
+            valid_mask = audio_features.abs().sum(dim=1) > 1e-6
+        else:
+            # Mel spectrogram [B, mel_bins, time] - sum over mel bins and time
+            valid_mask = audio_features.abs().sum(dim=(1, 2)) > 1e-6
         num_valid = valid_mask.sum().item()
         
         if num_valid == 0:
@@ -609,33 +645,54 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         return None
 
 
-def train_voice_tts_step(audio_decoder, text_embeds, target_mel, audio_encoder=None, sample_types=None, use_mas=True):
+def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder=None, sample_types=None, use_mas=True):
     """Train TTS: text -> audio generation with Monotonic Alignment Search (MAS).
     
     Args:
         audio_decoder: Audio decoder model (with MAS support)
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
-        target_mel: Target mel spectrograms (B, mel_bins, time)
+        target_audio: Target audio - either [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
         audio_encoder: Optional audio encoder for extracting target audio features (for MAS)
         sample_types: List of sample types to filter valid samples (e.g., ['voice_tts', 'text', ...])
         use_mas: Whether to use Monotonic Alignment Search for alignment loss
     """
-    if audio_decoder is None or target_mel is None:
+    if audio_decoder is None or target_audio is None:
         return None
     try:
-        if not isinstance(target_mel, torch.Tensor):
+        if not isinstance(target_audio, torch.Tensor):
             return None
-        if target_mel.numel() == 0:
+        if target_audio.numel() == 0:
             return None
 
         dec_device = next(audio_decoder.parameters()).device
         dec_dtype = next(audio_decoder.parameters()).dtype
         # Match input dtype to model dtype to avoid "mat1 and mat2 must have the same dtype" errors
-        target_mel = target_mel.to(device=dec_device, dtype=dec_dtype)
+        target_audio = target_audio.to(device=dec_device, dtype=dec_dtype)
         text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
 
-        if target_mel.dim() != 3:
+        # Accept both 2D (raw waveform [B, T]) and 3D (mel spectrogram [B, mel_bins, time])
+        if target_audio.dim() not in [2, 3]:
             return None
+        
+        # For raw waveform, we need to convert to mel for the decoder (which outputs mel)
+        # The waveform_decoder training handles raw waveform -> waveform
+        is_raw_waveform = target_audio.dim() == 2
+        if is_raw_waveform:
+            # Convert raw waveform to mel spectrogram for TTS training
+            # Use a simple mel extraction (the model will learn to match this)
+            try:
+                import torchaudio.transforms as T
+                mel_transform = T.MelSpectrogram(
+                    sample_rate=16000, n_fft=1024, hop_length=256, n_mels=80
+                ).to(dec_device)
+                # [B, T] -> [B, mel_bins, time]
+                target_mel = mel_transform(target_audio)
+                target_mel = torch.log(target_mel.clamp(min=1e-5))
+            except Exception:
+                # Fallback: skip this step if mel conversion fails
+                return None
+        else:
+            target_mel = target_audio
 
         # First filter by sample type if provided - only train on voice_tts samples
         if sample_types is not None:
@@ -1053,7 +1110,7 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
     
     Args:
         audio_encoder: Audio encoder model
-        audio_features: Batch of audio mel spectrograms (B, mel_bins, time)
+        audio_features: Batch of audio - either [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
         sample_types: List of sample types for filtering
         
@@ -1073,7 +1130,8 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
         audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
         text_embeds = text_embeds.to(device=enc_device, dtype=enc_dtype)
 
-        if audio_features.dim() != 3:
+        # Accept both 2D (raw waveform [B, T]) and 3D (mel spectrogram [B, mel_bins, time])
+        if audio_features.dim() not in [2, 3]:
             return None
 
         # Filter by sample type
@@ -1084,8 +1142,11 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
             audio_features = audio_features[type_mask]
             text_embeds = text_embeds[type_mask]
 
-        # Filter valid audio
-        valid_mask = audio_features.abs().sum(dim=(1, 2)) > 1e-6
+        # Filter valid audio - handle both 2D and 3D
+        if audio_features.dim() == 2:
+            valid_mask = audio_features.abs().sum(dim=1) > 1e-6
+        else:
+            valid_mask = audio_features.abs().sum(dim=(1, 2)) > 1e-6
         num_valid = valid_mask.sum().item()
         
         if num_valid == 0:
@@ -1122,33 +1183,49 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
         return None
 
 
-def eval_voice_tts_step(audio_decoder, text_embeds, target_mel, sample_types=None):
+def eval_voice_tts_step(audio_decoder, text_embeds, target_audio, sample_types=None):
     """Evaluate TTS: compute text-to-audio loss without gradient tracking.
     
     Args:
         audio_decoder: Audio decoder model
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
-        target_mel: Target mel spectrograms (B, mel_bins, time)
+        target_audio: Target audio - either [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
         sample_types: List of sample types for filtering
         
     Returns:
         Loss tensor (detached) or None if evaluation fails
     """
-    if audio_decoder is None or target_mel is None:
+    if audio_decoder is None or target_audio is None:
         return None
     try:
-        if not isinstance(target_mel, torch.Tensor):
+        if not isinstance(target_audio, torch.Tensor):
             return None
-        if target_mel.numel() == 0:
+        if target_audio.numel() == 0:
             return None
 
         dec_device = next(audio_decoder.parameters()).device
         dec_dtype = next(audio_decoder.parameters()).dtype
-        target_mel = target_mel.to(device=dec_device, dtype=dec_dtype)
+        target_audio = target_audio.to(device=dec_device, dtype=dec_dtype)
         text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
 
-        if target_mel.dim() != 3:
+        # Accept both 2D (raw waveform [B, T]) and 3D (mel spectrogram [B, mel_bins, time])
+        if target_audio.dim() not in [2, 3]:
             return None
+        
+        # For raw waveform, convert to mel
+        is_raw_waveform = target_audio.dim() == 2
+        if is_raw_waveform:
+            try:
+                import torchaudio.transforms as T
+                mel_transform = T.MelSpectrogram(
+                    sample_rate=16000, n_fft=1024, hop_length=256, n_mels=80
+                ).to(dec_device)
+                target_mel = mel_transform(target_audio)
+                target_mel = torch.log(target_mel.clamp(min=1e-5))
+            except Exception:
+                return None
+        else:
+            target_mel = target_audio
 
         # Filter by sample type
         if sample_types is not None:
