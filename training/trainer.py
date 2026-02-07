@@ -1038,14 +1038,19 @@ class XoronTrainer:
                 # Note: When use_raw_waveform=True in config, audio_features contains raw waveform
                 # When use_raw_waveform=False, audio_features contains mel spectrogram
                 if hasattr(self.model, 'waveform_decoder') and self.model.waveform_decoder is not None:
-                    # audio_features is raw waveform when use_raw_waveform=True (SOTA mode)
-                    # Check if it's 1D (waveform) or 2D (mel spectrogram)
+                    # audio_features shape:
+                    # - Raw waveform (use_raw_waveform=True): [B, T] where T is ~160000 samples
+                    # - Mel spectrogram (use_raw_waveform=False): [B, mel_bins, time] where mel_bins=80
                     target_waveform = audio_features
-                    if target_waveform is not None and target_waveform.dim() == 2:
-                        # If 2D and first dim is n_mels (e.g., 80), it's mel spectrogram - skip waveform training
-                        # If 2D and shape is [B, T], it's batched waveform - keep it
-                        if target_waveform.shape[0] == 80 or (target_waveform.shape[1] == 80 and target_waveform.shape[0] < 80):
-                            target_waveform = None  # Skip - it's mel not waveform
+                    if target_waveform is not None:
+                        if target_waveform.dim() == 3:
+                            # 3D tensor [B, mel_bins, time] - this is mel spectrogram, skip waveform training
+                            target_waveform = None
+                        elif target_waveform.dim() == 2:
+                            # 2D tensor [B, T] - this is raw waveform, use it
+                            # Verify it's actually waveform (T should be >> 1000 for audio samples)
+                            if target_waveform.shape[1] < 1000:
+                                target_waveform = None  # Too short, probably not valid waveform
                     
                     if target_waveform is not None:
                         from training.utils import train_waveform_decoder_step
