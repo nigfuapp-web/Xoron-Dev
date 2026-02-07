@@ -217,49 +217,6 @@ Direct audio output without external vocoder:
 | Streaming | `stream_decode()` for low-latency real-time output |
 | Output Range | [-1, 1] normalized waveform via tanh |
 
-### 🗣️ Speech-to-Speech API
-The model provides three main methods for voice interaction:
-
-| Method | Description |
-|--------|-------------|
-| `model.listen(audio)` | Encode speech to embeddings (ASR) |
-| `model.speak(text)` | Generate playable audio from text (TTS) |
-| `model.listen_and_respond(audio)` | Full conversation: listen → think → speak back |
-
-```python
-# Example: Talk to the model and it talks back
-response_audio = model.listen_and_respond(your_audio)  # Returns playable waveform
-
-# Example: Make the model say something
-audio = model.speak(tokenizer.encode("Hello, how can I help you?"))
-
-# Save as WAV file
-import soundfile as sf
-sf.write("response.wav", audio.cpu().numpy(), 16000)
-
-# Streaming for real-time (low latency)
-for chunk in model.waveform_decoder.stream_decode(features, chunk_size=10):
-    play_audio(chunk)  # Play each chunk as it's generated
-```
-
-### 🎯 Training Pipeline for Speech
-The model learns to speak using these datasets and losses:
-
-| Dataset | Type | Purpose |
-|---------|------|---------|
-| `openslr/librispeech_asr` | ASR | Learn to transcribe speech |
-| `blabble-io/libritts_r` | TTS | Learn to generate speech |
-| `parler-tts/mls_eng_10k` | TTS | Multi-speaker variety |
-| `MikhailT/hifi-tts` | TTS | High-fidelity speech |
-
-**Training Losses:**
-- **Mel Loss**: MSE between predicted and target mel spectrograms
-- **Duration Loss**: MSE for MAS-predicted durations
-- **Waveform L1 Loss**: Time-domain reconstruction
-- **Multi-Scale STFT Loss**: Frequency-domain quality (512/1024/2048 FFT)
-
----
-
 ## 📚 Training Data
 
 Xoron-Dev is trained on a massive, curated mix of open-source Hugging Face datasets and specialized synthetic data generated to enhance agentic capabilities and reduce hallucinations.
