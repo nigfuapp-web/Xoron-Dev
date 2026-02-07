@@ -13,6 +13,7 @@ tags:
 - video editing
 - text-to-speech
 - speech-to-text
+- speech-to-speech
 - image-to-text
 - video-to-text
 - agentic
@@ -22,6 +23,9 @@ tags:
 - titok
 - dual-stream-attention
 - zero-shot-voice-cloning
+- bigvgan
+- snake-activation
+- multi-receptive-field-fusion
 pipeline_tag: any-to-any
 inference: false
 datasets:
@@ -182,11 +186,23 @@ datasets:
 |---------|-------------|
 | Sample Rate | 16kHz |
 | **Encoder (ASR)** | **Raw Waveform Tokenizer** → Conformer blocks with **RMLA** |
-| **Waveform Decoder** | **Direct audio output** - no external vocoder needed! |
+| **Waveform Decoder** | **BigVGAN-style** with Snake activation + MRF - no external vocoder! |
 | KV Compression | LoRA-style KV compression (rank 256) |
 | Decoder Alignment | **MAS** (Monotonic Alignment Search) for text-to-audio alignment |
 | Voice Cloning | **Zero-Shot Speaker Cloning** with speaker embedding (256-dim) |
 | In-Context Prompting | Enabled for voice cloning from reference audio |
+
+### 🔊 Waveform Decoder (SOTA BigVGAN-style)
+Direct audio output without external vocoder:
+
+| Feature | Description |
+|---------|-------------|
+| Architecture | BigVGAN/HiFi-GAN style with transposed convolutions |
+| **Snake Activation** | `x + sin²(αx)/α` - preserves audio periodicity |
+| **Multi-Receptive Field Fusion** | Parallel residual stacks (kernels 3, 7, 11) |
+| Weight Normalization | Stable training, faster convergence |
+| Upsampling | 256x (rates: 8, 8, 2, 2) |
+| Streaming | `stream_decode()` for low-latency real-time output |
 
 ### 🗣️ Speech-to-Speech API
 The model provides three main methods for voice interaction:
@@ -207,7 +223,27 @@ audio = model.speak(tokenizer.encode("Hello, how can I help you?"))
 # Save as WAV file
 import soundfile as sf
 sf.write("response.wav", audio.cpu().numpy(), 16000)
+
+# Streaming for real-time (low latency)
+for chunk in model.waveform_decoder.stream_decode(features, chunk_size=10):
+    play_audio(chunk)  # Play each chunk as it's generated
 ```
+
+### 🎯 Training Pipeline for Speech
+The model learns to speak using these datasets and losses:
+
+| Dataset | Type | Purpose |
+|---------|------|---------|
+| `openslr/librispeech_asr` | ASR | Learn to transcribe speech |
+| `blabble-io/libritts_r` | TTS | Learn to generate speech |
+| `parler-tts/mls_eng_10k` | TTS | Multi-speaker variety |
+| `MikhailT/hifi-tts` | TTS | High-fidelity speech |
+
+**Training Losses:**
+- **Mel Loss**: MSE between predicted and target mel spectrograms
+- **Duration Loss**: MSE for MAS-predicted durations
+- **Waveform L1 Loss**: Time-domain reconstruction
+- **Multi-Scale STFT Loss**: Frequency-domain quality (512/1024/2048 FFT)
 
 ---
 
