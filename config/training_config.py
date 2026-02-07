@@ -227,26 +227,28 @@ class TrainingConfig:
         return cls(**{k: v for k, v in config_dict.items() if k in cls.__dataclass_fields__})
 
 
+from typing import Dict
+
 def get_device_map(num_gpus: int) -> Dict[str, str]:
     """
     Create a device map for Model Parallelism.
     Distributes model components across available GPUs.
 
-    Strategy for 2 GPUs:
+    Strategy for 2 GPUs (Updated to prevent OOM on GPU 1):
     ┌─────────────────┬─────────────────────────────────────────┬────────┬──────────┐
     │ Category        │ Components                              │ Device │ Size     │
     ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
     │ Visual Input    │ video_encoder, vision_encoder           │ cuda:0 │ ~5.41 GB │
     │ Audio Input     │ audio_encoder, audio_projector          │ cuda:0 │ ~0.69 GB │
+    │ Image Output    │ generator (Moved here for balance)      │ cuda:0 │ ~1.26 GB │
     │ Flow Control    │ projector, video_generator              │ cuda:0 │ ~0.20 GB │
     ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
     │ Reasoning (LLM) │ llm, modality_markers                   │ cuda:1 │ ~3.01 GB │
     │ Speech Output   │ audio_decoder, waveform_decoder         │ cuda:1 │ ~2.86 GB │
-    │ Image Output    │ generator                               │ cuda:1 │ ~1.26 GB │
     │ Bridge          │ cross_attention                         │ cuda:1 │ ~0.35 GB │
     └─────────────────┴─────────────────────────────────────────┴────────┴──────────┘
-    GPU 0 Total: ~6.30 GB (Input/Encoding)
-    GPU 1 Total: ~7.48 GB (Reasoning/Output)
+    GPU 0 Total: ~7.56 GB (Input + Image Gen)
+    GPU 1 Total: ~6.22 GB (Reasoning + Audio Gen)
     """
     if num_gpus <= 1:
         return {
@@ -265,52 +267,40 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'primary': 'cuda:0',
         }
     elif num_gpus == 2:
-        # Optimized layout for 2 GPUs
-        # GPU 0 (~6.30 GB): Input/Encoding components
-        # GPU 1 (~7.48 GB): Reasoning/Output components
+        # Optimized layout for 2 GPUs - Balanced to fix OOM
         return {
-            # === GPU 0: Input/Encoding (~6.30 GB) ===
-            # Visual Input (~5.41 GB)
+            # === GPU 0: Input & Image Generation (~7.56 GB) ===
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
-            # Audio Input (~0.69 GB)
             'audio_encoder': 'cuda:0',
             'audio_projector': 'cuda:0',
-            # Flow Control (~0.20 GB)
             'projector': 'cuda:0',
             'video_generator': 'cuda:0',
+            'generator': 'cuda:0',  # Moved to GPU 0 to offload GPU 1
             
-            # === GPU 1: Reasoning/Output (~7.48 GB) ===
-            # Reasoning/LLM (~3.01 GB)
+            # === GPU 1: Reasoning & Audio Output (~6.22 GB) ===
             'llm': 'cuda:1',
             'modality_markers': 'cuda:1',
-            # Speech Output (~2.86 GB)
             'audio_decoder': 'cuda:1',
-            'waveform_decoder': 'cuda:1',
-            # Image Output (~1.26 GB)
-            'generator': 'cuda:1',
-            # Bridge (~0.35 GB)
+            'waveform_decoder': 'cuda:1', # Now has room to allocate memory
             'cross_attention': 'cuda:1',
             
             'primary': 'cuda:0',
         }
     else:
-        # 3+ GPUs: Spread output generators to GPU 2
+        # 3+ GPUs: More granular distribution
         return {
-            # GPU 0: Input/Encoding
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
             'audio_projector': 'cuda:0',
             'projector': 'cuda:0',
-            # GPU 1: Reasoning
             'llm': 'cuda:1',
             'modality_markers': 'cuda:1',
             'cross_attention': 'cuda:1',
-            # GPU 2: Output Generation
-            'audio_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
-            'waveform_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
-            'generator': 'cuda:2' if num_gpus > 2 else 'cuda:1',
-            'video_generator': 'cuda:2' if num_gpus > 2 else 'cuda:1',
+            'audio_decoder': 'cuda:2',
+            'waveform_decoder': 'cuda:2',
+            'generator': 'cuda:2',
+            'video_generator': 'cuda:2',
             'primary': 'cuda:0',
         }
