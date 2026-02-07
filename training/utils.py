@@ -796,31 +796,41 @@ def train_waveform_decoder_step(
         dec_device = next(waveform_decoder.parameters()).device
         dec_dtype = next(waveform_decoder.parameters()).dtype
         
+        # Move tensors to correct device and dtype
         target_waveform = target_waveform.to(device=dec_device, dtype=dec_dtype)
         text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
         
         # Filter by sample type if provided
         if sample_types is not None:
-            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], device=dec_device)
+            # Create boolean mask on the correct device using torch.as_tensor for proper handling
+            type_list = [t == 'voice_tts' for t in sample_types]
+            type_mask = torch.as_tensor(type_list, dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
-            target_waveform = target_waveform[type_mask]
-            text_embeds = text_embeds[type_mask]
+            # Use nonzero for safe indexing across devices
+            valid_indices = type_mask.nonzero(as_tuple=True)[0]
+            target_waveform = target_waveform[valid_indices]
+            text_embeds = text_embeds[valid_indices]
         
         # Filter to valid samples (non-silent audio)
+        # Compute on same device and use nonzero for safe indexing
         valid_mask = target_waveform.abs().sum(dim=-1) > 1e-6
         num_valid = valid_mask.sum().item()
         
         if num_valid == 0:
             return None
         
-        target_waveform = target_waveform[valid_mask]
-        text_embeds = text_embeds[valid_mask]
+        # Use nonzero for safe indexing
+        valid_indices = valid_mask.nonzero(as_tuple=True)[0]
+        target_waveform = target_waveform[valid_indices]
+        text_embeds = text_embeds[valid_indices]
         
         # Step 1: Generate mel features through audio decoder (no grad for decoder)
         with torch.no_grad():
             pred_mel, durations, _ = audio_decoder(text_embeds)
             # pred_mel: [B, n_mels, T_mel]
+            # Convert to decoder dtype to ensure consistency
+            pred_mel = pred_mel.to(dtype=dec_dtype)
         
         # Step 2: Project mel to hidden_size for waveform decoder
         mel_features = pred_mel.transpose(1, 2)  # [B, T_mel, n_mels]
@@ -833,9 +843,9 @@ def train_waveform_decoder_step(
             hidden_size = waveform_decoder.hidden_size
             n_mels = mel_features.shape[-1]
             if n_mels != hidden_size:
-                # Simple linear projection
+                # Simple linear projection - ensure output dtype matches
                 proj = torch.nn.functional.pad(mel_features, (0, hidden_size - n_mels))
-                audio_features = proj
+                audio_features = proj.to(dtype=dec_dtype)
             else:
                 audio_features = mel_features
         
@@ -843,11 +853,15 @@ def train_waveform_decoder_step(
         pred_waveform = waveform_decoder(audio_features, target_length=target_waveform.shape[-1])
         
         # Step 4: Compute losses
-        # L1 loss (time domain)
+        # L1 loss (time domain) - computed in original dtype
         l1_loss = F.l1_loss(pred_waveform, target_waveform)
         
         # Multi-scale STFT loss (frequency domain) - helps with audio quality
+        # Note: STFT operations require FP32, so we pass tensors and let the function handle conversion
         stft_loss = compute_multi_scale_stft_loss(pred_waveform, target_waveform)
+        
+        # Ensure stft_loss has same dtype as l1_loss for addition
+        stft_loss = stft_loss.to(dtype=l1_loss.dtype)
         
         total_loss = l1_loss + stft_loss
         return total_loss
@@ -864,30 +878,42 @@ def compute_multi_scale_stft_loss(pred: torch.Tensor, target: torch.Tensor) -> t
     Uses multiple FFT sizes to capture both fine and coarse spectral details.
     This is crucial for high-quality audio generation.
     
+    Note: STFT operations require FP32 - this function handles dtype conversion
+    internally and returns the loss in FP32 (caller should convert if needed).
+    
     Args:
         pred: Predicted waveform [B, T]
         target: Target waveform [B, T]
         
     Returns:
-        loss: Combined multi-scale spectral loss
+        loss: Combined multi-scale spectral loss (in FP32)
     """
     fft_sizes = [512, 1024, 2048]
     hop_sizes = [128, 256, 512]
     win_sizes = [512, 1024, 2048]
     
-    total_loss = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+    # Store original dtype for reference (loss will be returned in FP32)
+    original_dtype = pred.dtype
+    device = pred.device
+    
+    # STFT requires FP32 - convert inputs
+    pred_fp32 = pred.float()
+    target_fp32 = target.float()
+    
+    total_loss = torch.tensor(0.0, device=device, dtype=torch.float32)
+    num_valid_scales = 0
     
     for fft_size, hop_size, win_size in zip(fft_sizes, hop_sizes, win_sizes):
-        # Compute STFT
-        window = torch.hann_window(win_size, device=pred.device, dtype=pred.dtype)
+        # Compute STFT (window must also be FP32)
+        window = torch.hann_window(win_size, device=device, dtype=torch.float32)
         
         try:
             pred_stft = torch.stft(
-                pred, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
+                pred_fp32, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
                 window=window, return_complex=True
             )
             target_stft = torch.stft(
-                target, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
+                target_fp32, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
                 window=window, return_complex=True
             )
             
@@ -902,12 +928,17 @@ def compute_multi_scale_stft_loss(pred: torch.Tensor, target: torch.Tensor) -> t
             log_mag_loss = F.l1_loss(pred_log_mag, target_log_mag)
             
             total_loss = total_loss + mag_loss + log_mag_loss
+            num_valid_scales += 1
             
         except Exception:
             # Skip this scale if STFT fails (e.g., audio too short)
             continue
     
-    return total_loss / len(fft_sizes)
+    # Avoid division by zero if all scales failed
+    if num_valid_scales == 0:
+        return torch.tensor(0.0, device=device, dtype=torch.float32, requires_grad=True)
+    
+    return total_loss / num_valid_scales
 
 
 # ============================================================================
