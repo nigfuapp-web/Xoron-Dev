@@ -170,7 +170,7 @@ datasets:
 | Feature | Description |
 |---------|-------------|
 | Output Resolution | 256×256 |
-| Output Frames | 16 frames |
+| Output Frames | 16 frames (default), up to 32 frames (max capacity) |
 | Scheduler | **Flow Matching** |
 | Position Encoding | **3D-RoPE** for (x, y, t) |
 | Attention | Factorized Spatial-Temporal (3D Causal) |
