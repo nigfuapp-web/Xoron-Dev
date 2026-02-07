@@ -842,10 +842,7 @@ class MoELlamaForCausalLM(nn.Module):
                     shift_labels.view(-1)
                 )
                 loss = torch.clamp(loss, min=0.0, max=100.0)
-
-                if self.moe_config and self.moe_config.get('router_aux_loss_coef', 0) > 0:
-                    if aux_loss is not None:
-                        loss = loss + self.moe_config['router_aux_loss_coef'] * aux_loss
+                # Note: No aux loss addition - we use Aux-Lossless MoE routing
             else:
                 loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype, requires_grad=True)
 

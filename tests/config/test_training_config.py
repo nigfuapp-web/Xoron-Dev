@@ -56,7 +56,7 @@ class TestTrainingConfig(unittest.TestCase):
         self.assertEqual(config.video_diffusion_loss_weight, 0.1)
         self.assertEqual(config.asr_loss_weight, 0.1)
         self.assertEqual(config.tts_loss_weight, 0.1)
-        self.assertEqual(config.moe_aux_loss_weight, 0.02)
+        # Note: No moe_aux_loss_weight - we use Aux-Lossless MoE
         
     def test_cot_loss_weight(self):
         """Test chain-of-thought loss weight."""

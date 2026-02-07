@@ -100,9 +100,9 @@ def create_mock_config(**overrides):
         'num_experts': 4,
         'num_experts_per_tok': 2,
         'moe_layer_freq': 2,
-        'router_aux_loss_coef': 0.1,
         'use_shared_expert': True,
         'moe_capacity_factor': 1.25,
+        'use_aux_lossless': True,  # Aux-Lossless MoE (no aux loss needed)
         'vision_model_name': 'test-vision',
         'freeze_vision': True,
         'num_vision_tokens': 16,
@@ -176,7 +176,7 @@ def create_mock_training_config(**overrides):
         'video_diffusion_loss_weight': 0.1,
         'asr_loss_weight': 0.1,
         'tts_loss_weight': 0.1,
-        'moe_aux_loss_weight': 0.01,
+        # No moe_aux_loss_weight - we use Aux-Lossless MoE
         'temporal_consistency_weight': 0.01,
         'cfg_dropout_rate': 0.1,
         'save_steps': 100,

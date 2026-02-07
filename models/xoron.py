@@ -151,7 +151,7 @@ class XoronMultimodalModel(nn.Module):
             'num_experts_per_tok': config.num_experts_per_tok,
             'moe_layer_freq': config.moe_layer_freq,
             'intermediate_size': config.intermediate_size,
-            'router_aux_loss_coef': config.router_aux_loss_coef,
+            # Note: No router_aux_loss_coef - we use Aux-Lossless MoE
         }
 
         # 6. LLM with MoE
@@ -159,7 +159,7 @@ class XoronMultimodalModel(nn.Module):
         print(f"   📏 Context: {config.max_position_embeddings//1024}K positions")
         if config.use_ring_attention:
             print(f"   🔄 Ring Attention: {config.ring_attention_chunk_size} chunk size")
-        print(f"   🎯 MoE: {config.num_experts} experts, top-{config.num_experts_per_tok}")
+        print(f"   🎯 MoE: {config.num_experts} experts, top-{config.num_experts_per_tok} (Aux-Lossless)")
         print(f"   ⚡ Flash Attention: {config.use_flash_attention}")
         self.llm = MoELlamaForCausalLM(llm_config, moe_config)
         print(f"   ✅ MoE layers: {self.llm.model.num_moe_layers}/{config.num_layers}")

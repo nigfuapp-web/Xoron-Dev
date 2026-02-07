@@ -44,15 +44,14 @@ class XoronConfig:
     # Tie word embeddings (parameter efficiency)
     tie_word_embeddings: bool = True
 
-    # MoE Configuration (SOTA: with shared expert isolation)
+    # MoE Configuration (SOTA: Aux-Lossless with shared expert isolation)
     use_moe: bool = True
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2  # MoE every 2 layers
-    router_aux_loss_coef: float = 0.1
     use_shared_expert: bool = True  # DeepSeek-style shared expert isolation
     moe_capacity_factor: float = 1.25  # Expert capacity factor
-    use_aux_lossless: bool = True  # Aux-lossless MoE routing
+    use_aux_lossless: bool = True  # Aux-lossless MoE routing (no aux loss needed)
 
     # Vision Configuration (SOTA: SigLIP 2 + TiTok + Dual-Stream)
     vision_model_name: str = "google/siglip-so400m-patch14-384"  # SigLIP 2 - best for MoE
@@ -157,7 +156,6 @@ class XoronConfig:
             'num_experts': self.num_experts,
             'num_experts_per_tok': self.num_experts_per_tok,
             'moe_layer_freq': self.moe_layer_freq,
-            'router_aux_loss_coef': self.router_aux_loss_coef,
             'use_shared_expert': self.use_shared_expert,
             'moe_capacity_factor': self.moe_capacity_factor,
             'use_aux_lossless': self.use_aux_lossless,

@@ -86,7 +86,7 @@ class TrainingConfig:
     video_diffusion_loss_weight: float = 0.1
     asr_loss_weight: float = 0.1
     tts_loss_weight: float = 0.1
-    moe_aux_loss_weight: float = 0.02
+    # Note: No MoE aux loss - we use Aux-Lossless MoE routing
        
     # Debug settings
     debug_nan_checks: bool = False  # Enable expensive NaN/Inf checks (causes CPU-GPU sync)
@@ -159,7 +159,7 @@ class TrainingConfig:
         print(f"   Image Diffusion: {self.image_diffusion_loss_weight}")
         print(f"   Video Diffusion: {self.video_diffusion_loss_weight}")
         print(f"   ASR: {self.asr_loss_weight} | TTS: {self.tts_loss_weight}")
-        print(f"   MoE Aux: {self.moe_aux_loss_weight}")
+        print(f"   MoE: Aux-Lossless (no aux loss needed)")
         print(f"\n🔧 Debug Settings:")
         print(f"   NaN checks: {self.debug_nan_checks}")
         print(f"\n🔧 LoRA+ Settings:")
@@ -207,7 +207,6 @@ class TrainingConfig:
             'video_diffusion_loss_weight': self.video_diffusion_loss_weight,
             'asr_loss_weight': self.asr_loss_weight,
             'tts_loss_weight': self.tts_loss_weight,
-            'moe_aux_loss_weight': self.moe_aux_loss_weight,
             'debug_nan_checks': self.debug_nan_checks,
             'logging_steps': self.logging_steps,
             'max_per_dataset_eval': self.max_per_dataset_eval,

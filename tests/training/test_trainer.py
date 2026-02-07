@@ -47,8 +47,8 @@ class TestXoronTrainerStructure(unittest.TestCase):
             'video_diffusion_loss_weight',
             'asr_loss_weight',
             'tts_loss_weight',
-            'moe_aux_loss_weight',
             'cot_loss_weight',
+            # Note: No moe_aux_loss_weight - we use Aux-Lossless MoE
         ]
         # Just verify the class can be inspected
         self.assertTrue(callable(XoronTrainer))
