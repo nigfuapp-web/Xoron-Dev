@@ -259,24 +259,8 @@ class VoiceProcessor:
 
             # Handle dict format
             if isinstance(audio_data, dict):
-                # Try array first (most common)
-                if 'array' in audio_data and audio_data['array'] is not None:
-                    array = audio_data['array']
-                    sr = audio_data.get('sampling_rate', sr)
-                    try:
-                        if isinstance(array, np.ndarray):
-                            waveform = torch.from_numpy(array.copy()).float()
-                        elif isinstance(array, list):
-                            waveform = torch.tensor(array, dtype=torch.float32)
-                        elif isinstance(array, torch.Tensor):
-                            waveform = array.float()
-                        else:
-                            waveform = torch.tensor(array).float()
-                    except Exception:
-                        pass
-                
-                # Try bytes
-                if waveform is None and 'bytes' in audio_data and audio_data['bytes'] is not None:
+                # PRIORITY 1: Try bytes (used when Audio(decode=False) - our custom decoder)
+                if 'bytes' in audio_data and audio_data['bytes'] is not None:
                     if self.has_soundfile:
                         try:
                             import soundfile as sf
@@ -297,7 +281,23 @@ class VoiceProcessor:
                         except Exception:
                             pass
                 
-                # Try audio key
+                # PRIORITY 2: Try array (if decode=True was used)
+                if waveform is None and 'array' in audio_data and audio_data['array'] is not None:
+                    array = audio_data['array']
+                    sr = audio_data.get('sampling_rate', sr)
+                    try:
+                        if isinstance(array, np.ndarray):
+                            waveform = torch.from_numpy(array.copy()).float()
+                        elif isinstance(array, list):
+                            waveform = torch.tensor(array, dtype=torch.float32)
+                        elif isinstance(array, torch.Tensor):
+                            waveform = array.float()
+                        else:
+                            waveform = torch.tensor(array).float()
+                    except Exception:
+                        pass
+                
+                # PRIORITY 3: Try audio key
                 if waveform is None and 'audio' in audio_data and audio_data['audio'] is not None:
                     array = audio_data['audio']
                     sr = audio_data.get('sampling_rate', sr)

@@ -104,12 +104,16 @@ class TrueStreamingDataset(IterableDataset):
         """Initialize dataset sources for streaming."""
         from datasets import load_dataset
         
-        # Import Audio for casting audio columns
+        # Import Audio for casting audio columns with decode=False
+        # This disables HF's default decoder so we use our custom soundfile/librosa decoder
         try:
             from datasets import Audio
             has_audio_feature = True
         except ImportError:
             has_audio_feature = False
+
+        # Audio dataset types that need decode=False
+        audio_dtypes = {'voice_asr', 'voice_tts'}
 
         self._dataset_sources = []
         failed_datasets = []
@@ -149,6 +153,15 @@ class TrueStreamingDataset(IterableDataset):
                         if "config" in cfg:
                             load_kwargs["name"] = cfg["config"]
                         ds = load_dataset(**load_kwargs)
+                        
+                        # For audio datasets, disable HF's automatic decoding
+                        # We use our custom decoder (soundfile/librosa) instead
+                        if dtype in audio_dtypes and has_audio_feature:
+                            try:
+                                ds = ds.cast_column('audio', Audio(decode=False))
+                            except Exception:
+                                pass  # Column might not exist
+                        
                         break
                     except Exception as e:
                         if attempt < max_retries - 1:
@@ -677,7 +690,28 @@ class TrueStreamingDataset(IterableDataset):
             
             # Handle dict format (common in HuggingFace datasets)
             elif isinstance(audio_data, dict):
-                # Try to get array directly (most common format for HuggingFace audio datasets)
+                # PRIORITY 1: Try bytes field (used when Audio(decode=False) - our custom decoder)
+                if 'bytes' in audio_data and audio_data['bytes']:
+                    try:
+                        import io
+                        import soundfile as sf
+                        audio_buffer = io.BytesIO(audio_data['bytes'])
+                        array, sr = sf.read(audio_buffer)
+                        waveform = torch.from_numpy(array).float()
+                        return _waveform_to_output(waveform, sr)
+                    except Exception:
+                        # Fallback to librosa
+                        try:
+                            import io
+                            import librosa
+                            audio_buffer = io.BytesIO(audio_data['bytes'])
+                            array, sr = librosa.load(audio_buffer, sr=None)
+                            waveform = torch.from_numpy(array).float()
+                            return _waveform_to_output(waveform, sr)
+                        except Exception:
+                            pass
+                
+                # PRIORITY 2: Try array (if decode=True was used somehow)
                 if 'array' in audio_data and audio_data['array'] is not None:
                     array = audio_data['array']
                     sr = audio_data.get('sampling_rate', sampling_rate)
@@ -696,7 +730,7 @@ class TrueStreamingDataset(IterableDataset):
                     except Exception:
                         pass
                 
-                # Try path field (HuggingFace datasets often have this)
+                # PRIORITY 3: Try path field
                 if 'path' in audio_data and audio_data['path']:
                     audio_path = audio_data['path']
                     # Check if it's a URL
@@ -714,18 +748,6 @@ class TrueStreamingDataset(IterableDataset):
                         waveform = self.voice_processor.load_audio(audio_path)
                         if waveform is not None:
                             return _waveform_to_output(waveform, self.voice_processor.sample_rate)
-                
-                # Try bytes field
-                if 'bytes' in audio_data and audio_data['bytes']:
-                    try:
-                        import io
-                        import soundfile as sf
-                        audio_buffer = io.BytesIO(audio_data['bytes'])
-                        array, sr = sf.read(audio_buffer)
-                        waveform = torch.from_numpy(array).float()
-                        return _waveform_to_output(waveform, sr)
-                    except Exception:
-                        pass
                 
                 return None
             
