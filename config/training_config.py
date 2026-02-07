@@ -253,20 +253,20 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
         }
     elif num_gpus == 2:
         # MEMORY OPTIMIZED: Better balance across GPUs to prevent OOM
-        # GPU 0: Encoders + IMAGE generator + video generator
-        # GPU 1: LLM + audio decoder + cross_attention (LLM needs most memory)
+        # GPU 0: Encoders + generators (image/video)
+        # GPU 1: LLM + audio decoder + cross_attention + modality_markers
         return {
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:1',  # Moved to GPU 1 to balance memory
+            'audio_decoder': 'cuda:1',  # On GPU 1 to balance memory
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:1',
             'cross_attention': 'cuda:1',
-            'generator': 'cuda:0',  # IMAGE generator moved to GPU 0 to free GPU 1
+            'generator': 'cuda:0',  # IMAGE generator on GPU 0
             'video_generator': 'cuda:0',  # VIDEO generator on GPU 0
-            'modality_markers': 'cuda:0',  # Moved to GPU 0 to free GPU 1
+            'modality_markers': 'cuda:1',  # On GPU 1 with LLM
             'primary': 'cuda:0',
         }
     else:
