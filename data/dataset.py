@@ -1062,8 +1062,6 @@ class TrueStreamingDataset(IterableDataset):
         - Samples are formatted using format_functions before yielding
         - Each dataset is capped at max_per_dataset UNIQUE samples to prevent domination
         - Each unique sample is yielded sample_repeat times for stronger learning signal
-        
-        Example: max_per_epoch=10000, sample_repeat=4 → 10000 unique samples × 4 = 40000 total yields
         """
         # Check if resuming from saved state
         resume_unique = self._streaming_state.get("unique_samples", 0)
@@ -1266,10 +1264,10 @@ def create_train_eval_datasets(
     tokens: Dict[str, str],
     image_processor,
     max_length: int = 1024,
-    max_per_epoch_train: int = 6600,
+    max_per_epoch_train: int = 2000,
     max_per_dataset_train: int = 100,
     max_per_dataset_eval: int = 10,
-    sample_repeat: int = 4,
+    sample_repeat: int = 2,
     voice_processor=None,
     max_video_frames: int = 16,
     video_size: int = 256,  # 256x256 for efficient training
