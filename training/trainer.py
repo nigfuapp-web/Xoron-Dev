@@ -223,6 +223,18 @@ class XoronTrainer:
                 self.model.audio_decoder.gradient_checkpointing_enable()
                 enabled_components.append('Audio Decoder')
         
+        # Enable for Waveform Decoder (Speech-to-Speech)
+        if hasattr(self.model, 'waveform_decoder') and self.model.waveform_decoder is not None:
+            if hasattr(self.model.waveform_decoder, 'gradient_checkpointing_enable'):
+                self.model.waveform_decoder.gradient_checkpointing_enable()
+                enabled_components.append('Waveform Decoder')
+            else:
+                # Manual gradient checkpointing for conv layers
+                for module in self.model.waveform_decoder.modules():
+                    if hasattr(module, 'gradient_checkpointing'):
+                        module.gradient_checkpointing = True
+                enabled_components.append('Waveform Decoder (manual)')
+        
         # Enable for Image Generator (Diffusion) - UNet based
         if hasattr(self.model, 'generator') and self.model.generator is not None:
             if hasattr(self.model.generator, 'unet'):
@@ -785,6 +797,7 @@ class XoronTrainer:
         epoch_vid_diff_loss = 0.0
         epoch_asr_loss = 0.0
         epoch_tts_loss = 0.0
+        epoch_waveform_loss = 0.0  # Waveform decoder loss (Speech-to-Speech)
         epoch_moe_aux_loss = 0.0  # MoE auxiliary loss (load balancing)
         num_batches = 0
         num_valid_batches = 0  # Track batches with valid loss for learning
@@ -793,6 +806,7 @@ class XoronTrainer:
         num_vid_diff = 0
         num_asr = 0
         num_tts = 0
+        num_waveform = 0  # Batches with waveform decoder loss
         num_moe = 0  # Batches with MoE aux loss
         total_batches = len(train_loader)
 
@@ -1071,6 +1085,8 @@ class XoronTrainer:
                             waveform_loss = waveform_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                             # Use same weight as TTS
                             total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
+                            epoch_waveform_loss += waveform_loss.item()
+                            num_waveform += 1
 
             # CRITICAL: Final loss clamping before backward (FP16 safety)
             # This prevents gradient explosion from extreme loss values
@@ -1265,6 +1281,7 @@ class XoronTrainer:
         avg_vid = epoch_vid_diff_loss / max(num_vid_diff, 1) if num_vid_diff > 0 else 0.0
         avg_asr = epoch_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
         avg_tts = epoch_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
+        avg_waveform = epoch_waveform_loss / max(num_waveform, 1) if num_waveform > 0 else 0.0
         avg_moe = epoch_moe_aux_loss / max(num_moe, 1) if num_moe > 0 else 0.0
         elapsed = time.time() - training_start_time
         elapsed_hours = elapsed / 3600
@@ -1280,6 +1297,7 @@ class XoronTrainer:
             'vid': avg_vid,
             'asr': avg_asr,
             'tts': avg_tts,
+            'waveform': avg_waveform,
             'moe_aux': avg_moe,
             'valid_pct': valid_pct,
             'num_valid_batches': num_valid_batches,
@@ -1289,6 +1307,7 @@ class XoronTrainer:
             'num_vid_diff': num_vid_diff,
             'num_asr': num_asr,
             'num_tts': num_tts,
+            'num_waveform': num_waveform,
             'num_moe': num_moe,
             'elapsed_hours': elapsed_hours,
         }
@@ -1529,6 +1548,11 @@ class XoronTrainer:
         print(f"   🔊 TTS Loss:                      {train_losses['tts']:.4f} ({train_losses['num_tts']} batches)")
         if eval_losses:
             print(f"   🔊 TTS Validation Loss:           {eval_losses['tts']:.4f} ({eval_losses['num_tts']} batches)")
+        
+        # Waveform Decoder Loss (Speech-to-Speech)
+        waveform_loss = train_losses.get('waveform', 0.0)
+        num_waveform = train_losses.get('num_waveform', 0)
+        print(f"   🎙️ Waveform Decoder Loss:          {waveform_loss:.4f} ({num_waveform} batches)")
         
         # MoE Auxiliary Loss (load balancing) - training only, not a dataset loss
         print(f"   ⚡ MoE Aux Loss:                   {train_losses['moe_aux']:.4f} ({train_losses['num_moe']} batches)")
