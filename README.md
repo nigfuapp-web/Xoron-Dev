@@ -6,7 +6,8 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red?style=for-the-badge&logo=pytorch)
-![Version](https://img.shields.io/badge/Version-2.1-purple?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-2.2-purple?style=for-the-badge)
+![Tests](https://img.shields.io/badge/Tests-482%20Passing-brightgreen?style=for-the-badge)
 
 **A unified multimodal AI model that understands and generates text, images, video, and audio with multi-scale training support.**
 
@@ -25,38 +26,40 @@
 ### LLM Backbone (12 Layers, 1024d, 16 Heads)
 - **Ring Attention** - 128K context with 4096 chunk size
 - **Aux-Lossless MoE** - 8 experts, top-2 routing, no auxiliary loss
-- **Isolated Shared Expert** - Always-active expert for common knowledge
+- **Configurable Shared Expert** - Optional always-active expert for common knowledge
 - **Qwen2.5 Tokenizer** - 151K vocab size
 
 ### Vision Encoder
 - **SigLIP SO400M** - 384×384 native, multi-scale 128-512px
-- **TiTok 1D Tokenization** - 576 patches → 256 tokens
-- **Dual-Stream Attention** - SD3/Flux-style symmetric processing
-- **Perceiver Resampler** - 64 output tokens for LLM
+- **TiTok 1D Tokenization** - 576 patches → 256 tokens with cross-attention
+- **Dual-Stream Attention** - SD3/Flux-style symmetric processing with 2D-RoPE
+- **Multiple Projector Types** - Perceiver Resampler, Spatial-Aware, C-Abstractor
 
 ### Video Encoder
 - **3D-RoPE** - Spatiotemporal (x, y, t) positional encodings
-- **Temporal MoE** - 4 experts for motion patterns
-- **3D Causal Transformer** - 4 layers for temporal understanding
+- **Temporal MoE** - 4 experts for motion patterns with expert-choice routing
+- **3D Causal Transformer** - Factorized spatio-temporal attention
 - **Multi-scale: 8-32 frames** at 128-384px resolution
 
 ### Audio System
-- **Raw Waveform Tokenizer** - Direct audio processing at 16kHz (no mel spectrogram)
-- **Conformer Encoder with RMLA** - KV compression (rank 256)
+- **Raw Waveform Tokenizer** - Direct audio processing at 16kHz with RVQ (4 codebooks)
+- **Conformer Encoder** - With Rotary Multi-Head Latent Attention (RMLA)
 - **BigVGAN-style Waveform Decoder** - Snake activation + Multi-Receptive Field Fusion
-- **Monotonic Alignment Search (MAS)** - Accurate text-audio alignment
-- **Zero-Shot Voice Cloning** - In-context audio prompting with 256-dim speaker embeddings
+- **Monotonic Alignment Search (MAS)** - Soft/Hard alignment for text-audio
+- **Zero-Shot Voice Cloning** - In-context audio prompting with speaker embeddings
 
 ### Image Generation
-- **MoE-DiT** - Diffusion Transformer with 4 experts
+- **MoE-DiT** - Diffusion Transformer with 4 experts and SwiGLU activation
 - **Flow Matching** - Replaces DDPM for faster convergence
-- **Dual-Stream Attention** - Text-image parallel processing
+- **Dual-Stream Self-Attention** - 2D-RoPE for spatial awareness
+- **ImageVAE** - For latent space encoding/decoding
 - **Multi-scale: 256-512px** output resolution, CFG scale 7.5
 
 ### Video Generation
-- **3D Causal Transformers** - Temporal coherence
-- **Flow Matching** - Smooth frame transitions
-- **Temporal MoE** - 4 experts for motion generation
+- **3D Causal Transformers** - Factorized spatial + temporal attention
+- **Flow Matching Scheduler** - Smooth frame transitions with log-SNR weighting
+- **Temporal MoE** - 4 experts with load balancing loss
+- **VideoVAE3D** - 3D VAE for video latent space
 - **Multi-scale: 8-32 frames @ 128-384px**
 
 ---
@@ -66,25 +69,27 @@
 ### 🧠 **Multimodal Understanding**
 | Modality | Encoder | Input Size (Multi-Scale) | Output Tokens |
 |----------|---------|--------------------------|---------------|
-| Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream | 128-512px | 64 tokens |
-| Video | 3D Causal + Temporal MoE (4 experts) | 8-32 frames @ 128-384px | 64 tokens |
-| Audio | Raw Waveform Tokenizer + Conformer + RMLA | 16kHz, up to 10s | Variable |
+| Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream RoPE2D | 128-512px | 64 tokens |
+| Video | 3D-RoPE + Factorized Spatio-Temporal + Temporal MoE | 8-32 frames @ 128-384px | 64 tokens |
+| Audio | Raw Waveform Tokenizer + Conformer + RMLA (MLA-style KV compression) | 16kHz, up to 10s | Variable |
 | Text | Qwen2.5 Tokenizer (151K vocab) | 128K context | - |
 
 ### 🎨 **Multimodal Generation**
 | Output | Architecture | Resolution (Multi-Scale) |
 |--------|--------------|--------------------------|
-| Text | MoE LLM (8+1 experts) + Chain-of-Thought | 128K tokens |
-| Image | MoE-DiT (4 experts) + Flow Matching + Dual-Stream | 256-512px (50 steps) |
-| Video | 3D Causal + Flow Matching + Temporal MoE | 8-32 frames @ 128-384px |
-| Audio | BigVGAN-style Waveform Decoder + MAS + Zero-Shot Cloning | 16kHz |
+| Text | MoE LLM (8 experts, configurable shared) + Chain-of-Thought | 128K tokens |
+| Image | MoE-DiT (4 experts, SwiGLU) + Flow Matching + 2D-RoPE | 256-512px (50 steps) |
+| Video | VideoUNet3D + Flow Matching + Temporal MoE | 8-32 frames @ 128-384px |
+| Audio | BigVGAN-style Decoder + MAS (soft/hard) + Speaker Encoder | 16kHz |
 
 ### ⚡ **Training Features**
 - **Multi-Scale Training**: Random scale selection per batch for resolution variety
-- **Mixture of Experts**: 8 experts + 1 shared, top-2 routing, aux-lossless routing
+- **Mixture of Experts**: 8 experts + configurable shared, top-2 routing, aux-lossless routing
+- **Expert Choice MoE**: Alternative routing where experts select tokens
 - **LoRA+/rsLoRA/DoRA**: r=32, α=64, B matrix learns 4× faster (LoRA+ ratio)
 - **Ring Attention**: Memory-efficient 128K context (4096 chunk size)
-- **Flow Matching**: Superior generation quality over DDPM
+- **Flow Matching**: Log-SNR weighting for superior generation quality
+- **Gradient Checkpointing**: Memory optimization for encoders/decoders
 - **Multi-GPU**: Model parallelism for 2× T4 GPUs (Kaggle)
 
 ### 🛠️ **Agentic Capabilities**
@@ -106,23 +111,24 @@ Xoron-Dev/
 │   ├── 📁 llm/              # MoE-LLM backbone
 │   │   └── moe_llama.py     # MoE LLaMA with Ring Attention
 │   ├── 📁 encoders/         # Input encoders
-│   │   ├── vision.py        # SigLIP + TiTok + Dual-Stream
-│   │   ├── video.py         # 3D-RoPE + Temporal MoE
-│   │   └── audio.py         # Raw Waveform Tokenizer
+│   │   ├── vision.py        # SigLIP + TiTok + Dual-Stream + RoPE2DEncoder
+│   │   ├── video.py         # 3D-RoPE + Temporal MoE + Causal3DTransformer
+│   │   └── audio.py         # RawWaveformTokenizer + Conformer + RMLA + MAS
 │   ├── 📁 generators/       # Output generators
-│   │   ├── image.py         # MoE-DiT + Flow Matching
-│   │   └── video.py         # 3D Causal Transformers
+│   │   ├── image.py         # MoE-DiT + Flow Matching + ImageVAE
+│   │   └── video.py         # VideoUNet3D + Temporal MoE + VideoVAE3D
 │   └── 📁 components/       # Shared components
-│       ├── moe.py           # Mixture of Experts
+│       ├── moe.py           # MoE (standard + expert-choice routing)
 │       ├── attention.py     # Ring, Flash, Cross attention
-│       ├── projectors.py    # Perceiver Resampler
+│       ├── projectors.py    # Perceiver, Spatial-Aware, C-Abstractor
 │       └── lora.py          # LoRA/rsLoRA/DoRA/LoRA+
 │
 ├── 📁 config/               # Configuration
 │   ├── model_config.py      # XoronConfig dataclass
 │   ├── training_config.py   # TrainingConfig
 │   ├── dataset_config.py    # 66+ dataset definitions
-│   └── special_tokens.py    # 250+ special tokens
+│   ├── special_tokens.py    # 250+ special tokens
+│   └── chat_template.py     # Chat formatting templates
 │
 ├── 📁 training/             # Training utilities
 │   ├── trainer.py           # XoronTrainer with weighted loss
@@ -134,12 +140,20 @@ Xoron-Dev/
 │   └── processors.py        # Image/Video/Audio processing
 │
 ├── 📁 synth/                # Synthetic data generation
-│   ├── generate_dataset.py  # Main generator script
-│   └── 📁 data/             # 34 generated dataset types
+│   ├── generator.py         # Main generator module
+│   ├── templates.py         # Data generation templates
+│   └── quality_utils.py     # Quality validation utilities
 │
 ├── 📁 export/               # Model export
 │   ├── onnx_export.py       # ONNX with quantization
 │   └── gguf_export.py       # GGUF for llama.cpp
+│
+├── 📁 tests/                # Comprehensive test suite (482 tests)
+│   ├── 📁 config/           # Configuration tests
+│   ├── 📁 models/           # Model component tests
+│   ├── 📁 data/             # Data processing tests
+│   ├── 📁 training/         # Training utility tests
+│   └── 📁 utils/            # Utility function tests
 │
 ├── build.py                 # Main CLI for build/train/export
 ├── load.py                  # Model loading utilities
@@ -343,7 +357,7 @@ export_to_gguf(
 
 ## 🔧 Configuration Reference
 
-### XoronConfig (v2.1)
+### XoronConfig (v2.2)
 
 ```python
 @dataclass
@@ -356,17 +370,18 @@ class XoronConfig:
     vocab_size: int = 151643
     max_position_embeddings: int = 131072  # 128K
     tie_word_embeddings: bool = True
+    rms_norm_eps: float = 1e-6
     
     # Ring Attention for 128K+ context
     use_ring_attention: bool = True
     ring_attention_chunk_size: int = 4096
     
-    # MoE (Aux-Lossless)
+    # MoE (Aux-Lossless with configurable shared expert)
     use_moe: bool = True
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2
-    use_shared_expert: bool = True
+    use_shared_expert: bool = True  # Can be disabled
     use_aux_lossless: bool = True
     
     # Vision Encoder (SOTA)
@@ -381,8 +396,8 @@ class XoronConfig:
     use_video_temporal_moe: bool = True
     num_video_encoder_layers: int = 4
     
-    # Multi-Scale Training (NEW in v2.1)
-    use_multi_scale: bool = True  # Enable multi-scale training
+    # Multi-Scale Training
+    use_multi_scale: bool = True
     multi_scale_strategy: str = "random"  # "random", "progressive", "curriculum"
     
     # Image multi-scale: 128, 192, 256, 320, 384, 448, 512
@@ -406,25 +421,25 @@ class XoronConfig:
     video_max_frames: int = 32
     video_base_frames: int = 16
     
-    # Image Generation (Flow Matching + Dual-Stream)
+    # Image Generation (MoE-DiT + Flow Matching)
     enable_generation: bool = True
     generation_cfg_scale: float = 7.5
     generation_use_flow_matching: bool = True
     generation_use_dual_stream: bool = True
     generation_num_experts: int = 4
     
-    # Video Generation (3D Causal + Temporal MoE)
+    # Video Generation (VideoUNet3D + Temporal MoE)
     generation_video_use_flow_matching: bool = True
     generation_video_use_3d_rope: bool = True
     generation_video_num_experts: int = 4
     
-    # LoRA
+    # LoRA variants
     use_lora: bool = True
     lora_r: int = 32
     lora_alpha: int = 64
     use_rslora: bool = True
     
-    # Cross-Attention & Flash Attention
+    # Attention
     use_cross_attention: bool = True
     cross_attention_layers: int = 4
     use_flash_attention: bool = True

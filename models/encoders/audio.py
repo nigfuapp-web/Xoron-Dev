@@ -516,13 +516,14 @@ class MonotonicAlignmentSearch(nn.Module):
         )
 
         # Duration predictor for fluid alignment
+        # Use GroupNorm instead of LayerNorm for Conv1d compatibility
         self.duration_predictor = nn.Sequential(
             nn.Conv1d(hidden_size, hidden_size, 3, padding=1),
             nn.ReLU(),
-            nn.LayerNorm([hidden_size]),
+            nn.GroupNorm(1, hidden_size),  # Equivalent to LayerNorm for Conv1d
             nn.Conv1d(hidden_size, hidden_size, 3, padding=1),
             nn.ReLU(),
-            nn.LayerNorm([hidden_size]),
+            nn.GroupNorm(1, hidden_size),  # Equivalent to LayerNorm for Conv1d
             nn.Conv1d(hidden_size, 1, 1),
         )
 
@@ -1008,7 +1009,13 @@ class ConformerBlock(nn.Module):
 
         # Self-attention
         if self.use_rmla:
-            attn_out, present_kv = self.attn(x, attention_mask=mask, past_key_value=past_key_value, use_cache=use_cache)
+            # Convert boolean mask [B, seq_len] to attention mask [B, 1, 1, seq_len]
+            attn_mask = None
+            if mask is not None:
+                attn_mask = mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, seq_len]
+                attn_mask = attn_mask.to(dtype=x.dtype)
+                attn_mask = attn_mask.masked_fill(attn_mask.bool(), float('-inf'))
+            attn_out, present_kv = self.attn(x, attention_mask=attn_mask, past_key_value=past_key_value, use_cache=use_cache)
         else:
             attn_out, _ = self.attn(self.attn_norm(x), self.attn_norm(x), self.attn_norm(x), key_padding_mask=mask)
             present_kv = None

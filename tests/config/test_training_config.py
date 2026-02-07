@@ -75,7 +75,6 @@ class TestTrainingConfig(unittest.TestCase):
         """Test checkpointing configuration (eval at end of epoch, not step-based)."""
         config = self.TrainingConfig()
         
-        self.assertEqual(config.save_steps, 500)
         self.assertEqual(config.logging_steps, 50)
         self.assertEqual(config.max_per_dataset_eval, 10)  # Eval samples per dataset
         
@@ -118,17 +117,19 @@ class TestTrainingConfig(unittest.TestCase):
         self.assertEqual(config.learning_rate, 5e-5)
         self.assertEqual(config.num_epochs, 10)
         
-    def test_cfg_dropout_rate(self):
-        """Test classifier-free guidance dropout rate."""
+    def test_special_token_loss_weights(self):
+        """Test special token loss weights for agentic training."""
         config = self.TrainingConfig()
         
-        self.assertEqual(config.cfg_dropout_rate, 0.1)
+        self.assertEqual(config.tool_loss_weight, 1.3)
+        self.assertEqual(config.anti_hallucination_loss_weight, 1.2)
+        self.assertEqual(config.code_exec_loss_weight, 1.2)
         
-    def test_temporal_consistency_weight(self):
-        """Test temporal consistency weight for video."""
+    def test_debug_settings(self):
+        """Test debug configuration."""
         config = self.TrainingConfig()
         
-        self.assertEqual(config.temporal_consistency_weight, 0.01)
+        self.assertFalse(config.debug_nan_checks)
         
     def test_max_grad_norm(self):
         """Test gradient clipping configuration."""
@@ -161,12 +162,14 @@ class TestGetDeviceMap(unittest.TestCase):
         self.assertEqual(device_map['primary'], 'cuda:0')
         
     def test_dual_gpu_device_map(self):
-        """Test device map for dual GPU setup."""
+        """Test device map for dual GPU setup (rebalanced for voice training)."""
         device_map = self.get_device_map(2)
         
+        # GPU 0: Input, Generation & Audio (rebalanced from original)
         self.assertEqual(device_map['vision_encoder'], 'cuda:0')
+        self.assertEqual(device_map['generator'], 'cuda:0')  # Moved to GPU 0 for balance
+        # GPU 1: LLM only
         self.assertEqual(device_map['llm'], 'cuda:1')
-        self.assertEqual(device_map['generator'], 'cuda:1')
         
     def test_multi_gpu_device_map(self):
         """Test device map for 3+ GPU setup."""

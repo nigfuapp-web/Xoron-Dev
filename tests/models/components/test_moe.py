@@ -184,13 +184,16 @@ class TestMoELayer(unittest.TestCase):
         self.assertEqual(layer.num_experts_per_tok, 2)
         self.assertEqual(len(layer.experts), 8)
         
-    def test_shared_expert_always_enabled(self):
-        """Test shared expert is always enabled."""
-        layer = self.MoELayer(256, 512, use_shared_expert=False)
+    def test_shared_expert_configurable(self):
+        """Test shared expert is configurable."""
+        # Test with shared expert enabled (default)
+        layer_with = self.MoELayer(256, 512, use_shared_expert=True)
+        self.assertTrue(layer_with.use_shared_expert)
+        self.assertIsNotNone(layer_with.shared_expert)
         
-        # Should still be True (DeepSeek-style)
-        self.assertTrue(layer.use_shared_expert)
-        self.assertIsNotNone(layer.shared_expert)
+        # Test with shared expert disabled
+        layer_without = self.MoELayer(256, 512, use_shared_expert=False)
+        self.assertFalse(layer_without.use_shared_expert)
         
     def test_forward_output_shape(self):
         """Test forward pass output shape."""

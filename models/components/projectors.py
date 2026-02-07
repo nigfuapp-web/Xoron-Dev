@@ -110,8 +110,10 @@ def compute_3d_rope(
 
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """Apply rotary position embeddings."""
-    x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
-    return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    rotated = torch.cat((-x2, x1), dim=-1)
+    return x * cos + rotated * sin
 
 
 class ResidualBottleneckBlock(nn.Module):

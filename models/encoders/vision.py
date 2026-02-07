@@ -168,8 +168,8 @@ class DualStreamEncoderAttention(nn.Module):
         q_b, k_b, v_b = qkv_b.unbind(dim=2)
         
         cos, sin = self.rope_2d(x_a, height, width)
-        cos = cos.unsqueeze(0).unsqueeze(2)
-        sin = sin.unsqueeze(0).unsqueeze(2)
+        cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, head_dim]
+        sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, head_dim]
         
         q_a = q_a.transpose(1, 2)
         k_a = k_a.transpose(1, 2)
