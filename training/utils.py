@@ -802,28 +802,27 @@ def train_waveform_decoder_step(
         
         # Filter by sample type if provided
         if sample_types is not None:
-            # Create boolean mask on the correct device using torch.as_tensor for proper handling
+            # Create boolean mask directly on GPU device
             type_list = [t == 'voice_tts' for t in sample_types]
-            type_mask = torch.as_tensor(type_list, dtype=torch.bool, device=dec_device)
+            type_mask = torch.tensor(type_list, dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
-            # Use nonzero for safe indexing across devices
-            valid_indices = type_mask.nonzero(as_tuple=True)[0]
-            target_waveform = target_waveform[valid_indices]
-            text_embeds = text_embeds[valid_indices]
+            # Get indices on GPU and use for indexing
+            valid_indices = torch.where(type_mask)[0].to(dec_device)
+            target_waveform = target_waveform.index_select(0, valid_indices)
+            text_embeds = text_embeds.index_select(0, valid_indices)
         
         # Filter to valid samples (non-silent audio)
-        # Compute on same device and use nonzero for safe indexing
         valid_mask = target_waveform.abs().sum(dim=-1) > 1e-6
         num_valid = valid_mask.sum().item()
         
         if num_valid == 0:
             return None
         
-        # Use nonzero for safe indexing
-        valid_indices = valid_mask.nonzero(as_tuple=True)[0]
-        target_waveform = target_waveform[valid_indices]
-        text_embeds = text_embeds[valid_indices]
+        # Get indices on GPU and use index_select for safe device handling
+        valid_indices = torch.where(valid_mask)[0].to(dec_device)
+        target_waveform = target_waveform.index_select(0, valid_indices)
+        text_embeds = text_embeds.index_select(0, valid_indices)
         
         # Step 1: Generate mel features through audio decoder (no grad for decoder)
         with torch.no_grad():
