@@ -468,18 +468,58 @@ def load_model_from_huggingface(hf_model_id, training_config):
         config_dict.pop('has_audio_encoder', None)
         config_dict.pop('has_audio_decoder', None)
         
-        # Detect vocab size and LoRA structure from checkpoint weights
+        # Detect architecture features from checkpoint weights
         model_path = os.path.join(cache_dir, "model.safetensors")
         pytorch_path = os.path.join(cache_dir, "pytorch_model.bin")
         checkpoint_vocab_size = None
         checkpoint_has_lora_structure = False
         
+        # Architecture detection flags
+        checkpoint_has_waveform_decoder = False
+        checkpoint_has_video_generator = False
+        checkpoint_has_generator = False
+        checkpoint_has_cross_attention = False
+        checkpoint_has_audio_encoder = False
+        checkpoint_has_audio_decoder = False
+        checkpoint_has_vision_encoder = False
+        checkpoint_has_video_encoder = False
+        
+        def detect_architecture_from_keys(keys):
+            """Detect which components exist in checkpoint from parameter keys."""
+            nonlocal checkpoint_vocab_size, checkpoint_has_lora_structure
+            nonlocal checkpoint_has_waveform_decoder, checkpoint_has_video_generator
+            nonlocal checkpoint_has_generator, checkpoint_has_cross_attention
+            nonlocal checkpoint_has_audio_encoder, checkpoint_has_audio_decoder
+            nonlocal checkpoint_has_vision_encoder, checkpoint_has_video_encoder
+            
+            # Check for LoRA structure in keys
+            checkpoint_has_lora_structure = any('.lora_A' in k or '.lora_B' in k or '.linear.weight' in k for k in keys)
+            
+            # Detect components from key prefixes
+            for key in keys:
+                if key.startswith('waveform_decoder.'):
+                    checkpoint_has_waveform_decoder = True
+                elif key.startswith('video_generator.'):
+                    checkpoint_has_video_generator = True
+                elif key.startswith('generator.'):
+                    checkpoint_has_generator = True
+                elif key.startswith('cross_attention_layers.'):
+                    checkpoint_has_cross_attention = True
+                elif key.startswith('audio_encoder.'):
+                    checkpoint_has_audio_encoder = True
+                elif key.startswith('audio_decoder.'):
+                    checkpoint_has_audio_decoder = True
+                elif key.startswith('vision_encoder.'):
+                    checkpoint_has_vision_encoder = True
+                elif key.startswith('video_encoder.'):
+                    checkpoint_has_video_encoder = True
+        
         if os.path.exists(model_path):
             try:
                 with safe_open(model_path, framework="pt") as f:
                     keys = list(f.keys())
-                    # Check for LoRA structure in keys
-                    checkpoint_has_lora_structure = any('.lora_A' in k or '.lora_B' in k or '.linear.weight' in k for k in keys)
+                    detect_architecture_from_keys(keys)
+                    
                     if checkpoint_has_lora_structure:
                         print(f"   🔧 Detected LoRA structure in checkpoint")
                     
@@ -496,7 +536,8 @@ def load_model_from_huggingface(hf_model_id, training_config):
             try:
                 state_dict = torch.load(pytorch_path, map_location='cpu')
                 keys = list(state_dict.keys())
-                checkpoint_has_lora_structure = any('.lora_A' in k or '.lora_B' in k or '.linear.weight' in k for k in keys)
+                detect_architecture_from_keys(keys)
+                
                 if checkpoint_has_lora_structure:
                     print(f"   🔧 Detected LoRA structure in checkpoint")
                 
@@ -507,6 +548,19 @@ def load_model_from_huggingface(hf_model_id, training_config):
                         break
             except Exception as e:
                 print(f"   ⚠️ Could not inspect pytorch_model.bin: {e}")
+        
+        # Print detected architecture
+        print(f"\n   🔍 Detected checkpoint architecture:")
+        print(f"      - LLM: ✅ (vocab_size={checkpoint_vocab_size or 'unknown'})")
+        print(f"      - Vision Encoder: {'✅' if checkpoint_has_vision_encoder else '❌ (will init randomly)'}")
+        print(f"      - Video Encoder: {'✅' if checkpoint_has_video_encoder else '❌ (will init randomly)'}")
+        print(f"      - Audio Encoder: {'✅' if checkpoint_has_audio_encoder else '❌ (will init randomly)'}")
+        print(f"      - Audio Decoder: {'✅' if checkpoint_has_audio_decoder else '❌ (will init randomly)'}")
+        print(f"      - Waveform Decoder: {'✅' if checkpoint_has_waveform_decoder else '❌ (will init randomly)'}")
+        print(f"      - Image Generator: {'✅' if checkpoint_has_generator else '❌ (will init randomly)'}")
+        print(f"      - Video Generator: {'✅' if checkpoint_has_video_generator else '❌ (will init randomly)'}")
+        print(f"      - Cross Attention: {'✅' if checkpoint_has_cross_attention else '❌ (will init randomly)'}")
+        print(f"      - LoRA: {'✅' if checkpoint_has_lora_structure else '❌'}")
         
         # Update config vocab_size if checkpoint has different size
         config_vocab_size = config_dict.get('vocab_size', 151643)
