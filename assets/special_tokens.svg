@@ -33,7 +33,7 @@
   <!-- Stats bar -->
   <rect x="60" y="120" width="1800" height="50" rx="10" fill="#12121a" stroke="#2a2a3a" stroke-width="1"/>
   <text x="90" y="152" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">
-    📊 Total Tokens: 433
+    📊 Total Tokens: 408
   </text>
   <text x="310" y="152" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="14">
     |  🗂️ Categories: 15
@@ -607,14 +607,14 @@
   <text x="685" y="2573" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|knowledge_cutoff|&gt;</text>
 
   <!-- Audio &amp; Speech Card -->
-  <rect x="960" y="2020" width="870" height="345" rx="12" fill="#12121a" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="960" y="2020" width="870" height="275" rx="12" fill="#12121a" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
   
   <!-- Header gradient overlay -->
   <rect x="961" y="2021" width="868" height="44" rx="11" fill="#22c55e" opacity="0.15"/>
   <text x="980" y="2050" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎤 Audio &amp; Speech</text>
   
   <!-- Description -->
-  <text x="980" y="2082" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">TTS emotions and prosody control</text>
+  <text x="980" y="2082" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11">Voice I/O and audio prompting for zero-shot cloning</text>
 
 
   <rect x="975" y="2100" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
@@ -636,25 +636,16 @@
   <text x="1585" y="2188" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/audio|&gt;</text>
 
   <rect x="975" y="2205" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1175" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:neutral|&gt;</text>
+  <text x="1175" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|audio_prompt|&gt;</text>
 
   <rect x="1385" y="2205" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1585" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:happy|&gt;</text>
+  <text x="1585" y="2223" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/audio_prompt|&gt;</text>
 
   <rect x="975" y="2240" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1175" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:sad|&gt;</text>
+  <text x="1175" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|speaker_ref|&gt;</text>
 
   <rect x="1385" y="2240" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1585" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|emotion:angry|&gt;</text>
-
-  <rect x="975" y="2275" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1175" y="2293" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:fast|&gt;</text>
-
-  <rect x="1385" y="2275" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1585" y="2293" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:slow|&gt;</text>
-
-  <rect x="975" y="2310" width="400" height="28" rx="6" fill="#1a1a25" stroke="#22c55e" stroke-width="1" opacity="0.8"/>
-  <text x="1175" y="2328" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|prosody:emphasis|&gt;</text>
+  <text x="1585" y="2258" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="9">&lt;|/speaker_ref|&gt;</text>
 
   <!-- Structured Data Card -->
   <rect x="60" y="2640" width="870" height="310" rx="12" fill="#12121a" stroke="#0ea5e9" stroke-width="2" filter="url(#shadow)"/>

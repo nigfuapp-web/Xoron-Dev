@@ -234,7 +234,7 @@
     <rect x="662" y="867" width="276" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
     <text x="800" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎨 Image Generator</text>
     <text x="800" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">MoE-DiT + Flow + Dual-Stream</text>
-    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">256² • 2D-RoPE • CFG=7.5</text>
+    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384² • 2D-RoPE • CFG=7.5</text>
     <rect x="978" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
     <rect x="980" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="982" y="867" width="276" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
@@ -246,7 +246,7 @@
     <rect x="1302" y="867" width="276" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
     <text x="1440" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔊 Audio Decoder</text>
     <text x="1440" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Neural TTS</text>
-    <text x="1440" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">13 emotions • 256 speakers</text>
+    <text x="1440" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Zero-shot voice cloning</text>
     <path d="M960,825 Q720,805 480,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
     <path d="M960,825 Q880,805 800,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
     <path d="M960,825 Q1040,805 1120,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>

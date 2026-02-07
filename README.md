@@ -1,4 +1,4 @@
-# 🚀 Xoron-Dev: State-of-the-Art Multimodal AI Model
+# 🚀 Xoron-Dev: Unified Multimodal AI Model
 
 <div align="center">
 
@@ -6,9 +6,9 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red?style=for-the-badge&logo=pytorch)
-![Version](https://img.shields.io/badge/Version-2.0_SOTA-purple?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-2.0-purple?style=for-the-badge)
 
-**A unified multimodal AI model that can understand and generate text, images, video, and audio.**
+**A unified multimodal AI model that understands and generates text, images, video, and audio.**
 
 [Features](#-features) | [Architecture](#%EF%B8%8F-architecture) | [Installation](#-installation) | [Usage](#-usage) | [Training](#%EF%B8%8F-training) | [Export](#-export)
 
@@ -16,243 +16,132 @@
 
 ---
 
-## 🆕 Version 2.0 - SOTA Architecture Upgrade
+## 🏗️ Architecture Overview
 
-### LLM Backbone
-- **MLA (Multi-Head Latent Attention)** - Compressed KV cache for memory efficiency
-- **YaRN/LongRoPE** - Superior 128K+ context extrapolation
-- **Ring Attention** - Distributed FP16 sequence processing for 128K+ context
-- **Aux-Lossless MoE** - No auxiliary loss, load balance through architecture
-- **Isolated Shared Expert** - Dedicated always-active expert
+<div align="center">
+<img src="./assets/xoron_architecture.svg" alt="Xoron-Dev Architecture" width="100%">
+</div>
 
-### Vision Encoder (NEW)
-- **SigLIP-2 Backbone** - Best-in-class visual features for MoE
-- **2D-RoPE** - Flexible aspect ratio support (matches generator)
-- **TiTok-style 1D Tokenization** - Efficient patch compression (576→256 tokens)
-- **Symmetric Dual-Stream Attention** - SD3/Flux-style parallel processing
+### LLM Backbone (12 Layers, 1024d, 16 Heads)
+- **Ring Attention** - 128K context with 4096 chunk size
+- **Aux-Lossless MoE** - 8 experts, top-2 routing, no auxiliary loss
+- **Isolated Shared Expert** - Always-active expert for common knowledge
+- **Qwen2.5 Tokenizer** - 151K vocab size
 
-### Video Encoder (NEW)
-- **3D-RoPE** - Flexible (x, y, t) positional encodings
-- **3D Causal Attention** - Temporal understanding with spatial awareness
-- **Temporal-Aware Expert Routing** - Motion pattern MoE
-- **4-Layer 3D Transformer** - Full spatio-temporal processing
+### Vision Encoder
+- **SigLIP SO400M** - 384×384 input resolution
+- **TiTok 1D Tokenization** - 576 patches → 256 tokens
+- **Dual-Stream Attention** - SD3/Flux-style symmetric processing
+- **Perceiver Resampler** - 64 output tokens for LLM
+
+### Video Encoder
+- **3D-RoPE** - Spatiotemporal (x, y, t) positional encodings
+- **Temporal MoE** - 4 experts for motion patterns
+- **3D Causal Transformer** - 4 layers for temporal understanding
+- **Up to 16 frames** at 256×256 resolution
+
+### Audio System
+- **Raw Waveform Tokenizer** - Direct audio processing at 16kHz
+- **Monotonic Alignment Search (MAS)** - Accurate text-audio alignment
+- **Zero-Shot Voice Cloning** - In-context audio prompting
+- **256-dim Speaker Embeddings** - Multi-speaker support
 
 ### Image Generation
-- **MoE-DiT** - Diffusion Transformer with patch-based MoE
-- **Flow Matching** - Replaces DDPM/DDIM for superior quality
-- **2D-RoPE** - Flexible aspect ratio support
-- **Symmetric Dual-Stream Attention** - SD3/Flux-style parallel streams
+- **MoE-DiT** - Diffusion Transformer with 4 experts
+- **Flow Matching** - Replaces DDPM for faster convergence
+- **Dual-Stream Attention** - Text-image parallel processing
+- **384×384** output resolution, CFG scale 7.5
 
 ### Video Generation
-- **Flow Matching + CFG** - Optimal transport paths
-- **3D-RoPE** - Flexible (x, y, t) positional encodings
-- **Temporal Expert Routing** - Motion-aware MoE
-- **3D Causal Transformers** - Autoregressive video generation
+- **3D Causal Transformers** - Temporal coherence
+- **Flow Matching** - Smooth frame transitions
+- **Temporal MoE** - 4 experts for motion generation
+- **16 frames @ 256×256**
 
 ---
 
 ## 🌟 Features
 
 ### 🧠 **Multimodal Understanding**
-- **Vision**: SigLIP-2 encoder with 2D-RoPE + TiTok tokenization (384x384)
-- **Video**: 3D-RoPE encoder with Temporal MoE (up to 32 frames)
-- **Audio**: Speech-to-text (ASR) with Conformer encoder
-- **Text**: 128K context length with Ring Attention (FP16)
-
+| Modality | Encoder | Input Size | Output Tokens |
+|----------|---------|------------|---------------|
+| Vision | SigLIP SO400M + TiTok | 384×384 | 64 tokens |
+| Video | 3D Causal + Temporal MoE | 16×256×256 | 64 tokens |
+| Audio | Raw Waveform Tokenizer | 16kHz, up to 10s | Variable |
+| Text | Qwen2.5 Tokenizer | 128K context | - |
 
 ### 🎨 **Multimodal Generation**
-- **Image Generation**: MoE-DiT with Flow Matching + Dual-Stream Attention
-- **Video Generation**: 3D Causal Transformers with Temporal MoE
-- **Text-to-Speech**: Neural TTS with emotion and speaker control
-- **Text Generation**: MLA-based MoE LLM with chain-of-thought reasoning
+| Output | Architecture | Resolution |
+|--------|--------------|------------|
+| Text | MoE LLM + Chain-of-Thought | 128K tokens |
+| Image | MoE-DiT + Flow Matching | 384×384 |
+| Video | 3D Causal + Flow Matching | 16 frames @ 256×256 |
+| Audio | Neural TTS + Zero-Shot Cloning | 16kHz |
 
-### ⚡ **SOTA Training Features**
-- **Mixture of Experts (MoE)**: 8 experts with Aux-Lossless load balancing + Isolated Shared Expert
-- **LoRA+**: Efficient fine-tuning with rank-stabilized scaling
-- **Ring Attention**: Memory-efficient 128K context with FP16 stability
-- **Flow Matching**: Superior generation quality for image/video
-- **Multi-GPU Support**: Model parallelism optimized for 2x T4 GPUs (Kaggle)
+### ⚡ **Training Features**
+- **Mixture of Experts**: 8 experts, top-2 routing, isolated shared expert
+- **LoRA+/rsLoRA**: r=32, α=64, B matrix learns 16× faster
+- **Ring Attention**: Memory-efficient 128K context
+- **Flow Matching**: Superior generation quality
+- **Multi-GPU**: Model parallelism for 2× T4 GPUs (Kaggle)
 
 ### 🛠️ **Agentic Capabilities**
-- **Tool Calling**: Function/tool invocation with structured outputs
-- **Code Execution**: Shell commands, Python scripts, Jupyter notebooks
-- **File Operations**: Create, edit, delete files with special tokens
-- **Anti-Hallucination**: Uncertainty expression and citation support
+- **250+ Special Tokens** for structured outputs
+- **Tool Calling**: Function invocation with `<|tool_call|>`, `<|tool_result|>`
+- **Code Execution**: Shell, Python, Jupyter with `<|exec|>`, `<|jupyter|>`
+- **File Operations**: Create, edit, delete with `<|file_create|>`, `<|file_edit|>`
+- **Anti-Hallucination**: `<|uncertain|>`, `<|cite|>`, `<|confidence_*|>`
+- **Chain-of-Thought**: `<|think|>`, `<|plan|>`, `<|critique|>`
 
 ---
 
-## 🏗️ Architecture
-
-### High-Level Overview (v2.0)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      XORON-DEV v2.0 MULTIMODAL MODEL                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Vision    │  │    Video    │  │    Audio    │  │    Text     │        │
-│  │   Encoder   │  │   Encoder   │  │   Encoder   │  │  Tokenizer  │        │
-│  │  (SigLIP-2) │  │  (Temporal) │  │ (Conformer) │  │  (Qwen2.5)  │        │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
-│         │                │                │                │               │
-│         ▼                ▼                ▼                │               │
-│  ┌─────────────────────────────────────────────────┐       │               │
-│  │           Multimodal Projectors                 │       │               │
-│  │  (Perceiver Resampler / Spatial / C-Abstractor) │       │               │
-│  └─────────────────────────┬───────────────────────┘       │               │
-│                            │                               │               │
-│                            ▼                               ▼               │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Cross-Attention Fusion                           │   │
-│  │                    (4 layers, 8 heads)                              │   │
-│  └─────────────────────────────┬───────────────────────────────────────┘   │
-│                                │                                           │
-│                                ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                     MoE LLM Backbone (v2.0 SOTA)                    │   │
-│  │  ┌─────────────────────────────────────────────────────────────┐   │   │
-│  │  │  12 Transformer Layers (1024d, 16 heads)                    │   │   │
-│  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  MLA (Multi-Head Latent Attention)                  │    │   │   │
-│  │  │  │  • Compressed KV cache (512 latent dim)             │    │   │   │
-│  │  │  │  • YaRN/LongRoPE for 128K+ extrapolation           │    │   │   │
-│  │  │  └─────────────────────────────────────────────────────┘    │   │   │
-│  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  Aux-Lossless MoE (every 2nd layer)                 │    │   │   │
-│  │  │  │  • 8 Routed Experts (top-2 routing)                 │    │   │   │
-│  │  │  │  • 1 Isolated Shared Expert (always active)         │    │   │   │
-│  │  │  │  • No auxiliary loss needed                         │    │   │   │
-│  │  │  └─────────────────────────────────────────────────────┘    │   │   │
-│  │  │  ┌─────────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  Ring Attention (4096 chunk size)                   │    │   │   │
-│  │  │  │  • Efficient 128K context with FP16                 │    │   │   │
-│  │  │  │  • Distributed sequence processing                  │    │   │   │
-│  │  │  └─────────────────────────────────────────────────────┘    │   │   │
-│  │  └─────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────┬───────────────────────────────────────┘   │
-│                                │                                           │
-│         ┌──────────────────────┼──────────────────────┐                    │
-│         ▼                      ▼                      ▼                    │
-│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐            │
-│  │    Image    │        │    Video    │        │    Audio    │            │
-│  │  Generator  │        │  Generator  │        │   Decoder   │            │
-│  │  (MoE-DiT)  │        │(3D Causal)  │        │   (TTS)     │            │
-│  │ Flow Match  │        │ Flow Match  │        │             │            │
-│  │ Dual-Stream │        │  3D-RoPE    │        │             │            │
-│  └─────────────┘        └─────────────┘        └─────────────┘            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Interactive Demo
-
-<div align="center">
-<img src="./assets/xoron_demo_animated.svg" alt="Xoron-Dev Animated Demo" width="100%">
-</div>
-
-### Architecture Visualization
-
-<div align="center">
-<img src="./assets/xoron_architecture.svg" alt="Xoron-Dev Architecture" width="100%">
-</div>
-
----
-
-## 📊 Model Configuration
-
-### Default Configuration (v2.0)
-
-| Component | Configuration |
-|-----------|--------------|
-| **LLM Backbone** | 1024 hidden, 12 layers, 16 heads, MLA attention |
-| **Context Length** | 128K tokens (Ring Attention: 4096 chunks) |
-| **Position Encoding** | YaRN/LongRoPE for extrapolation |
-| **MoE** | 8 experts, top-2 routing, Aux-Lossless + Isolated Shared Expert |
-| **Vision Encoder** | SigLIP-SO400M (384x384) |
-| **Video Frames** | Up to 32 frames |
-| **Image Generation** | MoE-DiT + Flow Matching, 256x256, 50 steps, Dual-Stream |
-| **Video Generation** | 3D Causal Transformer + Flow Matching, 256x256, 16 frames |
-| **Audio** | 16kHz, 80 mel bins |
-| **Vocabulary** | 151,643 tokens (Qwen2.5) |
-| **Word Embeddings** | Tied (input/output share weights) |
-
-### Special Tokens
-
-Xoron-Dev uses an extensive set of **400+ special tokens** for structured outputs:
-
-<div align="center">
-<img src="./assets/special_tokens.svg" alt="Xoron-Dev Special Tokens" width="100%">
-</div>
-
-| Category | Tokens |
-|----------|--------|
-| **Conversation** | `<\|user\|>`, `<\|assistant\|>`, `<\|system\|>` |
-| **Reasoning** | `<\|think\|>`, `<\|plan\|>`, `<\|critique\|>`, `<\|analysis\|>` |
-| **Tool Calling** | `<\|tool_call\|>`, `<\|tool_result\|>`, `<\|available_tools\|>` |
-| **Code Execution** | `<\|exec\|>`, `<\|exec_result\|>`, `<\|jupyter\|>` |
-| **File Operations** | `<\|add_file\|>`, `<\|edit_file\|>`, `<\|delete_file\|>` |
-| **Anti-Hallucination** | `<\|uncertain\|>`, `<\|cite\|>`, `<\|verify\|>` |
-| **Multimodal** | `<\|image\|>`, `<\|video\|>`, `<\|audio\|>` |
-
----
-
-## 📁 Project Structure
+## 📂 Project Structure
 
 ```
 Xoron-Dev/
-├── 📄 build.py              # Main training script (CLI + interactive)
-├── 📄 load.py               # Model loading utilities
-├── 📄 setup.py              # Interactive configuration tool
-├── 📄 requirements.txt      # Python dependencies
+├── 📁 models/               # Core model implementations
+│   ├── xoron.py             # Main XoronMultimodalModel class
+│   ├── 📁 llm/              # MoE-LLM backbone
+│   │   └── moe_llama.py     # MoE LLaMA with Ring Attention
+│   ├── 📁 encoders/         # Input encoders
+│   │   ├── vision.py        # SigLIP + TiTok + Dual-Stream
+│   │   ├── video.py         # 3D-RoPE + Temporal MoE
+│   │   └── audio.py         # Raw Waveform Tokenizer
+│   ├── 📁 generators/       # Output generators
+│   │   ├── image.py         # MoE-DiT + Flow Matching
+│   │   └── video.py         # 3D Causal Transformers
+│   └── 📁 components/       # Shared components
+│       ├── moe.py           # Mixture of Experts
+│       ├── attention.py     # Ring, Flash, Cross attention
+│       ├── projectors.py    # Perceiver Resampler
+│       └── lora.py          # LoRA/rsLoRA/DoRA/LoRA+
 │
-├── 📁 config/               # Configuration modules
+├── 📁 config/               # Configuration
 │   ├── model_config.py      # XoronConfig dataclass
-│   ├── training_config.py   # TrainingConfig dataclass
-│   ├── dataset_config.py    # Dataset configurations
-│   ├── special_tokens.py    # 400+ special tokens
-│   └── chat_template.py     # Jinja2 chat templates
-│
-├── 📁 models/               # Model implementations
-│   ├── xoron.py             # Main XoronMultimodalModel
-│   ├── 📁 llm/
-│   │   └── moe_llama.py     # MoE LLaMA implementation
-│   ├── 📁 encoders/
-│   │   ├── vision.py        # SigLIP vision encoder
-│   │   ├── video.py         # Temporal video encoder
-│   │   └── audio.py         # Conformer audio encoder/decoder
-│   ├── 📁 generators/
-│   │   ├── image.py         # MobileDiffusion image generator
-│   │   └── video.py         # Video diffusion generator
-│   └── 📁 components/
-│       ├── moe.py           # MoE layer with shared expert
-│       ├── attention.py     # Flash attention + cross-attention
-│       ├── projectors.py    # Multimodal projectors
-│       └── lora.py          # LoRA/rsLoRA/DoRA implementations
+│   ├── training_config.py   # TrainingConfig
+│   ├── dataset_config.py    # 66+ dataset definitions
+│   └── special_tokens.py    # 250+ special tokens
 │
 ├── 📁 training/             # Training utilities
 │   ├── trainer.py           # XoronTrainer with weighted loss
-│   └── utils.py             # Per-modality training steps & utilities
+│   └── utils.py             # Per-modality training steps
 │
 ├── 📁 data/                 # Data processing
-│   ├── dataset.py           # Multimodal streaming dataset
-│   ├── formatters.py        # Dataset formatters with special tokens
-│   └── processors.py        # Data preprocessing utilities
+│   ├── dataset.py           # TrueStreamingDataset
+│   ├── formatters.py        # 20+ format functions
+│   └── processors.py        # Image/Video/Audio processing
 │
-├── 📁 synth/                # Synthetic dataset generation
-│   ├── unique_generator.py  # Main dataset generator
-│   ├── agentic_dataset_generator.py
-│   ├── anti_hallucination_generator.py
-│   ├── system_admin_generator.py
-│   └── 📁 data/             # Generated datasets (34 types)
+├── 📁 synth/                # Synthetic data generation
+│   ├── generate_dataset.py  # Main generator script
+│   └── 📁 data/             # 34 generated dataset types
 │
-├── 📁 export/               # Model export utilities
-│   ├── onnx_export.py       # ONNX export with quantization
-│   └── gguf_export.py       # GGUF export for llama.cpp
+├── 📁 export/               # Model export
+│   ├── onnx_export.py       # ONNX with quantization
+│   └── gguf_export.py       # GGUF for llama.cpp
 │
-└── 📁 utils/                # Utility modules
-    ├── device.py            # Environment detection
-    └── logging.py           # Logging utilities
+├── build.py                 # Main CLI for build/train/export
+├── load.py                  # Model loading utilities
+└── setup.py                 # Interactive configuration
 ```
 
 ---
