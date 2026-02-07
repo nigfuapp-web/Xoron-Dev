@@ -112,15 +112,15 @@ datasets:
 ## 🌟 Model Highlights
 
 * **Architecture:** Mixture of Experts (8 Experts + 1 Shared, top-2 routing) with Ring Attention and Aux-Lossless routing.
-* **Multi-Scale Training (NEW):** Random scale selection per batch - images (128-512px), videos (128-384px), frames (8-32).
-* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization**, **Dual-Stream Attention**, and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** for video (8-32 frames).
-* **Image Generation:** **MoE-DiT** (Diffusion Transformer with MoE) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 256-512px.
-* **Video Generation:** **3D Causal Transformers** with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing**. Multi-scale: 8-32 frames @ 128-384px.
+* **Multi-Scale Training (NEW):** Random scale selection per batch - images (128-512px), videos (128-384px), frames (8-32 including 20).
+* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization** (256 compressed tokens), **Dual-Stream Attention** (2 layers), and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** (4 experts) for video (8-32 frames).
+* **Image Generation:** **MoE-DiT** (Diffusion Transformer with 4 MoE experts) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 256-512px, 50 inference steps.
+* **Video Generation:** **3D Causal Transformers** (4 layers) with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing** (4 experts). Multi-scale: 8-32 frames @ 128-384px.
 * **Audio (Speech-to-Speech):** **Conformer encoder with RMLA** and **Raw Waveform Tokenizer** for ASR; **Direct waveform decoder** (no vocoder needed!) with **MAS** for TTS; **Zero-Shot Speaker Cloning** with In-Context Audio Prompting. Talk to it, and it talks back!
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
 * **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
-* **Fine-tuning:** LoRA variants including **rsLoRA**, **DoRA**, and **LoRA+** with configurable learning rate ratio.
-* **Multimodal Fusion:** Cross-Attention layers (4 layers, 8 heads) for deep multimodal integration.
+* **Fine-tuning:** LoRA variants including **rsLoRA**, **DoRA**, and **LoRA+** (r=32, α=64, 4x B matrix learning rate).
+* **Multimodal Fusion:** Cross-Attention layers (4 layers, 8 heads) + Perceiver Resampler for vision projection.
 * **Performance:** Flash Attention support with FP16-native numerical stability.
 
 ---
@@ -177,7 +177,7 @@ datasets:
 | Feature | Description |
 |---------|-------------|
 | Output Resolution | 128-384px (multi-scale: 128, 192, 256, 320, 384) |
-| Output Frames | 8-32 frames (multi-scale: 8, 12, 16, 24, 32) |
+| Output Frames | 8-32 frames (multi-scale: 8, 12, 16, 20, 24, 32) |
 | Scheduler | **Flow Matching** |
 | Position Encoding | **3D-RoPE** for (x, y, t) |
 | Attention | Factorized Spatial-Temporal (3D Causal) |
@@ -189,7 +189,7 @@ datasets:
 |------|--------|---------------|
 | **Image** | 128, 192, 256, 320, 384, 448, 512px | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
 | **Video** | 128, 192, 256, 320, 384px | 10%, 20%, 35%, 25%, 10% |
-| **Frames** | 8, 12, 16, 24, 32 | 15%, 20%, 30%, 20%, 15% |
+| **Frames** | 8, 12, 16, 20, 24, 32 | 10%, 15%, 30%, 20%, 15%, 10% |
 
 Multi-scale training is **enabled by default** with **random** strategy - each batch samples a different scale for variety.
 
@@ -211,10 +211,11 @@ Direct audio output without external vocoder:
 |---------|-------------|
 | Architecture | BigVGAN/HiFi-GAN style with transposed convolutions |
 | **Snake Activation** | `x + sin²(αx)/α` - preserves audio periodicity |
-| **Multi-Receptive Field Fusion** | Parallel residual stacks (kernels 3, 7, 11) |
+| **Multi-Receptive Field Fusion** | Parallel residual stacks (kernels 3, 7, 11, dilations 1/3/5) |
 | Weight Normalization | Stable training, faster convergence |
-| Upsampling | 256x (rates: 8, 8, 2, 2) |
+| Upsampling | 256x total (rates: 8, 8, 2, 2) from features to 16kHz audio |
 | Streaming | `stream_decode()` for low-latency real-time output |
+| Output Range | [-1, 1] normalized waveform via tanh |
 
 ### 🗣️ Speech-to-Speech API
 The model provides three main methods for voice interaction:

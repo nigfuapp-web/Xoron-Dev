@@ -41,10 +41,11 @@
 - **Multi-scale: 8-32 frames** at 128-384px resolution
 
 ### Audio System
-- **Raw Waveform Tokenizer** - Direct audio processing at 16kHz
+- **Raw Waveform Tokenizer** - Direct audio processing at 16kHz (no mel spectrogram)
+- **Conformer Encoder with RMLA** - KV compression (rank 256)
+- **BigVGAN-style Waveform Decoder** - Snake activation + Multi-Receptive Field Fusion
 - **Monotonic Alignment Search (MAS)** - Accurate text-audio alignment
-- **Zero-Shot Voice Cloning** - In-context audio prompting
-- **256-dim Speaker Embeddings** - Multi-speaker support
+- **Zero-Shot Voice Cloning** - In-context audio prompting with 256-dim speaker embeddings
 
 ### Image Generation
 - **MoE-DiT** - Diffusion Transformer with 4 experts
@@ -65,25 +66,25 @@
 ### 🧠 **Multimodal Understanding**
 | Modality | Encoder | Input Size (Multi-Scale) | Output Tokens |
 |----------|---------|--------------------------|---------------|
-| Vision | SigLIP SO400M + TiTok | 128-512px | 64 tokens |
-| Video | 3D Causal + Temporal MoE | 8-32 frames @ 128-384px | 64 tokens |
-| Audio | Raw Waveform Tokenizer | 16kHz, up to 10s | Variable |
-| Text | Qwen2.5 Tokenizer | 128K context | - |
+| Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream | 128-512px | 64 tokens |
+| Video | 3D Causal + Temporal MoE (4 experts) | 8-32 frames @ 128-384px | 64 tokens |
+| Audio | Raw Waveform Tokenizer + Conformer + RMLA | 16kHz, up to 10s | Variable |
+| Text | Qwen2.5 Tokenizer (151K vocab) | 128K context | - |
 
 ### 🎨 **Multimodal Generation**
 | Output | Architecture | Resolution (Multi-Scale) |
 |--------|--------------|--------------------------|
-| Text | MoE LLM + Chain-of-Thought | 128K tokens |
-| Image | MoE-DiT + Flow Matching | 256-512px |
-| Video | 3D Causal + Flow Matching | 8-32 frames @ 128-384px |
-| Audio | Neural TTS + Zero-Shot Cloning | 16kHz |
+| Text | MoE LLM (8+1 experts) + Chain-of-Thought | 128K tokens |
+| Image | MoE-DiT (4 experts) + Flow Matching + Dual-Stream | 256-512px (50 steps) |
+| Video | 3D Causal + Flow Matching + Temporal MoE | 8-32 frames @ 128-384px |
+| Audio | BigVGAN-style Waveform Decoder + MAS + Zero-Shot Cloning | 16kHz |
 
 ### ⚡ **Training Features**
 - **Multi-Scale Training**: Random scale selection per batch for resolution variety
-- **Mixture of Experts**: 8 experts, top-2 routing, isolated shared expert
-- **LoRA+/rsLoRA**: r=32, α=64, B matrix learns 4× faster
-- **Ring Attention**: Memory-efficient 128K context
-- **Flow Matching**: Superior generation quality
+- **Mixture of Experts**: 8 experts + 1 shared, top-2 routing, aux-lossless routing
+- **LoRA+/rsLoRA/DoRA**: r=32, α=64, B matrix learns 4× faster (LoRA+ ratio)
+- **Ring Attention**: Memory-efficient 128K context (4096 chunk size)
+- **Flow Matching**: Superior generation quality over DDPM
 - **Multi-GPU**: Model parallelism for 2× T4 GPUs (Kaggle)
 
 ### 🛠️ **Agentic Capabilities**
@@ -398,9 +399,9 @@ class XoronConfig:
     video_max_size: int = 384
     video_base_size: int = 256
     
-    # Frame multi-scale: 8, 12, 16, 24, 32
-    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 24, 32)
-    video_frame_scale_probs: Tuple[float, ...] = (0.15, 0.20, 0.30, 0.20, 0.15)
+    # Frame multi-scale: 8, 12, 16, 20, 24, 32
+    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
+    video_frame_scale_probs: Tuple[float, ...] = (0.10, 0.15, 0.30, 0.20, 0.15, 0.10)
     video_min_frames: int = 8
     video_max_frames: int = 32
     video_base_frames: int = 16
@@ -437,7 +438,7 @@ Multi-scale training allows the model to handle varying resolutions and frame co
 |------|--------|---------------|
 | **Image** | 128, 192, 256, 320, 384, 448, 512 | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
 | **Video** | 128, 192, 256, 320, 384 | 10%, 20%, 35%, 25%, 10% |
-| **Frames** | 8, 12, 16, 24, 32 | 15%, 20%, 30%, 20%, 15% |
+| **Frames** | 8, 12, 16, 20, 24, 32 | 10%, 15%, 30%, 20%, 15%, 10% |
 
 Each batch randomly samples a scale, providing variety during training so the model learns to handle multiple resolutions.
 
