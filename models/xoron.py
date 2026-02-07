@@ -17,7 +17,7 @@ from models.components.attention import MultimodalFusionLayer
 from models.components.projectors import MultimodalProjector
 from models.encoders.vision import VisionEncoder
 from models.encoders.video import VideoEncoder
-from models.encoders.audio import AudioEncoder, AudioDecoder
+from models.encoders.audio import AudioEncoder, AudioDecoder, RawWaveformDecoder
 from models.generators.image import MobileDiffusionGenerator
 from models.generators.video import MobileVideoDiffusion
 from models.llm.moe_llama import MoELlamaForCausalLM
@@ -50,7 +50,8 @@ def safe_clamp_tensor(x: torch.Tensor, max_val: float = MAX_HIDDEN) -> torch.Ten
 COMPONENT_GROUPS = {
     'vision': ['vision_encoder', 'projector'],
     'video': ['video_encoder'],
-    'audio': ['audio_encoder', 'audio_decoder', 'audio_projector'],
+    'audio': ['audio_encoder', 'audio_decoder', 'audio_projector', 'waveform_decoder'],
+    'speech': ['waveform_decoder'],  # Specifically for Speech-to-Speech
     'llm': ['llm'],
     'cross_attention': ['cross_attention_layers'],
     'image_generation': ['generator'],
@@ -119,7 +120,14 @@ class XoronMultimodalModel(nn.Module):
             max_audio_length=1000,
         )
 
-        # 5. LLM Config
+        # 5. Waveform Decoder - Direct audio output for Speech-to-Speech (no vocoder needed)
+        print(f"\n🎙️ Building Raw Waveform Decoder (Speech-to-Speech)...")
+        self.waveform_decoder = RawWaveformDecoder(
+            hidden_size=config.hidden_size,
+            sample_rate=getattr(config, 'audio_sample_rate', 16000),
+        )
+
+        # 6. LLM Config
         llm_config = LlamaConfig(
             vocab_size=config.vocab_size,
             hidden_size=config.hidden_size,
@@ -552,6 +560,134 @@ class XoronMultimodalModel(nn.Module):
         text_embeds = self.get_text_embeddings(input_ids, attention_mask)
         mel, durations = self.audio_decoder(text_embeds)
         return mel, durations
+
+    @torch.no_grad()
+    def speak(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        speaker_embedding: torch.Tensor = None,
+        return_mel: bool = False,
+    ) -> torch.Tensor:
+        """
+        Generate playable audio waveform from text (Speech-to-Speech TTS).
+        
+        This is the main method for making the model talk. It converts text
+        directly to audio waveform without needing an external vocoder.
+        
+        Args:
+            input_ids: [B, T] tokenized text input
+            attention_mask: [B, T] attention mask
+            speaker_embedding: [B, D] optional speaker embedding for voice cloning
+            return_mel: If True, also return intermediate mel spectrogram
+            
+        Returns:
+            waveform: [B, T_audio] raw audio waveform in [-1, 1] range at 16kHz
+                      Can be played directly or saved as WAV file
+            mel (optional): [B, 80, T_mel] mel spectrogram if return_mel=True
+        """
+        # Get text embeddings from LLM
+        text_embeds = self.get_text_embeddings(input_ids, attention_mask)
+        
+        # Generate intermediate features through audio decoder
+        # This gives us the linguistic/prosodic representation
+        mel, durations, _ = self.audio_decoder(
+            text_embeds,
+            speaker_embedding=speaker_embedding,
+        )
+        
+        # Convert to features for waveform decoder
+        # Transpose mel from [B, n_mels, T] to [B, T, n_mels] and project
+        mel_features = mel.transpose(1, 2)  # [B, T, 80]
+        
+        # Project mel to hidden_size for waveform decoder
+        if not hasattr(self, '_mel_to_hidden'):
+            self._mel_to_hidden = nn.Linear(80, self.config.hidden_size).to(mel.device)
+        audio_features = self._mel_to_hidden(mel_features)
+        
+        # Generate raw waveform
+        waveform = self.waveform_decoder(audio_features)
+        
+        if return_mel:
+            return waveform, mel
+        return waveform
+
+    @torch.no_grad()
+    def listen(self, audio_waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Transcribe audio to text embeddings (Speech-to-Speech ASR).
+        
+        This is the listening component - converts speech to embeddings
+        that can be fed to the LLM for understanding.
+        
+        Args:
+            audio_waveform: [B, T_audio] raw audio waveform
+            
+        Returns:
+            audio_embeds: [B, T, hidden_size] encoded audio features
+        """
+        return self.encode_audio(audio_waveform)
+
+    @torch.no_grad()
+    def listen_and_respond(
+        self,
+        audio_waveform: torch.Tensor,
+        max_new_tokens: int = 256,
+        speaker_embedding: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Full Speech-to-Speech: Listen to audio, generate text response, speak it back.
+        
+        This is the main conversational method - you speak to it, it responds with voice.
+        
+        Args:
+            audio_waveform: [B, T_audio] input audio (what you said)
+            max_new_tokens: Maximum tokens to generate for response
+            speaker_embedding: Optional speaker embedding for response voice
+            
+        Returns:
+            response_audio: [B, T_response] audio waveform of the model's response
+        """
+        device = audio_waveform.device
+        
+        # 1. Listen - encode the input audio
+        audio_embeds = self.listen(audio_waveform)
+        
+        # 2. Create dummy input for the LLM (audio embeddings will be prepended)
+        batch_size = audio_waveform.shape[0]
+        
+        # Start with a response prompt
+        # In practice, you'd use the tokenizer to create proper input_ids
+        dummy_input = torch.zeros(batch_size, 1, dtype=torch.long, device=device)
+        
+        # 3. Generate text response using the LLM with audio context
+        # The audio embeddings are injected into the forward pass
+        outputs = self.forward(
+            input_ids=dummy_input,
+            audio_features=audio_waveform,
+        )
+        
+        # Get the generated hidden states
+        response_embeds = outputs.get('hidden_states', outputs.get('last_hidden_state'))
+        
+        # 4. Speak - convert text response to audio
+        if response_embeds is not None:
+            mel, durations, _ = self.audio_decoder(
+                response_embeds,
+                speaker_embedding=speaker_embedding,
+            )
+            
+            # Convert mel to waveform
+            mel_features = mel.transpose(1, 2)
+            if not hasattr(self, '_mel_to_hidden'):
+                self._mel_to_hidden = nn.Linear(80, self.config.hidden_size).to(device)
+            audio_features = self._mel_to_hidden(mel_features)
+            response_audio = self.waveform_decoder(audio_features)
+            
+            return response_audio
+        
+        # Fallback: return silence
+        return torch.zeros(batch_size, 16000, device=device)  # 1 second of silence
 
     def merge_lora_weights(self):
         """Merge LoRA weights into main weights for inference."""

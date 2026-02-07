@@ -13,8 +13,10 @@ Video Encoder:
 - Temporal-Aware Expert Routing
 - Integrates with video generator
 
-Audio Encoder:
-- Raw Waveform Tokenizer (replaces mel spectrogram)
+Audio Encoder/Decoder:
+- Raw Waveform Tokenizer (replaces mel spectrogram for input)
+- Raw Waveform Decoder (direct audio output, no vocoder needed)
+- Speech-to-Speech capability (listen and talk back)
 - Zero-Shot Speaker Cloning with speaker embedding extraction
 - Monotonic Alignment Search (MAS) for fluid text-to-audio alignment
 - Rotary Multi-Head Latent Attention (RMLA)
@@ -46,6 +48,7 @@ from models.encoders.audio import (
     AudioEncoder,
     AudioDecoder,
     RawWaveformTokenizer,
+    RawWaveformDecoder,
     SpeakerEncoder,
     MonotonicAlignmentSearch,
     RotaryMultiHeadLatentAttention,
@@ -77,6 +80,7 @@ __all__ = [
     'AudioEncoder',
     'AudioDecoder',
     'RawWaveformTokenizer',
+    'RawWaveformDecoder',
     'SpeakerEncoder',
     'MonotonicAlignmentSearch',
     'RotaryMultiHeadLatentAttention',

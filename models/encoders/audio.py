@@ -3,6 +3,7 @@ SOTA Audio Encoder and Decoder for Speech Processing.
 
 Implements:
 - Raw Waveform Tokenizer (replaces mel spectrogram)
+- Raw Waveform Decoder (direct audio output, no vocoder needed)
 - Zero-Shot Speaker Cloning with speaker embedding extraction
 - Monotonic Alignment Search (MAS) for fluid text-to-audio alignment
 - Rotary Multi-Head Latent Attention (RMLA)
@@ -12,6 +13,7 @@ Implements:
 - Multi-speaker support
 - FP16-native numerical stability
 - Integrates with MLA/Ring Attention LLM components
+- Speech-to-Speech capability (listen and talk back)
 """
 
 import torch
@@ -166,6 +168,146 @@ class RawWaveformTokenizer(nn.Module):
 
         features = self.output_proj(features)
         return features, None
+
+
+class RawWaveformDecoder(nn.Module):
+    """
+    Raw Waveform Decoder - converts features directly back to audio waveform.
+    
+    This is the inverse of RawWaveformTokenizer, enabling Speech-to-Speech
+    without requiring an external vocoder. Uses transposed convolutions
+    to upsample from compressed features back to raw audio.
+    
+    Architecture mirrors the encoder but in reverse with added refinement.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        sample_rate: int = 16000,
+        num_conv_layers: int = 6,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.sample_rate = sample_rate
+        self.num_conv_layers = num_conv_layers
+
+        # Input projection
+        self.input_proj = nn.Linear(hidden_size, hidden_size)
+
+        # Transposed convolutional decoder (mirror of encoder)
+        self.deconv_layers = nn.ModuleList()
+        channels = [hidden_size, 512, 256, 128, 64, 32]
+        kernel_sizes = [3, 3, 3, 5, 5, 7]
+        strides = [2, 2, 2, 2, 2, 2]  # Total upsampling: 64x
+
+        for i in range(num_conv_layers):
+            in_ch = channels[i] if i < len(channels) else 32
+            out_ch = channels[i + 1] if i + 1 < len(channels) else 32
+            kernel_size = kernel_sizes[i] if i < len(kernel_sizes) else 3
+            stride = strides[i] if i < len(strides) else 2
+
+            self.deconv_layers.append(nn.Sequential(
+                nn.ConvTranspose1d(
+                    in_ch, out_ch, kernel_size, stride,
+                    padding=kernel_size // 2,
+                    output_padding=stride - 1
+                ),
+                nn.GroupNorm(8 if out_ch >= 8 else 1, out_ch),
+                nn.SiLU() if i < num_conv_layers - 1 else nn.Identity(),
+            ))
+
+        # Final projection to waveform
+        self.to_waveform = nn.Conv1d(32, 1, kernel_size=7, padding=3)
+
+        # Refinement network (improves audio quality)
+        self.refine_net = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=7, padding=3),
+            nn.SiLU(),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.SiLU(),
+            nn.Conv1d(64, 32, kernel_size=5, padding=2),
+            nn.SiLU(),
+            nn.Conv1d(32, 1, kernel_size=7, padding=3),
+            nn.Tanh(),  # Output in [-1, 1] range for audio
+        )
+
+        print(f"   🔊 RawWaveformDecoder: {num_conv_layers} layers, 64x upsampling")
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        target_length: Optional[int] = None,
+    ) -> torch.Tensor:
+        """
+        Decode features to raw waveform.
+        
+        Args:
+            features: [B, T, hidden_size] encoded features
+            target_length: Optional target waveform length (for matching input length)
+            
+        Returns:
+            waveform: [B, T_audio] raw audio waveform in [-1, 1]
+        """
+        batch_size = features.shape[0]
+        
+        # Project input
+        x = self.input_proj(features)  # [B, T, hidden_size]
+        
+        # [B, T, C] -> [B, C, T]
+        x = x.transpose(1, 2)
+
+        # Transposed convolutions to upsample
+        for deconv in self.deconv_layers:
+            x = deconv(x)
+
+        # Project to single channel
+        waveform = self.to_waveform(x)  # [B, 1, T_audio]
+
+        # Refinement for better quality
+        waveform = waveform + self.refine_net(waveform)
+
+        # Squeeze to [B, T_audio]
+        waveform = waveform.squeeze(1)
+
+        # Match target length if specified
+        if target_length is not None and waveform.shape[-1] != target_length:
+            waveform = F.interpolate(
+                waveform.unsqueeze(1),
+                size=target_length,
+                mode='linear',
+                align_corners=False
+            ).squeeze(1)
+
+        return waveform
+
+    def decode_from_codes(
+        self,
+        codes: torch.Tensor,
+        codebooks: nn.ModuleList,
+        target_length: Optional[int] = None,
+    ) -> torch.Tensor:
+        """
+        Decode directly from codebook indices.
+        
+        Args:
+            codes: [B, T, num_codebooks] codebook indices
+            codebooks: List of nn.Embedding codebooks from encoder
+            target_length: Optional target waveform length
+            
+        Returns:
+            waveform: [B, T_audio] raw audio waveform
+        """
+        # Reconstruct features from codes
+        features = torch.zeros(
+            codes.shape[0], codes.shape[1], codebooks[0].embedding_dim,
+            device=codes.device, dtype=codebooks[0].weight.dtype
+        )
+        
+        for i, codebook in enumerate(codebooks):
+            features = features + codebook(codes[:, :, i])
+
+        return self.forward(features, target_length)
 
 
 class SpeakerEncoder(nn.Module):
