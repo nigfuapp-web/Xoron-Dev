@@ -131,7 +131,7 @@ class XoronTrainer:
         self.video_diffusion_loss_weight = getattr(config, 'video_diffusion_loss_weight', 0.1)
         self.asr_loss_weight = getattr(config, 'asr_loss_weight', 0.1)
         self.tts_loss_weight = getattr(config, 'tts_loss_weight', 0.1)
-        self.moe_aux_loss_weight = getattr(config, 'moe_aux_loss_weight', 0.01)
+        # Note: MoE aux loss weight removed - we use Aux-Lossless MoE
         
         # Weighted loss settings for important token groups
         # Chain-of-thought reasoning tokens
@@ -798,7 +798,6 @@ class XoronTrainer:
         epoch_asr_loss = 0.0
         epoch_tts_loss = 0.0
         epoch_waveform_loss = 0.0  # Waveform decoder loss (Speech-to-Speech)
-        epoch_moe_aux_loss = 0.0  # MoE auxiliary loss (load balancing)
         num_batches = 0
         num_valid_batches = 0  # Track batches with valid loss for learning
         num_cot = 0
@@ -807,7 +806,6 @@ class XoronTrainer:
         num_asr = 0
         num_tts = 0
         num_waveform = 0  # Batches with waveform decoder loss
-        num_moe = 0  # Batches with MoE aux loss
         total_batches = len(train_loader)
 
         for batch_idx, batch in enumerate(train_loader):
@@ -972,9 +970,6 @@ class XoronTrainer:
             # Clamp LLM loss to prevent extreme values (FP16 safety)
             llm_loss = torch.clamp(llm_loss, min=0.0, max=100.0)
             
-            # Get MoE auxiliary loss if available
-            moe_aux_loss = getattr(outputs, 'aux_loss', None)
-            
             # Track CoT loss separately
             if has_cot_samples:
                 cot_loss_val = llm_loss.item()
@@ -983,18 +978,8 @@ class XoronTrainer:
                 num_cot += 1
 
             # Apply LLM loss weight
+            # Note: MoE aux loss removed - we use Aux-Lossless MoE (always returns 0)
             total_loss = self.llm_loss_weight * llm_loss
-            
-            # Add MoE auxiliary loss if available (SOTA: proper MoE training)
-            if moe_aux_loss is not None:
-                moe_loss_val = moe_aux_loss.item()
-                # Check for valid loss (not NaN, not Inf) and reasonable magnitude
-                if not (moe_loss_val != moe_loss_val) and moe_loss_val != float('inf') and moe_loss_val < 100.0:
-                    # Clamp aux loss for extra safety
-                    moe_aux_loss_clamped = torch.clamp(moe_aux_loss, min=0.0, max=10.0)
-                    total_loss = total_loss + self.moe_aux_loss_weight * moe_aux_loss_clamped
-                    epoch_moe_aux_loss += moe_loss_val
-                    num_moe += 1
 
             # Train diffusion models based on sample type
             text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
@@ -1282,7 +1267,6 @@ class XoronTrainer:
         avg_asr = epoch_asr_loss / max(num_asr, 1) if num_asr > 0 else 0.0
         avg_tts = epoch_tts_loss / max(num_tts, 1) if num_tts > 0 else 0.0
         avg_waveform = epoch_waveform_loss / max(num_waveform, 1) if num_waveform > 0 else 0.0
-        avg_moe = epoch_moe_aux_loss / max(num_moe, 1) if num_moe > 0 else 0.0
         elapsed = time.time() - training_start_time
         elapsed_hours = elapsed / 3600
         
@@ -1290,6 +1274,7 @@ class XoronTrainer:
         valid_pct = (num_valid_batches / max(num_batches, 1)) * 100
 
         # Return all losses as a dictionary for comprehensive tracking
+        # Note: MoE aux loss removed - we use Aux-Lossless MoE
         train_losses = {
             'llm': avg_llm,
             'cot': avg_cot,
@@ -1298,7 +1283,6 @@ class XoronTrainer:
             'asr': avg_asr,
             'tts': avg_tts,
             'waveform': avg_waveform,
-            'moe_aux': avg_moe,
             'valid_pct': valid_pct,
             'num_valid_batches': num_valid_batches,
             'num_batches': num_batches,
@@ -1308,7 +1292,6 @@ class XoronTrainer:
             'num_asr': num_asr,
             'num_tts': num_tts,
             'num_waveform': num_waveform,
-            'num_moe': num_moe,
             'elapsed_hours': elapsed_hours,
         }
 
@@ -1554,9 +1537,6 @@ class XoronTrainer:
         num_waveform = train_losses.get('num_waveform', 0)
         print(f"   🎙️ Waveform Decoder Loss:          {waveform_loss:.4f} ({num_waveform} batches)")
         
-        # MoE Auxiliary Loss (load balancing) - training only, not a dataset loss
-        print(f"   ⚡ MoE Aux Loss:                   {train_losses['moe_aux']:.4f} ({train_losses['num_moe']} batches)")
-        
         print(f"{'='*60}")
         print(f"   📈 Learning efficiency: {train_losses['valid_pct']:.1f}% of batches contributed to learning")
         print(f"   ⏱️ Elapsed: {elapsed_hours:.2f}h")
@@ -1580,12 +1560,8 @@ class XoronTrainer:
                 else:
                     print(f"   ✅ LLM: eval/train ratio = {llm_ratio:.2f} (healthy)")
             
-            # Check MoE expert utilization
-            if train_losses['moe_aux'] > 0:
-                if train_losses['moe_aux'] > 0.5:
-                    print(f"   ⚠️ MoE: High aux loss ({train_losses['moe_aux']:.4f}) - experts may be imbalanced")
-                else:
-                    print(f"   ✅ MoE: Aux loss ({train_losses['moe_aux']:.4f}) - experts well balanced")
+            # Note: MoE expert utilization check removed - we use Aux-Lossless MoE
+            # which doesn't have aux loss (expert balancing is implicit)
             
             if not overfitting_detected:
                 print(f"   ✅ No significant overfitting detected")
