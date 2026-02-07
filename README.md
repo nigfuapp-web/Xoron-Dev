@@ -6,9 +6,9 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red?style=for-the-badge&logo=pytorch)
-![Version](https://img.shields.io/badge/Version-2.0-purple?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-2.1-purple?style=for-the-badge)
 
-**A unified multimodal AI model that understands and generates text, images, video, and audio.**
+**A unified multimodal AI model that understands and generates text, images, video, and audio with multi-scale training support.**
 
 [Features](#-features) | [Architecture](#%EF%B8%8F-architecture) | [Installation](#-installation) | [Usage](#-usage) | [Training](#%EF%B8%8F-training) | [Export](#-export)
 
@@ -29,7 +29,7 @@
 - **Qwen2.5 Tokenizer** - 151K vocab size
 
 ### Vision Encoder
-- **SigLIP SO400M** - 384×384 input resolution
+- **SigLIP SO400M** - 384×384 native, multi-scale 128-512px
 - **TiTok 1D Tokenization** - 576 patches → 256 tokens
 - **Dual-Stream Attention** - SD3/Flux-style symmetric processing
 - **Perceiver Resampler** - 64 output tokens for LLM
@@ -38,7 +38,7 @@
 - **3D-RoPE** - Spatiotemporal (x, y, t) positional encodings
 - **Temporal MoE** - 4 experts for motion patterns
 - **3D Causal Transformer** - 4 layers for temporal understanding
-- **Up to 16 frames** at 256×256 resolution
+- **Multi-scale: 8-32 frames** at 128-384px resolution
 
 ### Audio System
 - **Raw Waveform Tokenizer** - Direct audio processing at 16kHz
@@ -50,37 +50,38 @@
 - **MoE-DiT** - Diffusion Transformer with 4 experts
 - **Flow Matching** - Replaces DDPM for faster convergence
 - **Dual-Stream Attention** - Text-image parallel processing
-- **384×384** output resolution, CFG scale 7.5
+- **Multi-scale: 256-512px** output resolution, CFG scale 7.5
 
 ### Video Generation
 - **3D Causal Transformers** - Temporal coherence
 - **Flow Matching** - Smooth frame transitions
 - **Temporal MoE** - 4 experts for motion generation
-- **16 frames @ 256×256**
+- **Multi-scale: 8-32 frames @ 128-384px**
 
 ---
 
 ## 🌟 Features
 
 ### 🧠 **Multimodal Understanding**
-| Modality | Encoder | Input Size | Output Tokens |
-|----------|---------|------------|---------------|
-| Vision | SigLIP SO400M + TiTok | 384×384 | 64 tokens |
-| Video | 3D Causal + Temporal MoE | 16×256×256 | 64 tokens |
+| Modality | Encoder | Input Size (Multi-Scale) | Output Tokens |
+|----------|---------|--------------------------|---------------|
+| Vision | SigLIP SO400M + TiTok | 128-512px | 64 tokens |
+| Video | 3D Causal + Temporal MoE | 8-32 frames @ 128-384px | 64 tokens |
 | Audio | Raw Waveform Tokenizer | 16kHz, up to 10s | Variable |
 | Text | Qwen2.5 Tokenizer | 128K context | - |
 
 ### 🎨 **Multimodal Generation**
-| Output | Architecture | Resolution |
-|--------|--------------|------------|
+| Output | Architecture | Resolution (Multi-Scale) |
+|--------|--------------|--------------------------|
 | Text | MoE LLM + Chain-of-Thought | 128K tokens |
-| Image | MoE-DiT + Flow Matching | 384×384 |
-| Video | 3D Causal + Flow Matching | 16 frames @ 256×256 |
+| Image | MoE-DiT + Flow Matching | 256-512px |
+| Video | 3D Causal + Flow Matching | 8-32 frames @ 128-384px |
 | Audio | Neural TTS + Zero-Shot Cloning | 16kHz |
 
 ### ⚡ **Training Features**
+- **Multi-Scale Training**: Random scale selection per batch for resolution variety
 - **Mixture of Experts**: 8 experts, top-2 routing, isolated shared expert
-- **LoRA+/rsLoRA**: r=32, α=64, B matrix learns 16× faster
+- **LoRA+/rsLoRA**: r=32, α=64, B matrix learns 4× faster
 - **Ring Attention**: Memory-efficient 128K context
 - **Flow Matching**: Superior generation quality
 - **Multi-GPU**: Model parallelism for 2× T4 GPUs (Kaggle)
@@ -341,7 +342,7 @@ export_to_gguf(
 
 ## 🔧 Configuration Reference
 
-### XoronConfig (v2.0)
+### XoronConfig (v2.1)
 
 ```python
 @dataclass
@@ -353,36 +354,59 @@ class XoronConfig:
     intermediate_size: int = 2048
     vocab_size: int = 151643
     max_position_embeddings: int = 131072  # 128K
-    tie_word_embeddings: bool = True  # Share input/output embeddings
+    tie_word_embeddings: bool = True
     
     # Ring Attention for 128K+ context
     use_ring_attention: bool = True
-    ring_attention_chunk_size: int = 4096  # FP16 compatible
+    ring_attention_chunk_size: int = 4096
     
     # MoE (Aux-Lossless)
     use_moe: bool = True
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2
-    use_shared_expert: bool = True  # Isolated Shared Expert
-    use_aux_lossless: bool = True  # No auxiliary loss needed
+    use_shared_expert: bool = True
+    use_aux_lossless: bool = True
     
     # Vision Encoder (SOTA)
     vision_model_name: str = "google/siglip-so400m-patch14-384"
     num_vision_tokens: int = 64
-    use_vision_dual_stream: bool = True  # Symmetric dual-stream
-    use_vision_titok: bool = True  # TiTok 1D tokenization
-    num_vision_titok_tokens: int = 256  # Compressed tokens
+    use_vision_dual_stream: bool = True
+    use_vision_titok: bool = True
+    num_vision_titok_tokens: int = 256
     
     # Video Encoder (SOTA)
-    max_video_frames: int = 32
-    use_video_3d_rope: bool = True  # 3D-RoPE (x,y,t)
-    use_video_temporal_moe: bool = True  # Temporal expert routing
-    num_video_encoder_layers: int = 4  # 3D causal transformer
+    use_video_3d_rope: bool = True
+    use_video_temporal_moe: bool = True
+    num_video_encoder_layers: int = 4
+    
+    # Multi-Scale Training (NEW in v2.1)
+    use_multi_scale: bool = True  # Enable multi-scale training
+    multi_scale_strategy: str = "random"  # "random", "progressive", "curriculum"
+    
+    # Image multi-scale: 128, 192, 256, 320, 384, 448, 512
+    image_scales: Tuple[int, ...] = (128, 192, 256, 320, 384, 448, 512)
+    image_scale_probs: Tuple[float, ...] = (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05)
+    image_min_size: int = 128
+    image_max_size: int = 512
+    image_base_size: int = 256
+    
+    # Video multi-scale: 128, 192, 256, 320, 384
+    video_scales: Tuple[int, ...] = (128, 192, 256, 320, 384)
+    video_scale_probs: Tuple[float, ...] = (0.10, 0.20, 0.35, 0.25, 0.10)
+    video_min_size: int = 128
+    video_max_size: int = 384
+    video_base_size: int = 256
+    
+    # Frame multi-scale: 8, 12, 16, 24, 32
+    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 24, 32)
+    video_frame_scale_probs: Tuple[float, ...] = (0.15, 0.20, 0.30, 0.20, 0.15)
+    video_min_frames: int = 8
+    video_max_frames: int = 32
+    video_base_frames: int = 16
     
     # Image Generation (Flow Matching + Dual-Stream)
     enable_generation: bool = True
-    generation_image_size: int = 256
     generation_cfg_scale: float = 7.5
     generation_use_flow_matching: bool = True
     generation_use_dual_stream: bool = True
@@ -399,13 +423,23 @@ class XoronConfig:
     lora_alpha: int = 64
     use_rslora: bool = True
     
-    # Cross-Attention
+    # Cross-Attention & Flash Attention
     use_cross_attention: bool = True
     cross_attention_layers: int = 4
-    
-    # Flash Attention
     use_flash_attention: bool = True
 ```
+
+### Multi-Scale Training
+
+Multi-scale training allows the model to handle varying resolutions and frame counts:
+
+| Type | Scales | Probabilities |
+|------|--------|---------------|
+| **Image** | 128, 192, 256, 320, 384, 448, 512 | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
+| **Video** | 128, 192, 256, 320, 384 | 10%, 20%, 35%, 25%, 10% |
+| **Frames** | 8, 12, 16, 24, 32 | 15%, 20%, 30%, 20%, 15% |
+
+Each batch randomly samples a scale, providing variety during training so the model learns to handle multiple resolutions.
 
 ---
 

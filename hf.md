@@ -103,6 +103,7 @@ datasets:
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Params](https://img.shields.io/badge/Parameters-1.5B_MoE-yellow?style=for-the-badge)
 ![Context](https://img.shields.io/badge/Context-128K-red?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-2.1-purple?style=for-the-badge)
 
 </div>
 
@@ -111,9 +112,10 @@ datasets:
 ## 🌟 Model Highlights
 
 * **Architecture:** Mixture of Experts (8 Experts + 1 Shared, top-2 routing) with Ring Attention and Aux-Lossless routing.
-* **Vision Encoder:** SigLIP-2 (384px) with **TiTok-style 1D tokenization**, **Dual-Stream Attention**, and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** for video (up to 16 frames).
-* **Image Generation:** **MoE-DiT** (Diffusion Transformer with MoE) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style).
-* **Video Generation:** **3D Causal Transformers** with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing**.
+* **Multi-Scale Training (NEW):** Random scale selection per batch - images (128-512px), videos (128-384px), frames (8-32).
+* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization**, **Dual-Stream Attention**, and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** for video (8-32 frames).
+* **Image Generation:** **MoE-DiT** (Diffusion Transformer with MoE) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 256-512px.
+* **Video Generation:** **3D Causal Transformers** with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing**. Multi-scale: 8-32 frames @ 128-384px.
 * **Audio (Speech-to-Speech):** **Conformer encoder with RMLA** and **Raw Waveform Tokenizer** for ASR; **Direct waveform decoder** (no vocoder needed!) with **MAS** for TTS; **Zero-Shot Speaker Cloning** with In-Context Audio Prompting. Talk to it, and it talks back!
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
 * **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
@@ -152,7 +154,8 @@ datasets:
 ### 🎬 Video Encoder (3D Causal Transformers)
 | Feature | Description |
 |---------|-------------|
-| Max Frames | 16 frames |
+| Frame Scales | 8, 12, 16, 24, 32 frames (multi-scale) |
+| Resolution Scales | 128, 192, 256, 320, 384px (multi-scale) |
 | Position Encoding | **3D-RoPE** for (x, y, t) coordinates |
 | Attention | 3D Causal Self-Attention |
 | Expert Routing | **Temporal MoE** (4 experts, temporally-aware) |
@@ -163,7 +166,7 @@ datasets:
 |---------|-------------|
 | Architecture | **MoE-DiT** (Diffusion Transformer with MoE) |
 | Scheduler | **Flow Matching** (not DDPM) |
-| Output Resolution | 384×384 |
+| Output Resolution | 256-512px (multi-scale: 256, 320, 384, 448, 512) |
 | Position Encoding | 2D-RoPE |
 | Attention | **Symmetric Dual-Stream Attention** (SD3/Flux-style) |
 | MoE Experts | 4 experts in DiT blocks |
@@ -173,13 +176,22 @@ datasets:
 ### 📹 Video Generation (3D Causal + Flow Matching)
 | Feature | Description |
 |---------|-------------|
-| Output Resolution | 256×256 |
-| Output Frames | 16 frames (default), up to 32 frames (max capacity) |
+| Output Resolution | 128-384px (multi-scale: 128, 192, 256, 320, 384) |
+| Output Frames | 8-32 frames (multi-scale: 8, 12, 16, 24, 32) |
 | Scheduler | **Flow Matching** |
 | Position Encoding | **3D-RoPE** for (x, y, t) |
 | Attention | Factorized Spatial-Temporal (3D Causal) |
 | Expert Routing | **Temporal MoE** (4 experts) |
 | Guidance Scale | 7.5 (CFG) |
+
+### 📐 Multi-Scale Training Configuration
+| Type | Scales | Probabilities |
+|------|--------|---------------|
+| **Image** | 128, 192, 256, 320, 384, 448, 512px | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
+| **Video** | 128, 192, 256, 320, 384px | 10%, 20%, 35%, 25%, 10% |
+| **Frames** | 8, 12, 16, 24, 32 | 15%, 20%, 30%, 20%, 15% |
+
+Multi-scale training is **enabled by default** with **random** strategy - each batch samples a different scale for variety.
 
 ### 🎤 Audio (Speech-to-Speech with RMLA + MAS + Zero-Shot Cloning)
 | Feature | Description |
