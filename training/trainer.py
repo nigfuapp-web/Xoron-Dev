@@ -1035,20 +1035,32 @@ class XoronTrainer:
                     num_tts += 1
                 
                 # Train waveform decoder for Speech-to-Speech (direct audio output)
+                # Note: When use_raw_waveform=True in config, audio_features contains raw waveform
+                # When use_raw_waveform=False, audio_features contains mel spectrogram
                 if hasattr(self.model, 'waveform_decoder') and self.model.waveform_decoder is not None:
-                    from training.utils import train_waveform_decoder_step
-                    waveform_loss = train_waveform_decoder_step(
-                        self.model.waveform_decoder,
-                        self.model.audio_decoder,
-                        text_embeds,
-                        batch.get('waveform', batch.get('audio', None)),
-                        mel_to_hidden=getattr(self.model, '_mel_to_hidden', None),
-                        sample_types=sample_types,
-                    )
-                    if waveform_loss is not None:
-                        waveform_loss = waveform_loss.to(total_loss.device)
-                        # Use same weight as TTS
-                        total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
+                    # audio_features is raw waveform when use_raw_waveform=True (SOTA mode)
+                    # Check if it's 1D (waveform) or 2D (mel spectrogram)
+                    target_waveform = audio_features
+                    if target_waveform is not None and target_waveform.dim() == 2:
+                        # If 2D and first dim is n_mels (e.g., 80), it's mel spectrogram - skip waveform training
+                        # If 2D and shape is [B, T], it's batched waveform - keep it
+                        if target_waveform.shape[0] == 80 or (target_waveform.shape[1] == 80 and target_waveform.shape[0] < 80):
+                            target_waveform = None  # Skip - it's mel not waveform
+                    
+                    if target_waveform is not None:
+                        from training.utils import train_waveform_decoder_step
+                        waveform_loss = train_waveform_decoder_step(
+                            self.model.waveform_decoder,
+                            self.model.audio_decoder,
+                            text_embeds,
+                            target_waveform,
+                            mel_to_hidden=getattr(self.model, '_mel_to_hidden', None),
+                            sample_types=sample_types,
+                        )
+                        if waveform_loss is not None:
+                            waveform_loss = waveform_loss.to(total_loss.device)
+                            # Use same weight as TTS
+                            total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
 
             # CRITICAL: Final loss clamping before backward (FP16 safety)
             # This prevents gradient explosion from extreme loss values
