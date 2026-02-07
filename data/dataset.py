@@ -1029,23 +1029,29 @@ class TrueStreamingDataset(IterableDataset):
             if video_frames is None:
                 video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
             
+            # Only process audio for audio samples - use minimal placeholder for others
+            is_audio_sample = dtype in ['voice_asr', 'voice_tts']
             audio_features = None
-            if raw_audio_data and dtype in ['voice_asr', 'voice_tts']:
+            
+            if is_audio_sample and raw_audio_data:
                 audio_features = self._process_audio(raw_audio_data, sample_metadata)
             
             if audio_features is None:
-                # Create zero tensor based on mode
-                if self.use_raw_waveform:
-                    # Raw waveform mode: 1D tensor [T]
-                    max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
-                    audio_features = torch.zeros(max_waveform_samples)
+                # Use minimal tensor for non-audio samples to save memory
+                # For audio samples with failed processing, use proper size
+                if is_audio_sample:
+                    if self.use_raw_waveform:
+                        max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
+                        audio_features = torch.zeros(max_waveform_samples)
+                    else:
+                        audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
                 else:
-                    # Mel spectrogram mode: 2D tensor [n_mels, T]
-                    audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
+                    # Minimal placeholder for non-audio samples (image, video, text)
+                    # Collate function will handle this appropriately
+                    audio_features = torch.zeros(1)
             else:
-                # Pad/truncate based on mode
+                # Pad/truncate actual audio data
                 if self.use_raw_waveform:
-                    # Raw waveform: 1D tensor [T]
                     max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
                     if audio_features.dim() == 1:
                         if audio_features.shape[0] > max_waveform_samples:
@@ -1054,7 +1060,6 @@ class TrueStreamingDataset(IterableDataset):
                             pad = torch.zeros(max_waveform_samples - audio_features.shape[0])
                             audio_features = torch.cat([audio_features, pad], dim=0)
                 else:
-                    # Mel spectrogram: 2D tensor [n_mels, T]
                     if audio_features.dim() == 2:
                         if audio_features.shape[1] > self.audio_max_length:
                             audio_features = audio_features[:, :self.audio_max_length]

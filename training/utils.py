@@ -171,19 +171,24 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 max_waveform_samples = 160000  # 10 seconds at 16kHz for raw waveform
                 target_mel_bins = 80
                 
-                # Detect if we're using raw waveform (1D) or mel spectrogram (2D)
+                # Detect if we're using raw waveform (1D with large T) or mel spectrogram (2D)
+                # Skip minimal placeholders (size 1) when detecting
                 first_valid = None
                 for b in batch:
                     af = b.get("audio_features")
-                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 0:
+                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 100:
                         first_valid = af
                         break
                 
-                use_raw_waveform = first_valid is not None and first_valid.dim() == 1
+                # Determine mode: raw waveform if 1D with many samples, else mel
+                use_raw_waveform = first_valid is not None and first_valid.dim() == 1 and first_valid.shape[0] > 1000
                 
                 for b in batch:
                     af = b.get("audio_features")
-                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 0:
+                    # Check if this is a valid audio tensor (not minimal placeholder)
+                    is_valid_audio = af is not None and isinstance(af, torch.Tensor) and af.numel() > 100
+                    
+                    if is_valid_audio:
                         if use_raw_waveform and af.dim() == 1:
                             # Raw waveform mode: 1D tensor [T]
                             if af.shape[0] > max_waveform_samples:
@@ -216,7 +221,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                             else:
                                 audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
                     else:
-                        # No audio - use zeros
+                        # Minimal placeholder or no audio - use zeros matching batch mode
                         if use_raw_waveform:
                             audio_features_list.append(torch.zeros(max_waveform_samples))
                         else:
@@ -224,8 +229,8 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 
                 audio_features = torch.stack(audio_features_list)
             else:
-                # Minimal tensor to save memory
-                audio_features = torch.zeros(batch_size, 1, 1)
+                # Minimal tensor to save memory when audio not needed
+                audio_features = torch.zeros(batch_size, 1)
 
             return {
                 "input_ids": input_ids,
