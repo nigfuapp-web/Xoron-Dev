@@ -13,6 +13,15 @@ Scenes (60 seconds total):
 Each scene shows:
 - Left: Chat interface with user/assistant messages
 - Right: Backend processing visualization
+
+Architecture specs (from config/model_config.py):
+- LLM: 1024 hidden, 12 layers, 16 heads, 2048 intermediate
+- MoE: 8 experts, top-2, every 2nd layer (6 MoE layers total)
+- Vision: SigLIP-so400m-patch14-384 + TiTok (256 tokens) + 2D-RoPE
+- Video: 3D-RoPE + Temporal MoE (4 experts) + 3D Causal (4 layers)
+- Audio: Raw Waveform Tokenizer + Conformer + RMLA + MAS
+- Generation: MoE-DiT + Flow Matching + Dual-Stream
+- Context: 128K with Ring Attention (4096 chunk)
 """
 
 import os
@@ -170,13 +179,13 @@ def generate_svg():
           <text x="200" y="173" fill="{C['text']}" font-family="SF Pro Text, sans-serif" font-size="14">the nth Fibonacci number efficiently</text>
         </g>
         
-        <!-- Typing indicator -->
+        <!-- Typing indicator - centered dots in box -->
         <g>
           <animate attributeName="opacity" values="0;0;1;1;0" dur="10s" repeatCount="indefinite" keyTimes="0;0.15;0.2;0.35;0.4"/>
           <rect x="35" y="200" width="70" height="35" rx="12" fill="{C['bg_dark']}" stroke="{C['border']}" stroke-width="1"/>
-          <circle cx="52" cy="217" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" repeatCount="indefinite"/></circle>
-          <circle cx="67" cy="217" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.2s" repeatCount="indefinite"/></circle>
-          <circle cx="82" cy="217" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.4s" repeatCount="indefinite"/></circle>
+          <circle cx="55" cy="217.5" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" repeatCount="indefinite"/></circle>
+          <circle cx="70" cy="217.5" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.2s" repeatCount="indefinite"/></circle>
+          <circle cx="85" cy="217.5" r="4" fill="{C['text_dim']}"><animate attributeName="opacity" values="0.3;1;0.3" dur="0.6s" begin="0.4s" repeatCount="indefinite"/></circle>
         </g>
         
         <!-- Assistant response -->
@@ -471,7 +480,7 @@ def generate_svg():
         </rect>
         <text x="140" y="25" text-anchor="middle" fill="{C['purple']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Embedding Layer</text>
         <text x="15" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Token IDs → Dense Vectors</text>
-        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Dimension: 2048</text>
+        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Dimension: 1024</text>
         <text x="15" y="85" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">+ Rotary Position Embeddings (RoPE)</text>
       </g>
       
@@ -501,7 +510,7 @@ def generate_svg():
         <text x="{x + 72}" y="{y + 25}" text-anchor="middle" fill="{C['green'] if is_selected else C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="11" font-weight="{'600' if is_selected else '400'}">E{i+1}: {expert_names[i]}{'  ✓' if is_selected else ''}</text>'''
     
     svg += f'''
-        <text x="320" y="150" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">Top-2 Selected: E1 (Code) + E4 (Logic) + Shared Expert (DeepSeek-style)</text>
+        <text x="320" y="150" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">Top-2 Selected: E1 (Code) + E4 (Logic) + Isolated Shared Expert (Aux-Lossless)</text>
       </g>
       
       <!-- Step 4: Chain of Thought -->
@@ -612,10 +621,10 @@ def generate_svg():
       <!-- Vision Encoder -->
       <g transform="translate(600, 130)">
         <rect width="300" height="100" rx="10" fill="{C['bg_dark']}" stroke="{C['blue']}" stroke-width="2"/>
-        <text x="150" y="25" text-anchor="middle" fill="{C['blue']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Vision Encoder (SigLIP)</text>
-        <text x="15" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Input: 384×384 image</text>
-        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Patch size: 14×14 → 729 patches</text>
-        <text x="15" y="90" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">Output: 729 vision tokens (1152-dim)</text>
+        <text x="150" y="25" text-anchor="middle" fill="{C['blue']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Vision Encoder (SigLIP-2)</text>
+        <text x="15" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Input: 384×384 image + 2D-RoPE</text>
+        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">TiTok 1D tokenization → 256 tokens</text>
+        <text x="15" y="90" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">Dual-stream attention • 1152-dim</text>
       </g>
       
       <!-- Cross Attention -->
@@ -665,17 +674,17 @@ def generate_svg():
         <rect width="300" height="90" rx="10" fill="{C['bg_dark']}" stroke="{C['blue']}" stroke-width="2"/>
         <text x="150" y="25" text-anchor="middle" fill="{C['blue']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">1. Text Processing</text>
         <text x="15" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Input: "Welcome to Xoron..."</text>
-        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Phoneme conversion + G2P</text>
+        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">MAS alignment + Phoneme G2P</text>
         <text x="15" y="85" fill="{C['orange']}" font-family="SF Pro Text, sans-serif" font-size="9">&lt;|emotion:cheerful|&gt; tag detected</text>
       </g>
       
       <!-- TTS Model -->
       <g transform="translate(920, 130)">
         <rect width="320" height="90" rx="10" fill="{C['bg_dark']}" stroke="{C['orange']}" stroke-width="2"/>
-        <text x="160" y="25" text-anchor="middle" fill="{C['orange']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Neural TTS</text>
+        <text x="160" y="25" text-anchor="middle" fill="{C['orange']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Neural TTS (RMLA)</text>
         <text x="15" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Emotion-aware synthesis</text>
-        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Prosody: +15% pitch, +10% speed</text>
-        <text x="15" y="85" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">Mel spectrogram generation</text>
+        <text x="15" y="70" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Zero-shot voice cloning</text>
+        <text x="15" y="85" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">Raw waveform generation</text>
       </g>
       
       <!-- Mel Spectrogram Visualization -->
@@ -700,12 +709,12 @@ def generate_svg():
         <text x="320" y="145" text-anchor="middle" fill="{C['text_muted']}" font-family="SF Pro Text, sans-serif" font-size="9">80 mel bins × 320 frames</text>
       </g>
       
-      <!-- Vocoder -->
+      <!-- Waveform Decoder -->
       <g transform="translate(600, 410)">
         <rect width="640" height="80" rx="10" fill="{C['bg_dark']}" stroke="{C['green']}" stroke-width="2"/>
-        <text x="320" y="25" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Vocoder (HiFi-GAN)</text>
-        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Mel → Waveform • Sample rate: 16kHz</text>
-        <text x="20" y="70" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">✓ Audio generated: 3.2 seconds</text>
+        <text x="320" y="25" text-anchor="middle" fill="{C['green']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">4. Raw Waveform Decoder</text>
+        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Direct audio output • No vocoder needed • 16kHz</text>
+        <text x="20" y="70" fill="{C['green']}" font-family="SF Pro Text, sans-serif" font-size="10">✓ Audio generated: 3.2 seconds • Speech-to-Speech ready</text>
       </g>
     </g>
 '''
@@ -781,10 +790,10 @@ def generate_svg():
       <!-- Temporal Diffusion -->
       <g transform="translate(600, 230)">
         <rect width="640" height="180" rx="10" fill="{C['bg_dark']}" stroke="{C['purple']}" stroke-width="2"/>
-        <text x="320" y="25" text-anchor="middle" fill="{C['purple']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. Temporal Diffusion Model</text>
+        <text x="320" y="25" text-anchor="middle" fill="{C['purple']}" font-family="SF Pro Display, sans-serif" font-size="13" font-weight="600">2. 3D Causal Transformer + Flow Matching</text>
         
         <!-- Frame generation visualization -->
-        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Generating 16 frames with temporal consistency:</text>
+        <text x="20" y="50" fill="{C['text_dim']}" font-family="SF Pro Text, sans-serif" font-size="10">Generating 16 frames with 3D-RoPE + Temporal MoE:</text>
         
         <g transform="translate(20, 60)">'''
     

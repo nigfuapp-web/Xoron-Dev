@@ -6,6 +6,16 @@ Supports:
 - 4-bit quantization for reduced model size
 - Component-wise export (LLM, vision, audio, diffusion)
 - Optimized inference with ONNX Runtime
+
+Architecture specs (from config/model_config.py):
+- LLM: 1024 hidden, 12 layers, 16 heads, 2048 intermediate
+- MoE: 8 experts, top-2, every 2nd layer (6 MoE layers total)
+- Vision: SigLIP-so400m-patch14-384 + TiTok (256 tokens) + 2D-RoPE
+- Video: 3D-RoPE + Temporal MoE (4 experts) + 3D Causal (4 layers)
+- Audio: Raw Waveform Tokenizer + Conformer + RMLA + MAS
+- Image Gen: MoE-DiT + Flow Matching + Dual-Stream (256-512²)
+- Video Gen: 3D Causal + Flow Matching + 3D-RoPE (8-32 frames)
+- Context: 128K with Ring Attention (4096 chunk)
 """
 
 import os
@@ -92,13 +102,13 @@ def export_to_onnx(
     print("\n" + "=" * 60)
     print("📦 EXPORTING MODEL TO ONNX")
     print("=" * 60)
-    print("   ✓ LLM Backbone")
-    print("   ✓ Vision Encoder")
-    print("   ✓ Video Encoder")
-    print("   ✓ Audio Encoder/Decoder (voice/speech)")
-    print("   ✓ Image Diffusion (image generation)")
-    print("   ✓ Video Diffusion (video generation)")
-    print("   ✓ Multimodal Projectors")
+    print("   ✓ LLM Backbone (MoE: 8 experts, top-2, 6 MoE layers)")
+    print("   ✓ Vision Encoder (SigLIP-2 + TiTok + 2D-RoPE)")
+    print("   ✓ Video Encoder (3D-RoPE + Temporal MoE)")
+    print("   ✓ Audio Encoder/Decoder (Raw Waveform + RMLA + MAS)")
+    print("   ✓ Image Diffusion (MoE-DiT + Flow Matching)")
+    print("   ✓ Video Diffusion (3D Causal + Flow Matching)")
+    print("   ✓ Multimodal Projectors (Perceiver Resampler)")
     if quantize:
         print(f"   ✓ {quantize_bits}-bit Quantization")
 
@@ -295,6 +305,46 @@ def export_to_onnx(
         "model_name": config.model_name,
         "quantized": quantize,
         "quantize_bits": quantize_bits if quantize else None,
+        "architecture": {
+            "llm": {
+                "hidden_size": getattr(config, 'hidden_size', 1024),
+                "num_layers": getattr(config, 'num_layers', 12),
+                "num_heads": getattr(config, 'num_heads', 16),
+                "intermediate_size": getattr(config, 'intermediate_size', 2048),
+                "vocab_size": getattr(config, 'vocab_size', 151643),
+                "max_position_embeddings": getattr(config, 'max_position_embeddings', 131072),
+            },
+            "moe": {
+                "num_experts": getattr(config, 'num_experts', 8),
+                "num_experts_per_tok": getattr(config, 'num_experts_per_tok', 2),
+                "moe_layer_freq": getattr(config, 'moe_layer_freq', 2),
+                "use_aux_lossless": getattr(config, 'use_aux_lossless', True),
+                "use_shared_expert": getattr(config, 'use_shared_expert', True),
+            },
+            "vision": {
+                "model": getattr(config, 'vision_model_name', 'google/siglip-so400m-patch14-384'),
+                "num_tokens": getattr(config, 'num_vision_tokens', 64),
+                "titok_tokens": getattr(config, 'num_vision_titok_tokens', 256),
+                "use_2d_rope": True,
+                "use_dual_stream": getattr(config, 'use_vision_dual_stream', True),
+            },
+            "video": {
+                "max_frames": getattr(config, 'video_max_frames', 32),
+                "use_3d_rope": getattr(config, 'use_video_3d_rope', True),
+                "use_temporal_moe": getattr(config, 'use_video_temporal_moe', True),
+                "num_temporal_experts": getattr(config, 'num_video_experts', 4),
+            },
+            "audio": {
+                "sample_rate": getattr(config, 'audio_sample_rate', 16000),
+                "use_raw_waveform": getattr(config, 'use_raw_waveform', True),
+                "use_mas": getattr(config, 'use_mas', True),
+            },
+            "generation": {
+                "image_base_size": getattr(config, 'image_base_size', 256),
+                "video_base_size": getattr(config, 'video_base_size', 256),
+                "use_flow_matching": getattr(config, 'generation_use_flow_matching', True),
+            },
+        },
         "capabilities": {
             "text_generation": 'llm_backbone' in export_results,
             "image_understanding": 'vision_encoder' in export_results,

@@ -4,6 +4,16 @@ Generate a high-quality SVG architecture diagram for Xoron-Dev.
 
 This script creates a professional, sharp, and visually appealing
 architecture diagram that accurately represents the model structure.
+
+Architecture specs (from config/model_config.py):
+- LLM: 1024 hidden, 12 layers, 16 heads, 2048 intermediate
+- MoE: 8 experts, top-2, every 2nd layer (6 MoE layers total)
+- Vision: SigLIP-so400m-patch14-384 + TiTok (256 tokens) + 2D-RoPE
+- Video: 3D-RoPE + Temporal MoE (4 experts) + 3D Causal (4 layers)
+- Audio: Raw Waveform Tokenizer + Conformer + RMLA + MAS
+- Generation: MoE-DiT + Flow Matching + Dual-Stream
+- Context: 128K with Ring Attention (4096 chunk)
+- LoRA: rsLoRA r=32, α=64, 7 target modules
 """
 
 import os
@@ -195,21 +205,21 @@ def generate_svg() -> str:
     # Vision Encoder
     svg_parts.append(create_component_box(
         100, encoder_y, encoder_w, encoder_h,
-        'Vision Encoder', 'SigLIP-2 + TiTok + 2D-RoPE', '384² → 256 tokens',
+        'Vision Encoder', 'SigLIP-2 + TiTok + 2D-RoPE', '384² → 256 tokens • Dual-Stream',
         'grad_blue', '👁️'
     ))
     
     # Video Encoder
     svg_parts.append(create_component_box(
         100 + encoder_w + gap, encoder_y, encoder_w, encoder_h,
-        'Video Encoder', '3D-RoPE + Temporal MoE', '3D Causal • 32 frames',
+        'Video Encoder', '3D-RoPE + Temporal MoE (4)', '3D Causal • 8-32 frames',
         'grad_purple', '🎬'
     ))
     
     # Audio Encoder
     svg_parts.append(create_component_box(
         100 + 2*(encoder_w + gap), encoder_y, encoder_w, encoder_h,
-        'Audio Encoder', 'Conformer ASR', '16kHz • 80 mel bins',
+        'Audio Encoder', 'Raw Waveform + Conformer', '16kHz • RMLA • MAS',
         'grad_green', '🎤'
     ))
     
@@ -267,7 +277,7 @@ def generate_svg() -> str:
   <!-- MoE LLM Backbone Container -->
 {rounded_rect(100, moe_y, cross_w, moe_h, 20, COLORS['bg_secondary'], COLORS['accent_purple'], 2, 'shadow')}
 {text_element(WIDTH//2, moe_y + 35, '🧠 MoE LLM Backbone', 24, COLORS['text_primary'], 'bold')}
-{text_element(WIDTH//2, moe_y + 60, '12 Transformer Layers • 1024 Hidden Dim • 16 Attention Heads • 128K Context Length', 13, COLORS['text_secondary'])}
+{text_element(WIDTH//2, moe_y + 60, '12 Layers • 1024 Hidden • 16 Heads • 128K Context • Ring Attention (4096 chunk)', 13, COLORS['text_secondary'])}
 ''')
 
     # Inner components of MoE
@@ -280,12 +290,12 @@ def generate_svg() -> str:
     svg_parts.append(f'''
   <!-- Transformer Layer -->
 {rounded_rect(130, inner_y, inner_w, inner_h, 12, '#1a1a25', COLORS['accent_blue'], 1)}
-{text_element(130 + inner_w//2, inner_y + 25, 'Transformer Layer', 16, COLORS['text_primary'], 'bold')}
+{text_element(130 + inner_w//2, inner_y + 25, 'Transformer Layer (×12)', 16, COLORS['text_primary'], 'bold')}
   
   <!-- Self-Attention -->
 {rounded_rect(145, inner_y + 40, 170, 55, 8, '#0f0f15')}
 {text_element(230, inner_y + 62, 'Self-Attention', 13, COLORS['text_secondary'])}
-{text_element(230, inner_y + 80, 'Ring Attention: 4096', 10, COLORS['text_muted'])}
+{text_element(230, inner_y + 80, 'Ring Attn: 4096 chunk', 10, COLORS['text_muted'])}
   
   <!-- FFN -->
 {rounded_rect(325, inner_y + 40, 170, 55, 8, '#0f0f15')}
@@ -306,7 +316,7 @@ def generate_svg() -> str:
     svg_parts.append(f'''
   <!-- MoE Layer -->
 {rounded_rect(moe_inner_x, inner_y, inner_w, inner_h, 12, '#1a1a25', COLORS['accent_purple'], 1)}
-{text_element(moe_inner_x + inner_w//2, inner_y + 25, '🎯 Mixture of Experts', 16, COLORS['text_primary'], 'bold')}
+{text_element(moe_inner_x + inner_w//2, inner_y + 25, '🎯 Mixture of Experts (×6)', 16, COLORS['text_primary'], 'bold')}
   
   <!-- Router -->
 {rounded_rect(moe_inner_x + 15, inner_y + 40, 100, 85, 8, '#0f0f15')}
@@ -388,21 +398,21 @@ def generate_svg() -> str:
     # Image Generator
     svg_parts.append(create_component_box(
         out_start_x + out_w + out_gap, output_y, out_w, out_h,
-        'Image Generator', 'MoE-DiT + Flow + Dual-Stream', '384² • 2D-RoPE • CFG=7.5',
+        'Image Generator', 'MoE-DiT + Flow + Dual-Stream', '256-512² • 2D-RoPE • CFG=7.5',
         'grad_blue', '🎨'
     ))
     
     # Video Generator
     svg_parts.append(create_component_box(
         out_start_x + 2*(out_w + out_gap), output_y, out_w, out_h,
-        'Video Generator', '3D Causal + Flow + Temporal MoE', '16 frames • 3D-RoPE',
+        'Video Generator', '3D Causal + Flow + Temporal MoE', '8-32 frames • 3D-RoPE',
         'grad_purple', '🎬'
     ))
     
     # Audio Decoder
     svg_parts.append(create_component_box(
         out_start_x + 3*(out_w + out_gap), output_y, out_w, out_h,
-        'Audio Decoder', 'Neural TTS', 'Zero-shot voice cloning',
+        'Audio Decoder', 'Raw Waveform + Neural TTS', 'Zero-shot • Speech-to-Speech',
         'grad_green', '🔊'
     ))
 
@@ -418,9 +428,9 @@ def generate_svg() -> str:
   <!-- Stats Box -->
 {rounded_rect(stats_x, stats_y, 180, out_h, 12, COLORS['bg_secondary'], COLORS['border'], 1, 'shadow')}
 {text_element(stats_x + 90, stats_y + 22, '📊 Model Stats', 14, COLORS['text_primary'], 'bold')}
-{text_element(stats_x + 90, stats_y + 44, '~2B Parameters', 11, COLORS['text_muted'])}
+{text_element(stats_x + 90, stats_y + 44, '~500M Parameters', 11, COLORS['text_muted'])}
 {text_element(stats_x + 90, stats_y + 60, '128K Context', 11, COLORS['text_muted'])}
-{text_element(stats_x + 90, stats_y + 76, '6 MoE Layers', 11, COLORS['text_muted'])}
+{text_element(stats_x + 90, stats_y + 76, '6 MoE / 12 Total', 11, COLORS['text_muted'])}
 ''')
 
     # Footer

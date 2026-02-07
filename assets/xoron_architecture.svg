@@ -90,19 +90,19 @@
     <rect x="102" y="162" width="216" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
     <text x="210" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">👁️ Vision Encoder</text>
     <text x="210" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">SigLIP-2 + TiTok + 2D-RoPE</text>
-    <text x="210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384² → 256 tokens</text>
+    <text x="210" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384² → 256 tokens • Dual-Stream</text>
     <rect x="348" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
     <rect x="350" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="352" y="162" width="216" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
     <text x="460" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Encoder</text>
-    <text x="460" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D-RoPE + Temporal MoE</text>
-    <text x="460" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">3D Causal • 32 frames</text>
+    <text x="460" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D-RoPE + Temporal MoE (4)</text>
+    <text x="460" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">3D Causal • 8-32 frames</text>
     <rect x="598" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
     <rect x="600" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="602" y="162" width="216" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
     <text x="710" y="184" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎤 Audio Encoder</text>
-    <text x="710" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Conformer ASR</text>
-    <text x="710" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16kHz • 80 mel bins</text>
+    <text x="710" y="206" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Raw Waveform + Conformer</text>
+    <text x="710" y="226" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16kHz • RMLA • MAS</text>
     <rect x="848" y="158" width="224" height="89" rx="14" fill="none" stroke="url(#grad_orange)" stroke-width="2" opacity="0.3"/>
     <rect x="850" y="160" width="220" height="85" rx="12" fill="#12121a" stroke="url(#grad_orange)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="852" y="162" width="216" height="30" rx="10" fill="url(#grad_orange)" opacity="0.15"/>
@@ -138,17 +138,17 @@
   <!-- MoE LLM Backbone Container -->
     <rect x="100" y="535" width="1720" height="280" rx="20" fill="#12121a" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
     <text x="960" y="570" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="24" font-weight="bold">🧠 MoE LLM Backbone</text>
-    <text x="960" y="595" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">12 Transformer Layers • 1024 Hidden Dim • 16 Attention Heads • 128K Context Length</text>
+    <text x="960" y="595" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">12 Layers • 1024 Hidden • 16 Heads • 128K Context • Ring Attention (4096 chunk)</text>
 
 
   <!-- Transformer Layer -->
     <rect x="130" y="615" width="380" height="180" rx="12" fill="#1a1a25" stroke="#3b82f6" stroke-width="1"/>
-    <text x="320" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">Transformer Layer</text>
+    <text x="320" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">Transformer Layer (×12)</text>
   
   <!-- Self-Attention -->
     <rect x="145" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
     <text x="230" y="677" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Self-Attention</text>
-    <text x="230" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Ring Attention: 4096</text>
+    <text x="230" y="695" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="normal">Ring Attn: 4096 chunk</text>
   
   <!-- FFN -->
     <rect x="325" y="655" width="170" height="55" rx="8" fill="#0f0f15"/>
@@ -166,7 +166,7 @@
 
   <!-- MoE Layer -->
     <rect x="550" y="615" width="380" height="180" rx="12" fill="#1a1a25" stroke="#8b5cf6" stroke-width="1"/>
-    <text x="740" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎯 Mixture of Experts</text>
+    <text x="740" y="640" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎯 Mixture of Experts (×6)</text>
   
   <!-- Router -->
     <rect x="565" y="655" width="100" height="85" rx="8" fill="#0f0f15"/>
@@ -234,19 +234,19 @@
     <rect x="662" y="867" width="276" height="30" rx="10" fill="url(#grad_blue)" opacity="0.15"/>
     <text x="800" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎨 Image Generator</text>
     <text x="800" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">MoE-DiT + Flow + Dual-Stream</text>
-    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">384² • 2D-RoPE • CFG=7.5</text>
+    <text x="800" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">256-512² • 2D-RoPE • CFG=7.5</text>
     <rect x="978" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_purple)" stroke-width="2" opacity="0.3"/>
     <rect x="980" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_purple)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="982" y="867" width="276" height="30" rx="10" fill="url(#grad_purple)" opacity="0.15"/>
     <text x="1120" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🎬 Video Generator</text>
     <text x="1120" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">3D Causal + Flow + Temporal MoE</text>
-    <text x="1120" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">16 frames • 3D-RoPE</text>
+    <text x="1120" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">8-32 frames • 3D-RoPE</text>
     <rect x="1298" y="863" width="284" height="94" rx="14" fill="none" stroke="url(#grad_green)" stroke-width="2" opacity="0.3"/>
     <rect x="1300" y="865" width="280" height="90" rx="12" fill="#12121a" stroke="url(#grad_green)" stroke-width="1" filter="url(#shadow)"/>
     <rect x="1302" y="867" width="276" height="30" rx="10" fill="url(#grad_green)" opacity="0.15"/>
     <text x="1440" y="889" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="bold">🔊 Audio Decoder</text>
-    <text x="1440" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Neural TTS</text>
-    <text x="1440" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Zero-shot voice cloning</text>
+    <text x="1440" y="911" text-anchor="middle" fill="#a0a0b0" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="normal">Raw Waveform + Neural TTS</text>
+    <text x="1440" y="931" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">Zero-shot • Speech-to-Speech</text>
     <path d="M960,825 Q720,805 480,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
     <path d="M960,825 Q880,805 800,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
     <path d="M960,825 Q1040,805 1120,860" fill="none" stroke="#404050" stroke-width="2" marker-end="url(#arrowhead)"/>
@@ -255,9 +255,9 @@
   <!-- Stats Box -->
     <rect x="1700" y="865" width="180" height="90" rx="12" fill="#12121a" stroke="#2a2a3a" stroke-width="1" filter="url(#shadow)"/>
     <text x="1790" y="887" text-anchor="middle" fill="#ffffff" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="bold">📊 Model Stats</text>
-    <text x="1790" y="909" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">~2B Parameters</text>
+    <text x="1790" y="909" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">~500M Parameters</text>
     <text x="1790" y="925" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">128K Context</text>
-    <text x="1790" y="941" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">6 MoE Layers</text>
+    <text x="1790" y="941" text-anchor="middle" fill="#606070" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="normal">6 MoE / 12 Total</text>
 
 
   <!-- Footer -->
