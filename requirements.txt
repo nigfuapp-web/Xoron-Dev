@@ -4,6 +4,8 @@
 torch
 torchvision
 torchaudio
+torchcodec
+
 
 ## Transformers and datasets
 transformers
