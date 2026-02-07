@@ -862,8 +862,8 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         max_per_dataset=training_config.max_per_dataset,
         sample_repeat=training_config.sample_repeat,
         voice_processor=voice_proc,
-        max_video_frames=xoron_config.max_video_frames,
-        video_size=xoron_config.generation_video_size,
+        max_video_frames=xoron_config.video_max_frames,  # Multi-scale config
+        video_size=xoron_config.video_base_size,         # Multi-scale config
         resume_state_path=resume_streaming_state,
         use_raw_waveform=use_raw_waveform,
     )
@@ -889,8 +889,8 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         max_per_dataset=eval_samples_per_dataset,
         sample_repeat=1,  # No repetition for eval
         voice_processor=voice_proc,
-        max_video_frames=xoron_config.max_video_frames,
-        video_size=xoron_config.generation_video_size,
+        max_video_frames=xoron_config.video_max_frames,  # Multi-scale config
+        video_size=xoron_config.video_base_size,         # Multi-scale config
         resume_state_path=None,  # Don't resume eval dataset
         use_raw_waveform=use_raw_waveform,
     )
@@ -905,7 +905,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     eval_dataset._streaming_state["dataset_positions"] = eval_skip_positions.copy()
 
     # Create collate function (modality-specific modes use minimal tensors for inactive modalities to save RAM)
-    collate_fn = create_collate_fn(xoron_config.max_video_frames, xoron_config.generation_video_size, active_modalities=active_modalities)
+    collate_fn = create_collate_fn(xoron_config.video_max_frames, xoron_config.video_base_size, active_modalities=active_modalities)
 
     # Calculate training steps
     estimated_samples = min(training_config.max_per_epoch, len(train_dataset))

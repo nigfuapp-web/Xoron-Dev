@@ -121,9 +121,9 @@ class XoronTrainer:
         self.start_epoch = 0
         self.best_loss = float("inf")
 
-        # Get generation sizes from config
-        self.img_gen_size = xoron_config.generation_image_size
-        self.vid_gen_size = getattr(xoron_config, 'generation_video_size', xoron_config.generation_image_size)
+        # Get generation sizes from multi-scale config
+        self.img_gen_size = xoron_config.image_base_size
+        self.vid_gen_size = xoron_config.video_base_size
         
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)

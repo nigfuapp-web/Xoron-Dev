@@ -104,7 +104,7 @@ class XoronMultimodalModel(nn.Module):
         self.vision_encoder = VisionEncoder(config.vision_model_name, freeze=config.freeze_vision)
 
         # 2. Video Encoder
-        self.video_encoder = VideoEncoder(self.vision_encoder, max_frames=config.max_video_frames)
+        self.video_encoder = VideoEncoder(self.vision_encoder, max_frames=config.video_max_frames)
 
         # 3. Audio Encoder (for ASR) - SOTA with Raw Waveform Tokenizer, RMLA, Zero-Shot Speaker Cloning
         print(f"\n🎤 Building SOTA Audio Encoder...")
@@ -210,7 +210,7 @@ class XoronMultimodalModel(nn.Module):
                 base_channels=config.generation_base_channels,
                 context_dim=config.hidden_size,
                 num_inference_steps=config.generation_inference_steps,
-                image_size=config.generation_image_size,
+                image_size=config.image_base_size,  # Multi-scale: use image_base_size
             )
 
         # 12. Video Generator
@@ -221,13 +221,13 @@ class XoronMultimodalModel(nn.Module):
                 latent_channels=config.generation_latent_channels,
                 base_channels=config.generation_base_channels // 2,
                 context_dim=config.hidden_size,
-                num_frames=config.max_video_frames,
-                image_size=config.generation_video_size,
+                num_frames=config.video_max_frames,  # Multi-scale: use video_max_frames
+                image_size=config.video_base_size,   # Multi-scale: use video_base_size
                 num_inference_steps=config.generation_inference_steps,
             )
 
         self.num_vision_tokens = config.num_vision_tokens
-        self.max_video_frames = config.max_video_frames
+        self.video_max_frames = config.video_max_frames  # Multi-scale config
         self.lora_applied = False
 
         self._print_stats()

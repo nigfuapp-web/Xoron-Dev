@@ -139,9 +139,10 @@ def show_current_config(config: Dict[str, Any]):
     print(f"   Heads: {model.get('num_heads', 16)}")
     print(f"   MoE Experts: {model.get('num_experts', 8)}")
     print(f"   LoRA Rank: {model.get('lora_r', 32)}")
-    print(f"   Video Frames: {model.get('max_video_frames', 32)}")
-    print(f"   Image Gen Size: {model.get('generation_image_size', 384)}")
-    print(f"   Video Gen Size: {model.get('generation_video_size', 384)}")
+    print(f"   Multi-Scale: {model.get('use_multi_scale', True)}")
+    print(f"   Video Max Frames: {model.get('video_max_frames', 32)}")
+    print(f"   Image Base Size: {model.get('image_base_size', 256)}")
+    print(f"   Video Base Size: {model.get('video_base_size', 256)}")
 
     print("\n⚙️ Training Configuration:")
     training = config['training']
@@ -301,9 +302,12 @@ def configure_model(config: Dict[str, Any]):
     model['num_experts_per_tok'] = get_input("Experts per token", model.get('num_experts_per_tok', 2), int)
     model['lora_r'] = get_input("LoRA rank", model.get('lora_r', 32), int)
     model['lora_alpha'] = get_input("LoRA alpha", model.get('lora_alpha', 64), int)
-    model['max_video_frames'] = get_input("Max video frames", model.get('max_video_frames', 32), int)
-    model['generation_image_size'] = get_input("Image generation size", model.get('generation_image_size', 384), int)
-    model['generation_video_size'] = get_input("Video generation size", model.get('generation_video_size', 384), int)
+    
+    # Multi-scale configuration (consolidated size/frame settings)
+    model['video_max_frames'] = get_input("Video max frames", model.get('video_max_frames', 32), int)
+    model['video_base_frames'] = get_input("Video base frames", model.get('video_base_frames', 16), int)
+    model['image_base_size'] = get_input("Image base size", model.get('image_base_size', 256), int)
+    model['video_base_size'] = get_input("Video base size", model.get('video_base_size', 256), int)
 
     use_moe = get_input("Enable MoE? (y/n)", 'y' if model.get('use_moe', True) else 'n')
     model['use_moe'] = use_moe.lower() in ('y', 'yes', 'true', '1')
@@ -313,6 +317,9 @@ def configure_model(config: Dict[str, Any]):
 
     use_cross = get_input("Enable Cross-Attention? (y/n)", 'y' if model.get('use_cross_attention', True) else 'n')
     model['use_cross_attention'] = use_cross.lower() in ('y', 'yes', 'true', '1')
+    
+    use_multi_scale = get_input("Enable Multi-Scale Training? (y/n)", 'y' if model.get('use_multi_scale', True) else 'n')
+    model['use_multi_scale'] = use_multi_scale.lower() in ('y', 'yes', 'true', '1')
 
     print("\n✅ Model configuration updated")
 

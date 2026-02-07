@@ -42,9 +42,9 @@ class TrueStreamingDataset(IterableDataset):
         max_per_dataset: int = 100,  # From TrainingConfig.max_per_dataset
         sample_repeat: int = 2,  # From TrainingConfig.sample_repeat
         voice_processor=None,
-        max_video_frames: int = 16,  # From XoronConfig.max_video_frames
-        video_size: int = 256,  # From XoronConfig.generation_video_size
-        image_size: int = 256,  # From XoronConfig.vision_image_size (256 for memory efficiency)
+        max_video_frames: int = 32,  # From XoronConfig.video_max_frames (multi-scale)
+        video_size: int = 256,  # From XoronConfig.video_base_size (multi-scale)
+        image_size: int = 256,  # From XoronConfig.image_base_size (multi-scale)
         audio_n_mels: int = 80,  # From XoronConfig.audio_n_mels
         audio_max_length: int = 1000,  # From XoronConfig.audio_max_length
         audio_sample_rate: int = 16000,  # From XoronConfig.audio_sample_rate
@@ -1305,9 +1305,9 @@ def create_train_eval_datasets(
     max_per_dataset_eval: int = 10,  # From TrainingConfig.max_per_dataset_eval
     sample_repeat: int = 2,  # From TrainingConfig.sample_repeat
     voice_processor=None,
-    max_video_frames: int = 16,  # From XoronConfig.max_video_frames
-    video_size: int = 256,  # From XoronConfig.generation_video_size
-    image_size: int = 256,  # From XoronConfig.vision_image_size (256 for memory efficiency)
+    max_video_frames: int = 32,  # From XoronConfig.video_max_frames (multi-scale)
+    video_size: int = 256,  # From XoronConfig.video_base_size (multi-scale)
+    image_size: int = 256,  # From XoronConfig.image_base_size (multi-scale)
     audio_n_mels: int = 80,  # From XoronConfig.audio_n_mels
     audio_max_length: int = 1000,  # From XoronConfig.audio_max_length
     audio_sample_rate: int = 16000,  # From XoronConfig.audio_sample_rate

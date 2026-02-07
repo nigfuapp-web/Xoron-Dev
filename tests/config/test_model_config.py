@@ -65,16 +65,32 @@ class TestXoronConfig(unittest.TestCase):
         self.assertEqual(config.vision_model_name, "google/siglip-so400m-patch14-384")
         self.assertFalse(config.freeze_vision)
         self.assertEqual(config.num_vision_tokens, 64)
-        self.assertEqual(config.vision_image_size, 384)
+        self.assertEqual(config.image_base_size, 256)  # Multi-scale config
         
     def test_generation_configuration(self):
         """Test generation-related configuration."""
         config = XoronConfig()
         
         self.assertTrue(config.enable_generation)
-        self.assertEqual(config.generation_image_size, 256)
+        self.assertEqual(config.image_base_size, 256)  # Multi-scale config
         self.assertEqual(config.generation_cfg_scale, 7.5)
-        self.assertEqual(config.generation_num_frames, 16)
+        self.assertEqual(config.video_base_frames, 16)  # Multi-scale config
+        
+    def test_multi_scale_configuration(self):
+        """Test multi-scale training configuration."""
+        config = XoronConfig()
+        
+        self.assertTrue(config.use_multi_scale)
+        self.assertEqual(config.image_min_size, 128)
+        self.assertEqual(config.image_max_size, 512)
+        self.assertEqual(config.image_base_size, 256)
+        self.assertEqual(config.video_min_size, 128)
+        self.assertEqual(config.video_max_size, 384)
+        self.assertEqual(config.video_base_size, 256)
+        self.assertEqual(config.video_min_frames, 8)
+        self.assertEqual(config.video_max_frames, 32)
+        self.assertEqual(config.video_base_frames, 16)
+        self.assertEqual(config.multi_scale_strategy, "random")
         
     def test_audio_configuration(self):
         """Test SOTA audio-related configuration."""

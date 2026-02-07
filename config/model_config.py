@@ -1,7 +1,7 @@
 """Xoron model configuration with SOTA features."""
 
-from dataclasses import dataclass
-from typing import Tuple
+from dataclasses import dataclass, field
+from typing import Tuple, List
 
 
 @dataclass
@@ -23,6 +23,7 @@ class XoronConfig:
     - Dual-stream attention for symmetric processing
     - Conformer audio encoder/decoder
     - FP16-native numerical stability
+    - Multi-scale training for variable resolution handling
     """
 
     # Model name
@@ -57,9 +58,7 @@ class XoronConfig:
     vision_model_name: str = "google/siglip-so400m-patch14-384"  # SigLIP 2 - best for MoE
     freeze_vision: bool = False
     num_vision_tokens: int = 64
-    max_video_frames: int = 16
     projector_type: str = "perceiver"  # "perceiver", "spatial", "c_abstractor", "mlp"
-    vision_image_size: int = 256  # 256x256 for memory-efficient training (resized from 384)
     
     # Vision Encoder SOTA Features
     use_vision_dual_stream: bool = True  # Symmetric dual-stream attention
@@ -73,9 +72,68 @@ class XoronConfig:
     num_video_encoder_layers: int = 4  # 3D causal transformer layers
     num_video_experts: int = 4  # Temporal MoE experts
 
+    # ========== MULTI-SCALE TRAINING CONFIGURATION (SOTA) ==========
+    # Multi-scale enables training and inference at multiple resolutions
+    # This allows the model to handle various input/output sizes dynamically
+    # ALL image/video size and frame settings are consolidated here
+    
+    # Enable multi-scale training (dynamic resolution selection during training)
+    use_multi_scale: bool = True
+    
+    # Image multi-scale settings
+    # Available image resolutions for training (height, width)
+    image_scales: Tuple[Tuple[int, int], ...] = (
+        (128, 128),   # Low res - fast training, good for low-memory
+        (192, 192),   # Medium-low res
+        (256, 256),   # Base resolution (default)
+        (320, 320),   # Medium-high res
+        (384, 384),   # High res - matches SigLIP native resolution
+        (448, 448),   # Very high res
+        (512, 512),   # Max resolution for high quality
+    )
+    # Probability distribution for scale sampling (sum should be ~1.0)
+    # Higher probability for middle scales, lower for extremes
+    image_scale_probs: Tuple[float, ...] = (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05)
+    image_min_size: int = 128   # Minimum image size
+    image_max_size: int = 512   # Maximum image size
+    image_base_size: int = 256  # Base/default image size (used when multi-scale disabled)
+    
+    # Video spatial multi-scale settings
+    # Available video resolutions (height, width)
+    video_scales: Tuple[Tuple[int, int], ...] = (
+        (128, 128),   # Low res - fast
+        (192, 192),   # Medium-low
+        (256, 256),   # Base resolution
+        (320, 320),   # Medium-high
+        (384, 384),   # High res
+    )
+    video_scale_probs: Tuple[float, ...] = (0.10, 0.20, 0.35, 0.25, 0.10)
+    video_min_size: int = 128   # Minimum video spatial size
+    video_max_size: int = 384   # Maximum video spatial size  
+    video_base_size: int = 256  # Base/default video size (used when multi-scale disabled)
+    
+    # Video temporal multi-scale settings (frame counts)
+    # Available frame counts for training - supports 8 to 32 frames
+    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
+    video_frame_scale_probs: Tuple[float, ...] = (0.10, 0.15, 0.30, 0.20, 0.15, 0.10)
+    video_min_frames: int = 8    # Minimum frame count
+    video_max_frames: int = 32   # Maximum frame count (supports 16+ frames)
+    video_base_frames: int = 16  # Base/default frame count
+    
+    # Multi-scale training strategy
+    # "random" - randomly sample scale each batch
+    # "progressive" - start small, gradually increase scale during training
+    # "curriculum" - alternate between scales in a curriculum
+    multi_scale_strategy: str = "random"
+    multi_scale_warmup_epochs: int = 5  # For progressive strategy: epochs to reach max scale
+    
+    # Supported sizes for generation inference
+    generation_supported_sizes: Tuple[int, ...] = (256, 320, 384, 448, 512)
+    generation_supported_frames: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
+    # ================================================================
+
     # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching + 2D-RoPE)
     enable_generation: bool = True
-    generation_image_size: int = 256  # 256x256 for memory-efficient training
     generation_latent_channels: int = 4
     generation_base_channels: int = 128
     generation_inference_steps: int = 50  # Flow Matching needs more steps
@@ -85,8 +143,6 @@ class XoronConfig:
     generation_use_dual_stream: bool = True  # Symmetric dual-stream attention
     
     # Video Generation Configuration (SOTA: 3D Causal Transformers + Flow Matching + 3D-RoPE)
-    generation_video_size: int = 256  # 256x256 for efficient training
-    generation_num_frames: int = 16
     generation_video_cfg_scale: float = 7.5
     generation_video_use_flow_matching: bool = True
     generation_video_num_experts: int = 4
@@ -162,9 +218,7 @@ class XoronConfig:
             'vision_model_name': self.vision_model_name,
             'freeze_vision': self.freeze_vision,
             'num_vision_tokens': self.num_vision_tokens,
-            'max_video_frames': self.max_video_frames,
             'projector_type': self.projector_type,
-            'vision_image_size': self.vision_image_size,
             'use_vision_dual_stream': self.use_vision_dual_stream,
             'use_vision_titok': self.use_vision_titok,
             'num_vision_titok_tokens': self.num_vision_titok_tokens,
@@ -173,8 +227,29 @@ class XoronConfig:
             'use_video_temporal_moe': self.use_video_temporal_moe,
             'num_video_encoder_layers': self.num_video_encoder_layers,
             'num_video_experts': self.num_video_experts,
+            # Multi-scale configuration (source of truth for all sizes/frames)
+            'use_multi_scale': self.use_multi_scale,
+            'image_scales': list(self.image_scales),
+            'image_scale_probs': list(self.image_scale_probs),
+            'image_min_size': self.image_min_size,
+            'image_max_size': self.image_max_size,
+            'image_base_size': self.image_base_size,
+            'video_scales': list(self.video_scales),
+            'video_scale_probs': list(self.video_scale_probs),
+            'video_min_size': self.video_min_size,
+            'video_max_size': self.video_max_size,
+            'video_base_size': self.video_base_size,
+            'video_frame_scales': list(self.video_frame_scales),
+            'video_frame_scale_probs': list(self.video_frame_scale_probs),
+            'video_min_frames': self.video_min_frames,
+            'video_max_frames': self.video_max_frames,
+            'video_base_frames': self.video_base_frames,
+            'multi_scale_strategy': self.multi_scale_strategy,
+            'multi_scale_warmup_epochs': self.multi_scale_warmup_epochs,
+            'generation_supported_sizes': list(self.generation_supported_sizes),
+            'generation_supported_frames': list(self.generation_supported_frames),
+            # Generation configs
             'enable_generation': self.enable_generation,
-            'generation_image_size': self.generation_image_size,
             'generation_latent_channels': self.generation_latent_channels,
             'generation_base_channels': self.generation_base_channels,
             'generation_inference_steps': self.generation_inference_steps,
@@ -182,13 +257,12 @@ class XoronConfig:
             'generation_use_flow_matching': self.generation_use_flow_matching,
             'generation_num_experts': self.generation_num_experts,
             'generation_use_dual_stream': self.generation_use_dual_stream,
-            'generation_video_size': self.generation_video_size,
-            'generation_num_frames': self.generation_num_frames,
             'generation_video_cfg_scale': self.generation_video_cfg_scale,
             'generation_video_use_flow_matching': self.generation_video_use_flow_matching,
             'generation_video_num_experts': self.generation_video_num_experts,
             'generation_video_use_3d_rope': self.generation_video_use_3d_rope,
             'generation_video_use_temporal_moe': self.generation_video_use_temporal_moe,
+            # Audio configs
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
             'audio_max_length': self.audio_max_length,
@@ -219,8 +293,25 @@ class XoronConfig:
     @classmethod
     def from_dict(cls, config_dict: dict) -> 'XoronConfig':
         """Create config from dictionary."""
+        # Convert lists back to tuples for tuple fields
         if 'lora_target_modules' in config_dict and isinstance(config_dict['lora_target_modules'], list):
             config_dict['lora_target_modules'] = tuple(config_dict['lora_target_modules'])
+        if 'image_scales' in config_dict and isinstance(config_dict['image_scales'], list):
+            config_dict['image_scales'] = tuple(tuple(s) if isinstance(s, list) else s for s in config_dict['image_scales'])
+        if 'image_scale_probs' in config_dict and isinstance(config_dict['image_scale_probs'], list):
+            config_dict['image_scale_probs'] = tuple(config_dict['image_scale_probs'])
+        if 'video_scales' in config_dict and isinstance(config_dict['video_scales'], list):
+            config_dict['video_scales'] = tuple(tuple(s) if isinstance(s, list) else s for s in config_dict['video_scales'])
+        if 'video_scale_probs' in config_dict and isinstance(config_dict['video_scale_probs'], list):
+            config_dict['video_scale_probs'] = tuple(config_dict['video_scale_probs'])
+        if 'video_frame_scales' in config_dict and isinstance(config_dict['video_frame_scales'], list):
+            config_dict['video_frame_scales'] = tuple(config_dict['video_frame_scales'])
+        if 'video_frame_scale_probs' in config_dict and isinstance(config_dict['video_frame_scale_probs'], list):
+            config_dict['video_frame_scale_probs'] = tuple(config_dict['video_frame_scale_probs'])
+        if 'generation_supported_sizes' in config_dict and isinstance(config_dict['generation_supported_sizes'], list):
+            config_dict['generation_supported_sizes'] = tuple(config_dict['generation_supported_sizes'])
+        if 'generation_supported_frames' in config_dict and isinstance(config_dict['generation_supported_frames'], list):
+            config_dict['generation_supported_frames'] = tuple(config_dict['generation_supported_frames'])
         return cls(**{k: v for k, v in config_dict.items() if hasattr(cls, k) or k in cls.__dataclass_fields__})
 
     def print_config(self):
@@ -236,8 +327,18 @@ class XoronConfig:
         print(f"   - TiTok: {self.use_vision_titok} ({self.num_vision_titok_tokens} tokens)")
         print(f"   - Dual-Stream: {self.use_vision_dual_stream} ({self.num_vision_dual_stream_layers} layers)")
         print(f"🎬 Video Encoder: 3D-RoPE={self.use_video_3d_rope}, Temporal MoE={self.use_video_temporal_moe}")
-        print(f"🎨 Image Gen: {self.generation_image_size}x{self.generation_image_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
-        print(f"🎬 Video Gen: {self.generation_num_frames} frames @ {self.generation_video_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
+        # Multi-scale info
+        if self.use_multi_scale:
+            img_sizes = [f"{s[0]}x{s[1]}" for s in self.image_scales]
+            vid_sizes = [f"{s[0]}x{s[1]}" for s in self.video_scales]
+            print(f"📐 Multi-Scale Training: ENABLED (strategy={self.multi_scale_strategy})")
+            print(f"   - Image: {self.image_min_size}-{self.image_max_size}px, base={self.image_base_size}")
+            print(f"   - Video: {self.video_min_size}-{self.video_max_size}px, base={self.video_base_size}")
+            print(f"   - Frames: {self.video_min_frames}-{self.video_max_frames}, base={self.video_base_frames}")
+        else:
+            print(f"📐 Multi-Scale: DISABLED (fixed {self.image_base_size}x{self.image_base_size})")
+        print(f"🎨 Image Gen: {self.image_base_size}x{self.image_base_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
+        print(f"🎬 Video Gen: {self.video_base_frames} frames @ {self.video_base_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
         print(f"🎤 Audio: {self.audio_sample_rate}Hz, RawWaveform={self.use_raw_waveform}, MAS={self.use_mas}")
         print(f"   - Zero-Shot Cloning: speaker_dim={self.audio_speaker_embed_dim}, In-Context Prompting={self.use_in_context_audio_prompting}")
         print(f"📝 Tokenizer: {self.tokenizer_name} (vocab: {self.vocab_size:,})")

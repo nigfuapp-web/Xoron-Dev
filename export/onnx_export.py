@@ -227,7 +227,7 @@ def export_to_onnx(
     try:
         if model.generator is not None:
             img_diff_path = os.path.join(onnx_dir, "image_diffusion_unet.onnx")
-            latent_size = config.generation_image_size // 8
+            latent_size = config.image_base_size // 8  # Multi-scale config
             with torch.no_grad():
                 torch.onnx.export(
                     model.generator.unet,
@@ -254,7 +254,7 @@ def export_to_onnx(
     try:
         if model.video_generator is not None:
             vid_diff_path = os.path.join(onnx_dir, "video_diffusion_unet.onnx")
-            vid_latent = config.generation_video_size // 8
+            vid_latent = config.video_base_size // 8  # Multi-scale config
             with torch.no_grad():
                 torch.onnx.export(
                     model.video_generator.unet,
