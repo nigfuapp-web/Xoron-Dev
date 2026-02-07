@@ -12,7 +12,10 @@ from safetensors.torch import save_model, load_model
 from transformers import LlamaConfig
 
 from config import XoronConfig
-from models.components.lora import LoRALinear, LoRAConfig, apply_lora_to_model, get_lora_parameters, freeze_non_lora_params
+from models.components.lora import (
+    LoRALinear, LoRAConfig, apply_lora_to_model, 
+    get_lora_parameters, freeze_non_lora_params, enable_lora_training
+)
 from models.components.attention import MultimodalFusionLayer
 from models.components.projectors import MultimodalProjector
 from models.encoders.vision import VisionEncoder
@@ -310,10 +313,16 @@ class XoronMultimodalModel(nn.Module):
         
         MEMORY OPTIMIZATION:
         - LoRA layers share base weights (no cloning)
-        - All non-LoRA params are frozen and gradients cleared
-        - Only LoRA params (A, B, magnitude) are trainable
+        - Base weights in LoRA layers are frozen (requires_grad=False)
+        - LoRA params (A, B, magnitude) are always trainable
         
-        This reduces memory from ~2x model size to ~1x model size + small LoRA overhead
+        NOTE: This does NOT freeze other components!
+        Component freezing is handled separately by freeze_components() based on
+        training mode (--text, --video, --image, --voice flags).
+        
+        This allows PARALLEL FINE-TUNING:
+        - LoRA adapters on LLM for efficient adaptation
+        - Full weight training on active components (vision, audio, etc.)
         """
         if self.lora_applied:
             print("⚠️ LoRA already applied")
@@ -348,17 +357,29 @@ class XoronMultimodalModel(nn.Module):
 
         self.lora_applied = True
         
-        # CRITICAL: Freeze all non-LoRA parameters to save memory
-        # This ensures only LoRA params get gradient buffers and optimizer states
-        print("\n🔒 Freezing non-LoRA parameters for memory efficiency...")
-        freeze_non_lora_params(self)
+        # NOTE: We do NOT freeze all non-LoRA params here!
+        # Freezing is handled by freeze_components() based on training mode.
+        # This allows parallel fine-tuning: LoRA + full weight training on active components.
         
         self._print_stats()
 
     def get_trainable_params(self):
-        """Get trainable parameters, respecting LoRA settings."""
+        """
+        Get trainable parameters, respecting LoRA settings and component freezing.
+        
+        If train_lora_only=True and LoRA is applied:
+            - Freezes all non-LoRA params
+            - Returns only LoRA params
+        Otherwise:
+            - Returns all params with requires_grad=True
+            - This includes both LoRA params AND unfrozen component weights
+            - Allows parallel fine-tuning: LoRA + full weights on active components
+        """
         if self.config.train_lora_only and self.lora_applied:
+            # LoRA-only mode: freeze everything except LoRA params
+            freeze_non_lora_params(self)
             return get_lora_parameters(self)
+        # Normal mode: return all trainable params (LoRA + unfrozen components)
         return [p for p in self.parameters() if p.requires_grad]
 
     def _print_stats(self):
@@ -1373,6 +1394,10 @@ class XoronMultimodalModel(nn.Module):
         """
         Freeze specific components of the model.
         
+        IMPORTANT: LoRA parameters are NEVER frozen by this method!
+        Even if 'llm' is frozen, LoRA adapters (lora_A, lora_B, magnitude) stay trainable.
+        This allows parallel fine-tuning: frozen base weights + trainable LoRA.
+        
         Args:
             components: List of component group names to freeze.
                        Valid groups: 'vision', 'video', 'audio', 'llm', 
@@ -1393,9 +1418,17 @@ class XoronMultimodalModel(nn.Module):
                         if isinstance(component, nn.Parameter):
                             component.requires_grad = False
                         elif isinstance(component, nn.Module):
-                            for param in component.parameters():
-                                param.requires_grad = False
-                        print(f"   ❄️ Frozen: {attr_name}")
+                            for name, param in component.named_parameters():
+                                # NEVER freeze LoRA params - they should always be trainable
+                                is_lora = 'lora_A' in name or 'lora_B' in name or 'magnitude' in name
+                                if not is_lora:
+                                    param.requires_grad = False
+                        print(f"   ❄️ Frozen: {attr_name} (LoRA params preserved)")
+        
+        # Ensure LoRA params are trainable after freezing
+        if self.lora_applied:
+            enable_lora_training(self)
+            print(f"   ✅ LoRA parameters remain trainable")
         
         self._print_stats()
 

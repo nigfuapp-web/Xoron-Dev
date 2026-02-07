@@ -234,32 +234,35 @@ def apply_lora_to_model(model: nn.Module, lora_config: LoRAConfig) -> nn.Module:
 
 def get_lora_parameters(model: nn.Module) -> List[nn.Parameter]:
     """
-    Get only the LoRA parameters for training.
+    Get only the LoRA parameters from a model.
     
-    MEMORY OPTIMIZATION:
-    - Sets requires_grad=False on all non-LoRA params
-    - Clears any accumulated gradients on frozen params to free memory
-    - Returns only LoRA params for optimizer
+    NOTE: This does NOT change requires_grad on any parameters!
+    It simply returns the LoRA params (lora_A, lora_B, magnitude).
+    
+    Use this when you want to get LoRA params for separate optimizer groups
+    or for LoRA-only training mode.
     """
     lora_params = []
-    frozen_count = 0
-    freed_grad_memory = 0
+    
+    for name, param in model.named_parameters():
+        if 'lora_A' in name or 'lora_B' in name or 'magnitude' in name:
+            lora_params.append(param)
+    
+    return lora_params
+
+
+def enable_lora_training(model: nn.Module) -> List[nn.Parameter]:
+    """
+    Enable training for LoRA parameters (ensure requires_grad=True).
+    
+    Returns list of LoRA parameters.
+    """
+    lora_params = []
     
     for name, param in model.named_parameters():
         if 'lora_A' in name or 'lora_B' in name or 'magnitude' in name:
             param.requires_grad = True
             lora_params.append(param)
-        else:
-            param.requires_grad = False
-            frozen_count += 1
-            # MEMORY OPTIMIZATION: Clear any existing gradients on frozen params
-            # This prevents gradients from accumulating if they were computed before freezing
-            if param.grad is not None:
-                freed_grad_memory += param.grad.numel() * param.grad.element_size()
-                param.grad = None
-    
-    if freed_grad_memory > 0:
-        print(f"   🧹 Cleared {freed_grad_memory / (1024**2):.1f}MB of gradient memory from frozen params")
     
     return lora_params
 
@@ -268,10 +271,11 @@ def freeze_non_lora_params(model: nn.Module) -> int:
     """
     Freeze all non-LoRA parameters and clear their gradients.
     
-    CRITICAL for memory efficiency during LoRA training:
-    - Frozen params don't compute gradients (no backprop memory)
-    - Frozen params don't store gradient buffers
-    - Optimizer won't create states for frozen params
+    USE THIS ONLY FOR LORA-ONLY TRAINING MODE (train_lora_only=True).
+    
+    For normal training with parallel fine-tuning (LoRA + full weights on
+    active components), use the model's freeze_components() method instead,
+    which respects the training mode flags (--text, --video, --image, --voice).
     
     Returns:
         Number of frozen parameters
