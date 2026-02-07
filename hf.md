@@ -17,6 +17,11 @@ tags:
 - video-to-text
 - agentic
 - tool-use
+- flow-matching
+- 3d-rope
+- titok
+- dual-stream-attention
+- zero-shot-voice-cloning
 pipeline_tag: any-to-any
 inference: false
 datasets:
@@ -35,7 +40,7 @@ datasets:
 - OpenAssistant/oasst1
 - HuggingFaceH4/no_robots
 - Open-Orca/OpenOrca
-- abhi227070/converstion-to-summarization-dataset
+- abhi227070/conversation-to-summarization-dataset
 - allenai/WildChat-1M
 - THUDM/AgentInstruct
 - glaiveai/glaive-code-assistant-v2
@@ -97,16 +102,91 @@ datasets:
 
 </div>
 
-**Xoron-Dev** is a unified, multimodal AI model designed to understand and generate text, images, video, and audio within a single architecture. It leverages a **Mixture of Experts (MoE)** backbone with DeepSeek-style shared experts and integrates SOTA encoders (SigLIP-2) and diffusers (MobileDiffusion) for comprehensive any-to-any capabilities.
+**Xoron-Dev** is a unified, multimodal AI model designed to understand and generate text, images, video, and audio within a single architecture. It leverages a **Mixture of Experts (MoE)** backbone with DeepSeek-style shared expert isolation and integrates SOTA encoders (SigLIP-2 with TiTok + Dual-Stream Attention) and generators (MoE-DiT with Flow Matching) for comprehensive any-to-any capabilities.
 
 ## 🌟 Model Highlights
 
-* **Architecture:** Mixture of Experts (8 Experts + 1 Shared) with Ring Attention.
-* **Vision:** Native understanding of images (384px) and video (up to 32 frames) via SigLIP-2.
-* **Generation:** Integrated MobileDiffusion for fast on-device Image & Video generation.
-* **Audio:** Full duplex capabilities with Conformer-based ASR (Speech-to-Text) and Neural TTS.
+* **Architecture:** Mixture of Experts (8 Experts + 1 Shared, top-2 routing) with Ring Attention and Aux-Lossless routing.
+* **Vision Encoder:** SigLIP-2 (384px) with **TiTok-style 1D tokenization**, **Dual-Stream Attention**, and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** for video (up to 16 frames).
+* **Image Generation:** **MoE-DiT** (Diffusion Transformer with MoE) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style).
+* **Video Generation:** **3D Causal Transformers** with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing**.
+* **Audio:** **Conformer encoder with RMLA** (Rotary Multi-Head Latent Attention), **Raw Waveform Tokenizer**, **MAS** (Monotonic Alignment Search) for fluid alignment, and **Zero-Shot Speaker Cloning** with In-Context Audio Prompting.
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
 * **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
+* **Fine-tuning:** LoRA variants including **rsLoRA**, **DoRA**, and **LoRA+** with configurable learning rate ratio.
+* **Multimodal Fusion:** Cross-Attention layers (4 layers, 8 heads) for deep multimodal integration.
+* **Performance:** Flash Attention support with FP16-native numerical stability.
+
+---
+
+## 🔬 Architecture Deep Dive
+
+### 🧠 LLM Backbone (MoE)
+| Component | Specification |
+|-----------|--------------|
+| Hidden Size | 1024 |
+| Layers | 12 |
+| Attention Heads | 16 |
+| MoE Experts | 8 + 1 Shared (DeepSeek-style isolation) |
+| Experts per Token | 2 (top-2 routing) |
+| MoE Layer Frequency | Every 2 layers |
+| Routing | Aux-Lossless MoE routing |
+| Context Length | 128K positions |
+| Attention | Ring Attention (4096 chunk) + Flash Attention |
+| Tokenizer | Qwen2.5 (151,643 vocab) |
+
+### 👁️ Vision Encoder (SigLIP-2 + SOTA Extensions)
+| Feature | Description |
+|---------|-------------|
+| Base Model | `google/siglip-so400m-patch14-384` |
+| Input Resolution | 384×384 |
+| TiTok Tokenization | 1D tokenization with 256 compressed tokens |
+| Dual-Stream Attention | 2 symmetric dual-stream layers |
+| Position Encoding | 2D-RoPE |
+| Output Tokens | 64 tokens per image |
+
+### 🎬 Video Encoder (3D Causal Transformers)
+| Feature | Description |
+|---------|-------------|
+| Max Frames | 16 frames |
+| Position Encoding | **3D-RoPE** for (x, y, t) coordinates |
+| Attention | 3D Causal Self-Attention |
+| Expert Routing | **Temporal MoE** (4 experts, temporally-aware) |
+| Encoder Layers | 4 layers |
+
+### 🎨 Image Generation (MoE-DiT + Flow Matching)
+| Feature | Description |
+|---------|-------------|
+| Architecture | **MoE-DiT** (Diffusion Transformer with MoE) |
+| Scheduler | **Flow Matching** (not DDPM) |
+| Output Resolution | 384×384 |
+| Position Encoding | 2D-RoPE |
+| Attention | **Symmetric Dual-Stream Attention** (SD3/Flux-style) |
+| MoE Experts | 4 experts in DiT blocks |
+| Inference Steps | 50 steps |
+| Guidance Scale | 7.5 (CFG) |
+
+### 📹 Video Generation (3D Causal + Flow Matching)
+| Feature | Description |
+|---------|-------------|
+| Output Resolution | 256×256 |
+| Output Frames | 16 frames |
+| Scheduler | **Flow Matching** |
+| Position Encoding | **3D-RoPE** for (x, y, t) |
+| Attention | Factorized Spatial-Temporal (3D Causal) |
+| Expert Routing | **Temporal MoE** (4 experts) |
+| Guidance Scale | 7.5 (CFG) |
+
+### 🎤 Audio (RMLA Conformer + MAS + Zero-Shot Cloning)
+| Feature | Description |
+|---------|-------------|
+| Sample Rate | 16kHz |
+| Input | **Raw Waveform Tokenizer** (not mel spectrogram) |
+| Encoder | Conformer blocks with **RMLA** (Rotary Multi-Head Latent Attention) |
+| KV Compression | LoRA-style KV compression (rank 256) |
+| Decoder Alignment | **MAS** (Monotonic Alignment Search) for text-to-audio |
+| Voice Cloning | **Zero-Shot Speaker Cloning** with speaker embedding (256-dim) |
+| In-Context Prompting | Enabled for voice cloning from reference audio |
 
 ---
 
@@ -118,7 +198,7 @@ Xoron-Dev is trained on a massive, curated mix of open-source Hugging Face datas
 We utilize over 50 high-quality datasets from Hugging Face, categorized by modality:
 
 * **Text & Code:** Includes `Code-Feedback`, `HumanEvalPack`, `OpenOrca`, and `AgentInstruct` for robust coding and reasoning capabilities.
-* **Tool Use:** Datasets like `Function-Calling-ChatML` and `Synth-APIGen` enable precise tool invocation.
+* **Tool Use:** Datasets like `Function-Calling-ChatML`, `Synth-APIGen`, and `Tool-Calls-MultiTurn` enable precise tool invocation across single and multi-turn interactions.
 * **Vision (Image/Video):** Visual understanding is grounded in `ScienceQA`, `Video-MME`, and `VideoInstruct-100K`.
 * **Generation:** Text-to-Image/Video capabilities are fine-tuned on `Stable-Diffusion-Prompts`, `Sora-Likert-Scoring` datasets by Rapidata, and `WebVid-10M`.
 * **Audio:** Speech tasks are powered by `LibriSpeech`, `LibriTTS-R`, and `HiFi-TTS`.
@@ -128,8 +208,9 @@ To bridge the gap between general knowledge and actionable agentic behavior, we 
 
 | Category | Description |
 |----------|-------------|
-| **Anti-Hallucination** | Training the model to say "I don't know" (`Synth-IDK`), verify facts (`Synth-FactCheck`), and provide citations (`Synth-Citation`) rather than fabricating information. |
+| **Anti-Hallucination** | Training the model to say "I don't know" (`Synth-IDK`), verify facts (`Synth-FactCheck`), provide citations (`Synth-Citation`), express uncertainty (`Synth-Uncertainty`), and ground responses (`Synth-GroundedResponse`). |
 | **System Administration** | Simulated environments for `Docker` setup, `SSH` configuration, database management, and package installation (`Synth-AptInstall`). |
 | **Code Execution** | Traces of code execution including `Shell` errors, timeouts, and multi-step debugging workflows to teach the model how to recover from errors. |
-| **Git Operations** | Simulated version control tasks including committing, handling diffs, and resolving merge conflicts. |
-| **Chain-of-Thought** | explicit `Synth-CoT` data to encourage internal reasoning before generating final answers. |
+| **Git Operations** | Simulated version control tasks including committing, handling diffs, resolving merge conflicts, and repository context understanding. |
+| **Chain-of-Thought** | Explicit `Synth-CoT` data to encourage internal reasoning before generating final answers. |
+| **File Operations** | Document handling, FIM (Fill-in-Middle), and edit operations for precise file manipulation. |
