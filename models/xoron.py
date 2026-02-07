@@ -752,9 +752,17 @@ class XoronMultimodalModel(nn.Module):
             self._save_single_file_safe(path)
 
         config_dict = self.config.to_dict()
+        # Mark which components exist in this save (for architecture detection on load)
         config_dict['has_audio_encoder'] = True
         config_dict['has_audio_decoder'] = True
+        config_dict['has_waveform_decoder'] = hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None
+        config_dict['has_vision_encoder'] = hasattr(self, 'vision_encoder') and self.vision_encoder is not None
+        config_dict['has_video_encoder'] = hasattr(self, 'video_encoder') and self.video_encoder is not None
+        config_dict['has_generator'] = hasattr(self, 'generator') and self.generator is not None
+        config_dict['has_video_generator'] = hasattr(self, 'video_generator') and self.video_generator is not None
+        config_dict['has_cross_attention'] = hasattr(self, 'cross_attention_layers') and self.cross_attention_layers is not None
         config_dict['lora_applied'] = self.lora_applied
+        config_dict['architecture_version'] = 2  # Version 2 = includes waveform_decoder
 
         with open(os.path.join(path, "config.json"), "w") as f:
             json.dump(config_dict, f, indent=2)
@@ -891,16 +899,19 @@ class XoronMultimodalModel(nn.Module):
         state_dict = self.state_dict()
         
         # Group tensors by component for surgical splitting
+        # IMPORTANT: Keep this list in sync with all model components!
         component_groups = {
             'llm': {},
             'vision_encoder': {},
             'video_encoder': {},
             'audio_encoder': {},
             'audio_decoder': {},
+            'waveform_decoder': {},  # Speech-to-Speech decoder
             'generator': {},
             'video_generator': {},
             'projector': {},
-            'cross_attention': {},
+            'audio_projector': {},
+            'cross_attention_layers': {},
             'other': {},
         }
         
@@ -1080,8 +1091,27 @@ class XoronMultimodalModel(nn.Module):
         
         # Check if LoRA was applied when saving
         lora_was_applied = config_dict.pop('lora_applied', False)
+        
+        # Extract architecture markers (don't pass to XoronConfig)
+        architecture_version = config_dict.pop('architecture_version', 1)
+        has_waveform_decoder = config_dict.pop('has_waveform_decoder', False)
+        has_vision_encoder = config_dict.pop('has_vision_encoder', True)
+        has_video_encoder = config_dict.pop('has_video_encoder', True)
+        has_generator = config_dict.pop('has_generator', True)
+        has_video_generator = config_dict.pop('has_video_generator', True)
+        has_cross_attention = config_dict.pop('has_cross_attention', True)
         config_dict.pop('has_audio_encoder', None)
         config_dict.pop('has_audio_decoder', None)
+        
+        # Print architecture info from saved config
+        print(f"\n   📋 Saved model architecture (version {architecture_version}):")
+        print(f"      - Waveform Decoder: {'✅' if has_waveform_decoder else '❌ (will init randomly)'}")
+        print(f"      - Vision Encoder: {'✅' if has_vision_encoder else '❌'}")
+        print(f"      - Video Encoder: {'✅' if has_video_encoder else '❌'}")
+        print(f"      - Image Generator: {'✅' if has_generator else '❌'}")
+        print(f"      - Video Generator: {'✅' if has_video_generator else '❌'}")
+        print(f"      - Cross Attention: {'✅' if has_cross_attention else '❌'}")
+        print(f"      - LoRA Applied: {'✅' if lora_was_applied else '❌'}")
         
         config = XoronConfig.from_dict(config_dict)
         

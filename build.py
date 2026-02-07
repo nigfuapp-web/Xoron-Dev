@@ -465,8 +465,21 @@ def load_model_from_huggingface(hf_model_id, training_config):
         
         # Check if LoRA was applied when saving
         lora_was_applied = config_dict.pop('lora_applied', False)
+        
+        # Extract architecture markers from config (if saved with new format)
+        config_arch_version = config_dict.pop('architecture_version', 1)
+        config_has_waveform_decoder = config_dict.pop('has_waveform_decoder', False)
+        config_has_vision_encoder = config_dict.pop('has_vision_encoder', None)  # None = unknown
+        config_has_video_encoder = config_dict.pop('has_video_encoder', None)
+        config_has_generator = config_dict.pop('has_generator', None)
+        config_has_video_generator = config_dict.pop('has_video_generator', None)
+        config_has_cross_attention = config_dict.pop('has_cross_attention', None)
         config_dict.pop('has_audio_encoder', None)
         config_dict.pop('has_audio_decoder', None)
+        
+        if config_arch_version >= 2:
+            print(f"\n   📋 Config reports architecture version {config_arch_version}")
+            print(f"      (Config has component markers - will verify against weights)")
         
         # Detect architecture features from checkpoint weights
         model_path = os.path.join(cache_dir, "model.safetensors")
