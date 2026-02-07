@@ -825,32 +825,39 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
         target_mel = gpu_safe_index(target_mel, valid_mask)
         text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
-        # MEMORY OPTIMIZATION: Disable MAS during training to save memory on multi-GPU setups
-        # MAS requires extra memory for alignment matrix computation
-        # The decoder can learn alignment implicitly through duration prediction
-        audio_features = None
-        use_mas_training = False  # Disabled to save memory
-        
-        # Forward pass without MAS to save memory
+        # Get target audio features for MAS if audio encoder is available
+        audio_features_for_mas = None
+        if use_mas and audio_encoder is not None:
+            with torch.no_grad():
+                # Encode target mel to get audio features for alignment
+                audio_out, _ = audio_encoder(target_mel)
+                audio_features_for_mas = audio_out
+
+        # Forward pass with MAS enabled
         pred_mel, durations, alignment = audio_decoder(
             text_embeds, 
             target_length=target_mel.shape[-1],
-            audio_features=audio_features,
-            use_mas=use_mas_training,
+            audio_features=audio_features_for_mas,
+            use_mas=use_mas and audio_features_for_mas is not None,
         )
         
         # Mel reconstruction loss
         mel_loss = F.mse_loss(pred_mel, target_mel)
         
-        # Duration prediction loss - use simple L1 loss on durations
-        # This provides supervision without the memory overhead of MAS
-        duration_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
-        if durations is not None:
-            # Target duration is proportional to output length
-            target_duration = torch.ones_like(durations) * (target_mel.shape[-1] / durations.shape[-1])
-            duration_loss = F.l1_loss(durations, target_duration)
+        # MAS alignment loss (self-supervised)
+        mas_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
+        if use_mas and hasattr(audio_decoder, 'mas') and audio_features_for_mas is not None:
+            mas_loss = audio_decoder.mas.compute_duration(alignment).sum() * 0.0  # Placeholder for actual MAS loss
+            # The actual MAS loss is computed inside the decoder during forward pass
         
-        total_loss = mel_loss + 0.1 * duration_loss
+        # Duration prediction loss (if we have ground truth durations from alignment)
+        duration_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
+        if alignment is not None:
+            # Use alignment to compute pseudo ground-truth durations
+            gt_durations = alignment.sum(dim=-1)  # [B, T_text]
+            duration_loss = F.mse_loss(durations, gt_durations)
+        
+        total_loss = mel_loss + 0.1 * duration_loss + 0.01 * mas_loss
         
         # Clean up intermediate tensors
         del pred_mel, target_mel
