@@ -253,6 +253,12 @@ class XoronMultimodalModel(nn.Module):
         self.audio_decoder = self.audio_decoder.to(device_map['audio_decoder'])
         print(f"   ✅ Audio decoder -> {device_map['audio_decoder']}")
 
+        # Waveform decoder for Speech-to-Speech (direct audio output)
+        if hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None:
+            waveform_device = device_map.get('waveform_decoder', device_map['audio_decoder'])
+            self.waveform_decoder = self.waveform_decoder.to(waveform_device)
+            print(f"   ✅ Waveform decoder -> {waveform_device}")
+
         self.projector = self.projector.to(device_map['projector'])
         print(f"   ✅ Projector -> {device_map['projector']}")
 

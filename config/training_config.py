@@ -234,7 +234,7 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
 
     Strategy:
     - GPU 0: Encoders (vision, video, audio) + Projectors
-    - GPU 1+: LLM backbone + Cross-attention + Generators
+    - GPU 1+: LLM backbone + Cross-attention + Generators + Audio decoders
     """
     if num_gpus <= 1:
         return {
@@ -242,6 +242,7 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
             'audio_decoder': 'cuda:0',
+            'waveform_decoder': 'cuda:0',  # Raw waveform decoder for Speech-to-Speech
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:0',
@@ -254,12 +255,13 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
     elif num_gpus == 2:
         # MEMORY OPTIMIZED: Better balance across GPUs to prevent OOM
         # GPU 0: Encoders + generators (image/video)
-        # GPU 1: LLM + audio decoder + cross_attention + modality_markers
+        # GPU 1: LLM + audio decoder + waveform_decoder + cross_attention + modality_markers
         return {
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
             'audio_decoder': 'cuda:1',  # On GPU 1 to balance memory
+            'waveform_decoder': 'cuda:1',  # On GPU 1 with audio_decoder (shares context)
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:1',
@@ -275,6 +277,7 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
             'audio_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
+            'waveform_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',  # With audio_decoder
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:1',

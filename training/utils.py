@@ -716,15 +716,20 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
         if is_raw_waveform:
             # Convert raw waveform to mel spectrogram for TTS training
             # Use a simple mel extraction (the model will learn to match this)
+            # NOTE: MelSpectrogram requires FP32 for computation, then we cast back to model dtype
             try:
                 import torchaudio.transforms as T
                 mel_transform = T.MelSpectrogram(
                     sample_rate=16000, n_fft=1024, hop_length=256, n_mels=80
                 ).to(dec_device)
                 # [B, T] -> [B, mel_bins, time]
-                target_mel = mel_transform(target_audio)
-                target_mel = torch.log(target_mel.clamp(min=1e-5))
-            except Exception:
+                # MelSpectrogram requires FP32, so convert, compute, then cast back
+                with torch.no_grad():  # No gradients through mel extraction
+                    target_mel = mel_transform(target_audio.float())
+                    target_mel = torch.log(target_mel.clamp(min=1e-5))
+                    # Cast back to model dtype for forward pass
+                    target_mel = target_mel.to(dtype=dec_dtype)
+            except Exception as e:
                 # Fallback: skip this step if mel conversion fails
                 return None
         else:
@@ -824,20 +829,29 @@ def train_waveform_decoder_step(
         if target_waveform.numel() == 0:
             return None
         
+        # Get waveform decoder device and dtype
         dec_device = next(waveform_decoder.parameters()).device
         dec_dtype = next(waveform_decoder.parameters()).dtype
         
-        # Move tensors to correct device and dtype
+        # Get audio decoder device (may be different with model parallelism)
+        audio_dec_device = next(audio_decoder.parameters()).device
+        audio_dec_dtype = next(audio_decoder.parameters()).dtype
+        
+        # Move tensors to correct device and dtype for waveform decoder
         target_waveform = target_waveform.to(device=dec_device, dtype=dec_dtype)
-        text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
+        # text_embeds goes to audio_decoder first, so use its device
+        text_embeds_for_audio = text_embeds.to(device=audio_dec_device, dtype=audio_dec_dtype)
         
         # Filter by sample type if provided
         if sample_types is not None:
+            # Create mask on waveform decoder device
             type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
             target_waveform = gpu_safe_index(target_waveform, type_mask)
-            text_embeds = gpu_safe_index(text_embeds, type_mask)
+            # Also filter text_embeds on its device
+            type_mask_audio = type_mask.to(audio_dec_device)
+            text_embeds_for_audio = gpu_safe_index(text_embeds_for_audio, type_mask_audio)
         
         # Filter to valid samples (non-silent audio)
         valid_mask = target_waveform.abs().sum(dim=-1) > 1e-6
@@ -847,14 +861,16 @@ def train_waveform_decoder_step(
             return None
         
         target_waveform = gpu_safe_index(target_waveform, valid_mask)
-        text_embeds = gpu_safe_index(text_embeds, valid_mask)
+        # Filter text_embeds on its device
+        valid_mask_audio = valid_mask.to(audio_dec_device)
+        text_embeds_for_audio = gpu_safe_index(text_embeds_for_audio, valid_mask_audio)
         
         # Step 1: Generate mel features through audio decoder (no grad for decoder)
         with torch.no_grad():
-            pred_mel, durations, _ = audio_decoder(text_embeds)
+            pred_mel, durations, _ = audio_decoder(text_embeds_for_audio)
             # pred_mel: [B, n_mels, T_mel]
-            # Convert to decoder dtype to ensure consistency
-            pred_mel = pred_mel.to(dtype=dec_dtype)
+            # Move to waveform decoder device and convert to its dtype
+            pred_mel = pred_mel.to(device=dec_device, dtype=dec_dtype)
         
         # Step 2: Project mel to hidden_size for waveform decoder
         mel_features = pred_mel.transpose(1, 2)  # [B, T_mel, n_mels]
@@ -876,6 +892,10 @@ def train_waveform_decoder_step(
         # Step 3: Generate waveform
         pred_waveform = waveform_decoder(audio_features, target_length=target_waveform.shape[-1])
         
+        # Ensure output is same dtype as target for loss computation
+        if pred_waveform.dtype != target_waveform.dtype:
+            pred_waveform = pred_waveform.to(dtype=target_waveform.dtype)
+        
         # Step 4: Compute losses
         # L1 loss (time domain) - this is the main training signal with gradients
         l1_loss = F.l1_loss(pred_waveform, target_waveform)
@@ -893,7 +913,20 @@ def train_waveform_decoder_step(
         return l1_loss
         
     except Exception as e:
-        print(f"      ⚠️ Waveform decoder training error: {type(e).__name__}: {str(e)[:100]}")
+        # Detailed error logging for debugging
+        import traceback
+        error_details = f"{type(e).__name__}: {str(e)}"
+        print(f"      ⚠️ Waveform decoder training error: {error_details[:150]}")
+        # Log device info for "index is on cpu" errors
+        if "cpu" in str(e).lower() or "device" in str(e).lower():
+            try:
+                wd_device = next(waveform_decoder.parameters()).device if waveform_decoder else "None"
+                ad_device = next(audio_decoder.parameters()).device if audio_decoder else "None"
+                print(f"         Devices: waveform_decoder={wd_device}, audio_decoder={ad_device}")
+                if target_waveform is not None:
+                    print(f"         target_waveform device={target_waveform.device}, dtype={target_waveform.dtype}")
+            except:
+                pass
         return None
 
 
