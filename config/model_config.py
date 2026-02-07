@@ -124,7 +124,7 @@ class XoronConfig:
     # "random" - randomly sample scale each batch
     # "progressive" - start small, gradually increase scale during training
     # "curriculum" - alternate between scales in a curriculum
-    multi_scale_strategy: str = "random"
+    multi_scale_strategy: str = "progressive"
     multi_scale_warmup_epochs: int = 5  # For progressive strategy: epochs to reach max scale
     
     # Supported sizes for generation inference
