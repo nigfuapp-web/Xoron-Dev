@@ -133,7 +133,7 @@ class XoronMultimodalModel(nn.Module):
         )
         llm_config.use_flash_attention = config.use_flash_attention
         
-        # Ring Attention for efficient 128K context (replaces sliding window)
+        # Ring Attention for efficient 128K context
         llm_config.use_ring_attention = getattr(config, 'use_ring_attention', True)
         llm_config.ring_attention_chunk_size = getattr(config, 'ring_attention_chunk_size', 4096)
 
@@ -149,8 +149,8 @@ class XoronMultimodalModel(nn.Module):
         # 6. LLM with MoE
         print(f"\n🧠 Building LLM: {config.hidden_size}d, {config.num_layers}L")
         print(f"   📏 Context: {config.max_position_embeddings//1024}K positions")
-        if config.use_sliding_window:
-            print(f"   🪟 Sliding Window: {config.sliding_window} tokens (efficient 128K)")
+        if config.use_ring_attention:
+            print(f"   🔄 Ring Attention: {config.ring_attention_chunk_size} chunk size")
         print(f"   🎯 MoE: {config.num_experts} experts, top-{config.num_experts_per_tok}")
         print(f"   ⚡ Flash Attention: {config.use_flash_attention}")
         self.llm = MoELlamaForCausalLM(llm_config, moe_config)

@@ -101,12 +101,12 @@ datasets:
 
 ## 🌟 Model Highlights
 
-* **Architecture:** Mixture of Experts (8 Experts + 1 Shared) with Sliding Window Attention.
+* **Architecture:** Mixture of Experts (8 Experts + 1 Shared) with Ring Attention.
 * **Vision:** Native understanding of images (384px) and video (up to 32 frames) via SigLIP-2.
 * **Generation:** Integrated MobileDiffusion for fast on-device Image & Video generation.
 * **Audio:** Full duplex capabilities with Conformer-based ASR (Speech-to-Text) and Neural TTS.
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
-* **Context:** Efficient 128K context window using sliding window attention (4096 local window).
+* **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
 
 ---
 

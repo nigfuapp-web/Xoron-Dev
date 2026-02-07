@@ -73,17 +73,6 @@ class TestAttentionKVCache(unittest.TestCase):
         self.assertEqual(v.shape, (2, 4, 15, 64))
         self.assertEqual(cache.seen_tokens, 15)
         
-    def test_sliding_window_eviction(self):
-        """Test sliding window eviction."""
-        cache = self.AttentionKVCache()
-        key = torch.randn(2, 4, 100, 64)
-        value = torch.randn(2, 4, 100, 64)
-        
-        k, v = cache.update(key, value, sliding_window=50)
-        
-        self.assertEqual(k.shape, (2, 4, 50, 64))
-        self.assertEqual(v.shape, (2, 4, 50, 64))
-        
     def test_get_seq_length(self):
         """Test get_seq_length method."""
         cache = self.AttentionKVCache()
@@ -166,24 +155,6 @@ class TestFlashAttention(unittest.TestCase):
         self.assertEqual(output.shape, (2, 4, 1, 64))
         self.assertIsNotNone(present_kv)
         self.assertEqual(present_kv[0].shape, (2, 4, 11, 64))
-        
-    def test_sliding_window(self):
-        """Test sliding window attention."""
-        attn = self.FlashAttention(sliding_window=50)
-        query = torch.randn(2, 4, 1, 64)
-        key = torch.randn(2, 4, 1, 64)
-        value = torch.randn(2, 4, 1, 64)
-        past_key = torch.randn(2, 4, 100, 64)
-        past_value = torch.randn(2, 4, 100, 64)
-        
-        _, present_kv, _ = attn(
-            query, key, value,
-            past_key_value=(past_key, past_value),
-            use_cache=True
-        )
-        
-        # Should be truncated to sliding window
-        self.assertEqual(present_kv[0].shape[2], 50)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")

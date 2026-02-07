@@ -37,15 +37,19 @@ class TrueStreamingDataset(IterableDataset):
         tokenizer,
         tokens: Dict[str, str],
         image_processor,
-        max_length: int = 1024,
-        max_per_epoch: int = 2000,  # Default from TrainingConfig
-        max_per_dataset: int = 100,  # Default from TrainingConfig
-        sample_repeat: int = 2,  # Default from TrainingConfig
+        max_length: int = 1024,  # From TrainingConfig.max_seq_length
+        max_per_epoch: int = 2000,  # From TrainingConfig.max_per_epoch
+        max_per_dataset: int = 100,  # From TrainingConfig.max_per_dataset
+        sample_repeat: int = 2,  # From TrainingConfig.sample_repeat
         voice_processor=None,
-        max_video_frames: int = 16,
-        video_size: int = 256,  # 256x256 for efficient training
+        max_video_frames: int = 16,  # From XoronConfig.max_video_frames
+        video_size: int = 256,  # From XoronConfig.generation_video_size
+        image_size: int = 384,  # From XoronConfig.vision_image_size
+        audio_n_mels: int = 80,  # From XoronConfig.audio_n_mels
+        audio_max_length: int = 1000,  # From XoronConfig.audio_max_length
+        audio_sample_rate: int = 16000,  # From XoronConfig.audio_sample_rate
         resume_state_path: str = None,
-        use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
+        use_raw_waveform: bool = True,  # From XoronConfig.use_raw_waveform
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -59,7 +63,11 @@ class TrueStreamingDataset(IterableDataset):
         self.voice_processor = voice_processor
         self.max_video_frames = max_video_frames
         self.video_size = video_size
-        self.use_raw_waveform = use_raw_waveform  # SOTA audio mode
+        self.image_size = image_size
+        self.audio_n_mels = audio_n_mels
+        self.audio_max_length = audio_max_length
+        self.audio_sample_rate = audio_sample_rate
+        self.use_raw_waveform = use_raw_waveform
 
         self.total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
         
@@ -320,9 +328,9 @@ class TrueStreamingDataset(IterableDataset):
                 processed = self.image_processor(img, return_tensors="pt")
                 tensor = processed['pixel_values'].squeeze(0)
             else:
-                # Fallback: use 384x384 for SigLIP compatibility with proper normalization
+                # Fallback: use image_size from config for SigLIP compatibility with proper normalization
                 # SigLIP uses ImageNet mean/std normalization
-                img = img.resize((384, 384))
+                img = img.resize((self.image_size, self.image_size))
                 tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
                 # Apply ImageNet normalization (used by SigLIP/CLIP)
                 mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
@@ -593,8 +601,8 @@ class TrueStreamingDataset(IterableDataset):
         if audio_data is None:
             return None
         
-        # Get sampling rate from various possible fields
-        sampling_rate = sample.get('sampling_rate', sample.get('sample_rate', 16000))
+        # Get sampling rate from various possible fields (default from config)
+        sampling_rate = sample.get('sampling_rate', sample.get('sample_rate', self.audio_sample_rate))
         
         def _preprocess_waveform(waveform, sr):
             """Preprocess waveform: resample, truncate, normalize."""
@@ -986,7 +994,7 @@ class TrueStreamingDataset(IterableDataset):
             # Process media on-demand
             pixel_values = self._process_image(raw_image_data) if raw_image_data else None
             if pixel_values is None:
-                pixel_values = torch.zeros(3, 384, 384)
+                pixel_values = torch.zeros(3, self.image_size, self.image_size)
             
             video_frames = None
             is_video_dtype = dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']
@@ -1021,14 +1029,13 @@ class TrueStreamingDataset(IterableDataset):
             if raw_audio_data and dtype in ['voice_asr', 'voice_tts']:
                 audio_features = self._process_audio(raw_audio_data, sample_metadata)
             
-            max_audio_len = 1000
             if audio_features is None:
-                audio_features = torch.zeros(80, max_audio_len)
+                audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
             else:
-                if audio_features.shape[1] > max_audio_len:
-                    audio_features = audio_features[:, :max_audio_len]
-                elif audio_features.shape[1] < max_audio_len:
-                    pad = torch.zeros(audio_features.shape[0], max_audio_len - audio_features.shape[1])
+                if audio_features.shape[1] > self.audio_max_length:
+                    audio_features = audio_features[:, :self.audio_max_length]
+                elif audio_features.shape[1] < self.audio_max_length:
+                    pad = torch.zeros(audio_features.shape[0], self.audio_max_length - audio_features.shape[1])
                     audio_features = torch.cat([audio_features, pad], dim=1)
             
             # Validate: ensure we have at least some valid labels to train on
@@ -1263,15 +1270,19 @@ def create_train_eval_datasets(
     tokenizer,
     tokens: Dict[str, str],
     image_processor,
-    max_length: int = 1024,
-    max_per_epoch_train: int = 2000,
-    max_per_dataset_train: int = 100,
-    max_per_dataset_eval: int = 10,
-    sample_repeat: int = 2,
+    max_length: int = 1024,  # From TrainingConfig.max_seq_length
+    max_per_epoch_train: int = 2000,  # From TrainingConfig.max_per_epoch
+    max_per_dataset_train: int = 100,  # From TrainingConfig.max_per_dataset
+    max_per_dataset_eval: int = 10,  # From TrainingConfig.max_per_dataset_eval
+    sample_repeat: int = 2,  # From TrainingConfig.sample_repeat
     voice_processor=None,
-    max_video_frames: int = 16,
-    video_size: int = 256,  # 256x256 for efficient training
-    use_raw_waveform: bool = True,  # SOTA: use raw waveform instead of mel spectrogram
+    max_video_frames: int = 16,  # From XoronConfig.max_video_frames
+    video_size: int = 256,  # From XoronConfig.generation_video_size
+    image_size: int = 384,  # From XoronConfig.vision_image_size
+    audio_n_mels: int = 80,  # From XoronConfig.audio_n_mels
+    audio_max_length: int = 1000,  # From XoronConfig.audio_max_length
+    audio_sample_rate: int = 16000,  # From XoronConfig.audio_sample_rate
+    use_raw_waveform: bool = True,  # From XoronConfig.use_raw_waveform
 ):
     """
     Create separate train and eval datasets that sample INDEPENDENTLY from each dataset.
@@ -1340,6 +1351,10 @@ def create_train_eval_datasets(
         voice_processor=voice_processor,
         max_video_frames=max_video_frames,
         video_size=video_size,
+        image_size=image_size,
+        audio_n_mels=audio_n_mels,
+        audio_max_length=audio_max_length,
+        audio_sample_rate=audio_sample_rate,
         use_raw_waveform=use_raw_waveform,
     )
     
@@ -1359,6 +1374,10 @@ def create_train_eval_datasets(
         voice_processor=voice_processor,
         max_video_frames=max_video_frames,
         video_size=video_size,
+        image_size=image_size,
+        audio_n_mels=audio_n_mels,
+        audio_max_length=audio_max_length,
+        audio_sample_rate=audio_sample_rate,
         use_raw_waveform=use_raw_waveform,
     )
     

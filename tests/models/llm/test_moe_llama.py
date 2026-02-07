@@ -37,8 +37,8 @@ class MockConfig:
         self.max_position_embeddings = 4096
         self.use_flash_attention = True
         self.attention_dropout = 0.0
-        self.use_sliding_window = True
-        self.sliding_window = 512
+        self.use_ring_attention = True
+        self.ring_attention_chunk_size = 512
         self.intermediate_size = 1024
         self.num_hidden_layers = 2
         self.vocab_size = 32000

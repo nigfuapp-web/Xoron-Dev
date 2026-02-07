@@ -21,7 +21,7 @@
 ### LLM Backbone
 - **MLA (Multi-Head Latent Attention)** - Compressed KV cache for memory efficiency
 - **YaRN/LongRoPE** - Superior 128K+ context extrapolation
-- **Ring Attention** - Distributed FP16 sequence processing (replaces sliding window)
+- **Ring Attention** - Distributed FP16 sequence processing for 128K+ context
 - **Aux-Lossless MoE** - No auxiliary loss, load balance through architecture
 - **Isolated Shared Expert** - Dedicated always-active expert
 
@@ -466,7 +466,7 @@ class XoronConfig:
     max_position_embeddings: int = 131072  # 128K
     tie_word_embeddings: bool = True  # Share input/output embeddings
     
-    # Ring Attention (replaces Sliding Window)
+    # Ring Attention for 128K+ context
     use_ring_attention: bool = True
     ring_attention_chunk_size: int = 4096  # FP16 compatible
     

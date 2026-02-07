@@ -142,15 +142,13 @@ class TestXoronConfig(unittest.TestCase):
         self.assertEqual(original.num_layers, restored.num_layers)
         self.assertEqual(original.use_moe, restored.use_moe)
         
-    def test_sliding_window_configuration(self):
-        """Test Ring Attention configuration (replaces sliding window)."""
+    def test_ring_attention_configuration(self):
+        """Test Ring Attention configuration."""
         config = XoronConfig()
         
-        # Ring Attention is the new default (sliding window deprecated)
+        # Ring Attention is the default for efficient 128K+ context
         self.assertTrue(config.use_ring_attention)
         self.assertEqual(config.ring_attention_chunk_size, 4096)
-        self.assertFalse(config.use_sliding_window)  # Deprecated
-        self.assertEqual(config.sliding_window, 4096)  # Legacy compat
         
     def test_cross_attention_configuration(self):
         """Test cross-attention configuration."""

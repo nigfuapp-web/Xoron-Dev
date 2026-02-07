@@ -12,7 +12,7 @@ class XoronConfig:
     SOTA Features:
     - MLA (Multi-Head Latent Attention) for compressed KV cache
     - MoE with shared expert isolation (DeepSeek-style)
-    - Ring Attention for distributed 128K+ context (replaces sliding window)
+    - Ring Attention for distributed 128K+ context
     - YaRN/LongRoPE for superior long-context extrapolation
     - LoRA variants (rsLoRA, DoRA, LoRA+)
     - Perceiver Resampler for vision projection
@@ -37,11 +37,9 @@ class XoronConfig:
     max_position_embeddings: int = 131072  # 128K context length
     rms_norm_eps: float = 1e-6
     
-    # Ring Attention (replaces sliding window for efficient 128K+ context with FP16)
+    # Ring Attention (efficient 128K+ context with FP16)
     use_ring_attention: bool = True
     ring_attention_chunk_size: int = 4096  # Ring attention chunk size
-    use_sliding_window: bool = False  # Deprecated - use ring attention instead
-    sliding_window: int = 4096  # Legacy - kept for compatibility
     
     # Tie word embeddings (parameter efficiency)
     tie_word_embeddings: bool = True
@@ -99,6 +97,7 @@ class XoronConfig:
     # Audio Configuration (SOTA: Raw Waveform Tokenizer, MAS, RMLA, Zero-Shot Cloning)
     audio_sample_rate: int = 16000
     audio_n_mels: int = 80
+    audio_max_length: int = 1000  # Max audio sequence length (frames)
     audio_num_speakers: int = 256  # Speaker embedding size
     use_raw_waveform: bool = True  # Use raw waveform tokenizer instead of mel spectrogram
     audio_kv_lora_rank: int = 256  # KV compression rank for RMLA
@@ -153,8 +152,6 @@ class XoronConfig:
             'rms_norm_eps': self.rms_norm_eps,
             'use_ring_attention': self.use_ring_attention,
             'ring_attention_chunk_size': self.ring_attention_chunk_size,
-            'use_sliding_window': self.use_sliding_window,
-            'sliding_window': self.sliding_window,
             'tie_word_embeddings': self.tie_word_embeddings,
             'use_moe': self.use_moe,
             'num_experts': self.num_experts,
@@ -196,6 +193,7 @@ class XoronConfig:
             'generation_video_use_temporal_moe': self.generation_video_use_temporal_moe,
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
+            'audio_max_length': self.audio_max_length,
             'audio_num_speakers': self.audio_num_speakers,
             'use_raw_waveform': self.use_raw_waveform,
             'audio_kv_lora_rank': self.audio_kv_lora_rank,

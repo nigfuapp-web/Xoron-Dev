@@ -5,7 +5,6 @@ Features:
 - Full KV cache support for efficient autoregressive generation
 - Flash Attention 2 integration via PyTorch SDPA
 - Pre-scaled Q/K for FP16 stability (prevents overflow in Q@K^T)
-- Sliding window attention support
 - Grouped Query Attention (GQA) support
 - Memory-efficient cross-attention for multimodal fusion
 """
@@ -46,7 +45,6 @@ class AttentionKVCache:
     KV Cache for efficient autoregressive attention.
     
     Features:
-    - Sliding window support with automatic eviction
     - Memory-efficient storage
     - Support for cross-attention caching
     """
@@ -58,7 +56,6 @@ class AttentionKVCache:
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        sliding_window: int = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Update cache with new key/value states.
@@ -66,7 +63,6 @@ class AttentionKVCache:
         Args:
             key_states: New key states [batch, num_heads, seq_len, head_dim]
             value_states: New value states [batch, num_heads, seq_len, head_dim]
-            sliding_window: Optional sliding window size for eviction
             
         Returns:
             Updated key and value states including cache
@@ -79,11 +75,6 @@ class AttentionKVCache:
             self.value_cache = torch.cat([self.value_cache, value_states], dim=2)
         
         self.seen_tokens += key_states.shape[2]
-        
-        # Apply sliding window eviction if needed
-        if sliding_window is not None and self.key_cache.shape[2] > sliding_window:
-            self.key_cache = self.key_cache[:, :, -sliding_window:, :]
-            self.value_cache = self.value_cache[:, :, -sliding_window:, :]
         
         return self.key_cache, self.value_cache
     
@@ -107,7 +98,6 @@ class FlashAttention(nn.Module):
     Uses PyTorch's scaled_dot_product_attention when available,
     with fallback to standard attention. Supports:
     - KV caching for efficient generation
-    - Sliding window attention
     - Causal masking
     - Attention dropout
     - Pre-scaled Q/K for FP16 stability
@@ -117,13 +107,11 @@ class FlashAttention(nn.Module):
         self, 
         dropout: float = 0.0, 
         causal: bool = False,
-        sliding_window: int = None,
         head_dim: int = None,
     ):
         super().__init__()
         self.dropout = dropout
         self.causal = causal
-        self.sliding_window = sliding_window
         self._flash_available = flash_attention_available()
         # Store head_dim for Q/K scaling; will be inferred from input if not provided
         self._head_dim = head_dim
@@ -167,11 +155,6 @@ class FlashAttention(nn.Module):
             past_key, past_value = past_key_value
             key = torch.cat([past_key, key], dim=2)
             value = torch.cat([past_value, value], dim=2)
-            
-            # Apply sliding window eviction
-            if self.sliding_window is not None and key.shape[2] > self.sliding_window:
-                key = key[:, :, -self.sliding_window:, :]
-                value = value[:, :, -self.sliding_window:, :]
         
         # Prepare cache for return
         present_key_value = (key, value) if use_cache else None
