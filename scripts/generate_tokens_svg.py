@@ -128,8 +128,8 @@ TOKEN_CATEGORIES = {
     'Audio & Speech': {
         'color': COLORS['cat_audio'],
         'icon': '🎤',
-        'tokens': ['listen_start', 'listen_end', 'speak_start', 'speak_end', 'audio_start', 'audio_end', 'emotion_neutral', 'emotion_happy', 'emotion_sad', 'emotion_angry', 'prosody_fast', 'prosody_slow', 'prosody_emphasis'],
-        'description': 'TTS emotions and prosody control'
+        'tokens': ['listen_start', 'listen_end', 'speak_start', 'speak_end', 'audio_start', 'audio_end', 'audio_prompt_start', 'audio_prompt_end', 'speaker_ref_start', 'speaker_ref_end'],
+        'description': 'Voice I/O and audio prompting for zero-shot cloning'
     },
     'Structured Data': {
         'color': COLORS['cat_data'],

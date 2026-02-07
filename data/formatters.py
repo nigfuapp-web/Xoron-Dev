@@ -22,20 +22,6 @@ class MultimodalFormatter:
     def __init__(self, tokens: Dict[str, str], image_processor=None):
         self.t = tokens
         self.image_processor = image_processor
-        
-        # Emotion list for TTS/voice synthesis
-        self.emotions = [
-            'neutral', 'happy', 'sad', 'angry', 'surprised',
-            'fearful', 'disgusted', 'excited', 'calm', 'whisper',
-            'amused', 'confused', 'curious'
-        ]
-        
-        # Prosody options for TTS
-        self.prosody_options = {
-            'speed': ['fast', 'slow', 'normal_speed'],
-            'volume': ['loud', 'soft', 'normal_volume'],
-            'pitch': ['high_pitch', 'low_pitch', 'normal_pitch'],
-        }
     
     def _wrap_sequence(self, text: str) -> str:
         """Wrap text with BOS/EOS tokens. ALWAYS applied."""
@@ -139,42 +125,6 @@ class MultimodalFormatter:
         if to_scene:
             parts.append(f"To: {to_scene}")
         return " ".join(parts)
-    
-    # === EMOTION AND PROSODY METHODS ===
-    
-    def _add_emotion_token(self, text: str, emotion: Optional[str]) -> str:
-        """Add emotion token prefix to text for TTS/voice synthesis."""
-        if emotion is None:
-            return text
-        token_key = f"emotion_{emotion}"
-        if token_key in self.t:
-            return f"{self.t[token_key]}{text}"
-        return text
-    
-    def _get_random_emotion(self) -> str:
-        """Get a random emotion from the emotions list."""
-        return random.choice(self.emotions)
-    
-    def _add_prosody_tokens(self, text: str, speed: str = None, 
-                           volume: str = None, pitch: str = None) -> str:
-        """Add prosody tokens (speed, volume, pitch) to text for TTS."""
-        prefixes = []
-        if speed and f"prosody_{speed}" in self.t:
-            prefixes.append(self.t[f"prosody_{speed}"])
-        if volume and f"prosody_{volume}" in self.t:
-            prefixes.append(self.t[f"prosody_{volume}"])
-        if pitch and f"prosody_{pitch}" in self.t:
-            prefixes.append(self.t[f"prosody_{pitch}"])
-        prefix = "".join(prefixes)
-        return f"{prefix}{text}" if prefix else text
-    
-    def _get_random_prosody(self) -> Dict[str, str]:
-        """Get random prosody settings for TTS."""
-        return {
-            'speed': random.choice(self.prosody_options['speed']),
-            'volume': random.choice(self.prosody_options['volume']),
-            'pitch': random.choice(self.prosody_options['pitch']),
-        }
     
     def _wrap_with_table(self, headers: List[str], rows: List[List[str]]) -> str:
         """Format data as a table with proper tokens."""
@@ -461,7 +411,6 @@ class MultimodalFormatter:
         return "\n".join(parts)
     
     def _format_conversation(self, messages: List[Dict], is_code: bool = False, 
-                            add_emotion: bool = False, add_prosody: bool = False,
                             language_hint: str = None) -> Optional[str]:
         """Format a list of messages into conversation format with proper tokens."""
         if not messages or not isinstance(messages, list):
@@ -478,24 +427,16 @@ class MultimodalFormatter:
             if role in ["user", "human", "prompter"]:
                 parts.append(f"{self.t['user_start']}\n{content}\n{self.t['user_end']}")
             elif role in ["assistant", "gpt", "bot", "model"]:
-                # Optionally add emotion/prosody for TTS training
-                assistant_content = content
-                if add_emotion:
-                    assistant_content = self._add_emotion_token(assistant_content, self._get_random_emotion())
-                if add_prosody:
-                    prosody = self._get_random_prosody()
-                    assistant_content = self._add_prosody_tokens(assistant_content, **prosody)
-                
                 if is_code:
                     # Detect language and use language token
-                    lang = language_hint or self._detect_language(assistant_content)
+                    lang = language_hint or self._detect_language(content)
                     lang_token = self._get_language_token(lang)
                     if lang_token:
-                        parts.append(f"{self.t['assistant_start']}\n{self.t['code_start']}{lang_token}\n{assistant_content}\n{self.t['code_end']}\n{self.t['assistant_end']}")
+                        parts.append(f"{self.t['assistant_start']}\n{self.t['code_start']}{lang_token}\n{content}\n{self.t['code_end']}\n{self.t['assistant_end']}")
                     else:
-                        parts.append(f"{self.t['assistant_start']}\n{self.t['code_start']}\n{assistant_content}\n{self.t['code_end']}\n{self.t['assistant_end']}")
+                        parts.append(f"{self.t['assistant_start']}\n{self.t['code_start']}\n{content}\n{self.t['code_end']}\n{self.t['assistant_end']}")
                 else:
-                    parts.append(f"{self.t['assistant_start']}\n{assistant_content}\n{self.t['assistant_end']}")
+                    parts.append(f"{self.t['assistant_start']}\n{content}\n{self.t['assistant_end']}")
             elif role in ["system"]:
                 parts.append(f"{self.t['system_start']}\n{content}\n{self.t['system_end']}")
             elif role in ["function", "tool"]:
@@ -1331,12 +1272,12 @@ class MultimodalFormatter:
             pass
         return None
 
-    def format_voice_tts_sample(self, sample: Dict, add_emotion: bool = True, add_prosody: bool = True) -> Optional[Dict]:
+    def format_voice_tts_sample(self, sample: Dict) -> Optional[Dict]:
         """
         Format TTS samples for text-to-speech training.
         
-        Includes hidden emotion and prosody tokens that control speech synthesis
-        but are stripped from user-visible text output.
+        Uses audio prompting tokens for zero-shot voice cloning.
+        The model learns to generate speech from text using speaker reference audio.
         """
         try:
             # LibriTTS-R uses 'text_normalized', MLS uses 'transcript'
@@ -1351,23 +1292,12 @@ class MultimodalFormatter:
             if len(text) < 2:
                 return None
             
-            # Build the speech output with emotion/prosody tokens
-            speech_content = "[SPEECH]"
-            
-            # Add emotion token (hidden from user, used by TTS decoder)
-            if add_emotion:
-                emotion = self._get_random_emotion()
-                speech_content = self._add_emotion_token(speech_content, emotion)
-            
-            # Add prosody tokens (hidden from user, used by TTS decoder)
-            if add_prosody:
-                prosody = self._get_random_prosody()
-                speech_content = self._add_prosody_tokens(speech_content, **prosody)
-            
+            # Use audio prompting tokens for zero-shot voice cloning
+            # [SPEECH] placeholder will be replaced with actual audio embeddings during training
             formatted_text = (
                 f"{self.t['user_start']}\nSay: {text}\n{self.t['user_end']}\n"
                 f"{self.t['assistant_start']}\n"
-                f"{self.t['speak_start']}{speech_content}{self.t['speak_end']}\n"
+                f"{self.t['speak_start']}[SPEECH]{self.t['speak_end']}\n"
                 f"{self.t['assistant_end']}"
             )
             
@@ -1375,67 +1305,6 @@ class MultimodalFormatter:
             formatted_text = self._wrap_sequence(formatted_text)
             
             return {"text": formatted_text, "type": "voice_tts", "has_audio": True}
-        except:
-            pass
-        return None
-    
-    def format_expressive_tts_sample(self, sample: Dict, emotion: str = None, 
-                                      speed: str = None, volume: str = None, pitch: str = None) -> Optional[Dict]:
-        """
-        Format TTS samples with specific emotion and prosody settings.
-        
-        This allows training on samples with explicit emotion/prosody labels.
-        
-        Args:
-            sample: Input sample with text
-            emotion: Specific emotion (happy, sad, angry, etc.)
-            speed: Speech speed (fast, slow, normal_speed)
-            volume: Speech volume (loud, soft, whisper, normal_volume)
-            pitch: Speech pitch (high_pitch, low_pitch, normal_pitch)
-        """
-        try:
-            text = sample.get("text_normalized", sample.get("text", sample.get("transcript", "")))
-            if not text:
-                return None
-            text = str(text).strip()
-            if len(text) < 2:
-                return None
-            
-            # Build speech content with specified emotion/prosody
-            speech_content = "[SPEECH]"
-            
-            if emotion:
-                speech_content = self._add_emotion_token(speech_content, emotion)
-            
-            speech_content = self._add_prosody_tokens(speech_content, speed, volume, pitch)
-            
-            # Build user prompt that specifies the desired style
-            style_parts = []
-            if emotion:
-                style_parts.append(f"in a {emotion} tone")
-            if speed and speed != 'normal_speed':
-                style_parts.append(f"speaking {speed.replace('_', ' ')}")
-            if volume and volume != 'normal_volume':
-                style_parts.append(f"{volume.replace('_', ' ')}")
-            
-            style_instruction = f" ({', '.join(style_parts)})" if style_parts else ""
-            
-            formatted_text = (
-                f"{self.t['user_start']}\nSay{style_instruction}: {text}\n{self.t['user_end']}\n"
-                f"{self.t['assistant_start']}\n"
-                f"{self.t['speak_start']}{speech_content}{self.t['speak_end']}\n"
-                f"{self.t['assistant_end']}"
-            )
-            
-            formatted_text = self._wrap_sequence(formatted_text)
-            
-            return {
-                "text": formatted_text, 
-                "type": "voice_tts_expressive", 
-                "has_audio": True,
-                "emotion": emotion,
-                "prosody": {"speed": speed, "volume": volume, "pitch": pitch}
-            }
         except:
             pass
         return None

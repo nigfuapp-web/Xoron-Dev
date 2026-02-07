@@ -34,18 +34,14 @@ class TestMultimodalFormatterInit(unittest.TestCase):
             'assistant_end': '<|/assistant|>',
             'think_start': '<|think|>',
             'think_end': '<|/think|>',
-            'emotion_happy': '<|happy|>',
-            'emotion_sad': '<|sad|>',
-            'emotion_neutral': '<|neutral|>',
-            'prosody_fast': '<|fast|>',
-            'prosody_slow': '<|slow|>',
-            'prosody_normal_speed': '<|normal_speed|>',
-            'prosody_loud': '<|loud|>',
-            'prosody_soft': '<|soft|>',
-            'prosody_normal_volume': '<|normal_volume|>',
-            'prosody_high_pitch': '<|high_pitch|>',
-            'prosody_low_pitch': '<|low_pitch|>',
-            'prosody_normal_pitch': '<|normal_pitch|>',
+            'speak_start': '<|speak|>',
+            'speak_end': '<|/speak|>',
+            'listen_start': '<|listen|>',
+            'listen_end': '<|/listen|>',
+            'audio_prompt_start': '<|audio_prompt|>',
+            'audio_prompt_end': '<|/audio_prompt|>',
+            'speaker_ref_start': '<|speaker_ref|>',
+            'speaker_ref_end': '<|/speaker_ref|>',
         }
         
     def test_initialization(self):
@@ -61,22 +57,6 @@ class TestMultimodalFormatterInit(unittest.TestCase):
         formatter = MultimodalFormatter(self.tokens, image_processor=mock_processor)
         
         self.assertEqual(formatter.image_processor, mock_processor)
-        
-    def test_emotions_list(self):
-        """Test emotions list is initialized."""
-        formatter = MultimodalFormatter(self.tokens)
-        
-        self.assertIn('neutral', formatter.emotions)
-        self.assertIn('happy', formatter.emotions)
-        self.assertIn('sad', formatter.emotions)
-        
-    def test_prosody_options(self):
-        """Test prosody options are initialized."""
-        formatter = MultimodalFormatter(self.tokens)
-        
-        self.assertIn('speed', formatter.prosody_options)
-        self.assertIn('volume', formatter.prosody_options)
-        self.assertIn('pitch', formatter.prosody_options)
 
 
 class TestWrapSequence(unittest.TestCase):
@@ -149,96 +129,6 @@ class TestFormatSimpleQA(unittest.TestCase):
         
         self.assertFalse(result.startswith("<|bos|>"))
         self.assertFalse(result.endswith("<|eos|>"))
-
-
-class TestEmotionTokens(unittest.TestCase):
-    """Test emotion token methods."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        self.tokens = {
-            'bos': '<|bos|>',
-            'eos': '<|eos|>',
-            'emotion_happy': '<|happy|>',
-            'emotion_sad': '<|sad|>',
-            'emotion_neutral': '<|neutral|>',
-        }
-        self.formatter = MultimodalFormatter(self.tokens)
-        
-    def test_add_emotion_token(self):
-        """Test adding emotion token."""
-        result = self.formatter._add_emotion_token("Hello!", "happy")
-        
-        self.assertEqual(result, "<|happy|>Hello!")
-        
-    def test_add_emotion_token_none(self):
-        """Test adding no emotion token."""
-        result = self.formatter._add_emotion_token("Hello!", None)
-        
-        self.assertEqual(result, "Hello!")
-        
-    def test_add_emotion_token_unknown(self):
-        """Test adding unknown emotion token."""
-        result = self.formatter._add_emotion_token("Hello!", "unknown_emotion")
-        
-        self.assertEqual(result, "Hello!")
-        
-    def test_get_random_emotion(self):
-        """Test getting random emotion."""
-        emotion = self.formatter._get_random_emotion()
-        
-        self.assertIn(emotion, self.formatter.emotions)
-
-
-class TestProsodyTokens(unittest.TestCase):
-    """Test prosody token methods."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        self.tokens = {
-            'bos': '<|bos|>',
-            'eos': '<|eos|>',
-            'prosody_fast': '<|fast|>',
-            'prosody_slow': '<|slow|>',
-            'prosody_normal_speed': '<|normal_speed|>',
-            'prosody_loud': '<|loud|>',
-            'prosody_soft': '<|soft|>',
-            'prosody_normal_volume': '<|normal_volume|>',
-            'prosody_high_pitch': '<|high_pitch|>',
-            'prosody_low_pitch': '<|low_pitch|>',
-            'prosody_normal_pitch': '<|normal_pitch|>',
-        }
-        self.formatter = MultimodalFormatter(self.tokens)
-        
-    def test_add_prosody_tokens_speed(self):
-        """Test adding speed prosody token."""
-        result = self.formatter._add_prosody_tokens("Hello!", speed="fast")
-        
-        self.assertEqual(result, "<|fast|>Hello!")
-        
-    def test_add_prosody_tokens_multiple(self):
-        """Test adding multiple prosody tokens."""
-        result = self.formatter._add_prosody_tokens("Hello!", speed="fast", volume="loud", pitch="high_pitch")
-        
-        self.assertIn("<|fast|>", result)
-        self.assertIn("<|loud|>", result)
-        self.assertIn("<|high_pitch|>", result)
-        self.assertIn("Hello!", result)
-        
-    def test_add_prosody_tokens_none(self):
-        """Test adding no prosody tokens."""
-        result = self.formatter._add_prosody_tokens("Hello!")
-        
-        self.assertEqual(result, "Hello!")
-        
-    def test_get_random_prosody(self):
-        """Test getting random prosody settings."""
-        prosody = self.formatter._get_random_prosody()
-        
-        self.assertIn('speed', prosody)
-        self.assertIn('volume', prosody)
-        self.assertIn('pitch', prosody)
-        self.assertIn(prosody['speed'], self.formatter.prosody_options['speed'])
 
 
 class TestPlanningTokens(unittest.TestCase):

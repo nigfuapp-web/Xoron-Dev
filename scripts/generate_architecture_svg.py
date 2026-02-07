@@ -402,7 +402,7 @@ def generate_svg() -> str:
     # Audio Decoder
     svg_parts.append(create_component_box(
         out_start_x + 3*(out_w + out_gap), output_y, out_w, out_h,
-        'Audio Decoder', 'Neural TTS', '13 emotions • 256 speakers',
+        'Audio Decoder', 'Neural TTS', 'Zero-shot voice cloning',
         'grad_green', '🔊'
     ))
 

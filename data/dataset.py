@@ -38,9 +38,9 @@ class TrueStreamingDataset(IterableDataset):
         tokens: Dict[str, str],
         image_processor,
         max_length: int = 1024,
-        max_per_epoch: int = 12000,
-        max_per_dataset: int = 500,
-        sample_repeat: int = 1,
+        max_per_epoch: int = 2000,  # Default from TrainingConfig
+        max_per_dataset: int = 100,  # Default from TrainingConfig
+        sample_repeat: int = 2,  # Default from TrainingConfig
         voice_processor=None,
         max_video_frames: int = 16,
         video_size: int = 256,  # 256x256 for efficient training
