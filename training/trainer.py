@@ -992,7 +992,8 @@ class XoronTrainer:
                     sample_types=sample_types
                 )
                 if img_diff_loss is not None:
-                    img_diff_loss = img_diff_loss.to(total_loss.device)
+                    # Move to same device AND dtype as total_loss
+                    img_diff_loss = img_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                     total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
                     epoch_img_diff_loss += img_diff_loss.item()
                     num_img_diff += 1
@@ -1005,7 +1006,8 @@ class XoronTrainer:
                     sample_types=sample_types
                 )
                 if vid_diff_loss is not None:
-                    vid_diff_loss = vid_diff_loss.to(total_loss.device)
+                    # Move to same device AND dtype as total_loss
+                    vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                     total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
                     epoch_vid_diff_loss += vid_diff_loss.item()
                     num_vid_diff += 1
@@ -1017,7 +1019,8 @@ class XoronTrainer:
                     sample_types=sample_types
                 )
                 if asr_loss is not None:
-                    asr_loss = asr_loss.to(total_loss.device)
+                    # Move to same device AND dtype as total_loss
+                    asr_loss = asr_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                     total_loss = total_loss + self.asr_loss_weight * asr_loss
                     epoch_asr_loss += asr_loss.item()
                     num_asr += 1
@@ -1029,7 +1032,8 @@ class XoronTrainer:
                     sample_types=sample_types
                 )
                 if tts_loss is not None:
-                    tts_loss = tts_loss.to(total_loss.device)
+                    # Move to same device AND dtype as total_loss
+                    tts_loss = tts_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                     total_loss = total_loss + self.tts_loss_weight * tts_loss
                     epoch_tts_loss += tts_loss.item()
                     num_tts += 1
@@ -1063,7 +1067,8 @@ class XoronTrainer:
                             sample_types=sample_types,
                         )
                         if waveform_loss is not None:
-                            waveform_loss = waveform_loss.to(total_loss.device)
+                            # Move to same device AND dtype as total_loss
+                            waveform_loss = waveform_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                             # Use same weight as TTS
                             total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
 

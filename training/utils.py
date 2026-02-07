@@ -852,18 +852,20 @@ def train_waveform_decoder_step(
         pred_waveform = waveform_decoder(audio_features, target_length=target_waveform.shape[-1])
         
         # Step 4: Compute losses
-        # L1 loss (time domain) - computed in original dtype
+        # L1 loss (time domain) - this is the main training signal with gradients
         l1_loss = F.l1_loss(pred_waveform, target_waveform)
         
-        # Multi-scale STFT loss (frequency domain) - helps with audio quality
-        # Note: STFT operations require FP32, so we pass tensors and let the function handle conversion
-        stft_loss = compute_multi_scale_stft_loss(pred_waveform, target_waveform)
+        # Multi-scale STFT loss (frequency domain) - computed WITHOUT gradients
+        # STFT doesn't support FP16 backprop, so we detach and use it as regularization
+        # The L1 loss provides the main gradient signal
+        with torch.no_grad():
+            stft_loss = compute_multi_scale_stft_loss(
+                pred_waveform.detach().float(), 
+                target_waveform.detach().float()
+            )
         
-        # Ensure stft_loss has same dtype as l1_loss for addition
-        stft_loss = stft_loss.to(dtype=l1_loss.dtype)
-        
-        total_loss = l1_loss + stft_loss
-        return total_loss
+        # Return only L1 loss for gradients (STFT is for monitoring only)
+        return l1_loss
         
     except Exception as e:
         print(f"      ⚠️ Waveform decoder training error: {type(e).__name__}: {str(e)[:100]}")
