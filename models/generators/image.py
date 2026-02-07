@@ -510,7 +510,7 @@ class MobileDiffusionGenerator(nn.Module):
         base_channels: int = 128,
         context_dim: int = 1024,
         num_inference_steps: int = 50,
-        image_size: int = 384,  # Match SigLIP 384x384
+        image_size: int = 256,  # 256x256 for memory-efficient training
         cfg_scale: float = 7.5,
     ):
         super().__init__()

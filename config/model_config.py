@@ -60,7 +60,7 @@ class XoronConfig:
     num_vision_tokens: int = 64
     max_video_frames: int = 16
     projector_type: str = "perceiver"  # "perceiver", "spatial", "c_abstractor", "mlp"
-    vision_image_size: int = 384  # SigLIP SO400M uses 384x384
+    vision_image_size: int = 256  # 256x256 for memory-efficient training (resized from 384)
     
     # Vision Encoder SOTA Features
     use_vision_dual_stream: bool = True  # Symmetric dual-stream attention
@@ -76,7 +76,7 @@ class XoronConfig:
 
     # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching + 2D-RoPE)
     enable_generation: bool = True
-    generation_image_size: int = 384  # Match SigLIP 384x384
+    generation_image_size: int = 256  # 256x256 for memory-efficient training
     generation_latent_channels: int = 4
     generation_base_channels: int = 128
     generation_inference_steps: int = 50  # Flow Matching needs more steps

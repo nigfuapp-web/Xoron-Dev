@@ -100,7 +100,7 @@ class FP32OptimizerWrapper:
         return self.optimizer.param_groups
 
 
-def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all', vision_size: int = 384):
+def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all', vision_size: int = 256):
     """Create a collate function with the specified video configuration.
     
     Args:
@@ -112,7 +112,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             'image' - image + text, minimal tensors for video/audio
             'video' - video + image + text, minimal tensors for audio
             'audio' - audio + text, minimal tensors for image/video
-        vision_size: Size of vision encoder input (default 384 for SigLIP SO400M)
+        vision_size: Size of vision encoder input (256 for memory-efficient training)
     """
     # Determine which modalities need full tensors
     need_image = active_modalities in ('all', 'image', 'video')
@@ -300,7 +300,7 @@ def create_optimizer_and_scheduler(
     return optimizer, scheduler
 
 
-def train_image_diffusion_step(generator, images, text_context, target_size=384, sample_types=None, mask=None):
+def train_image_diffusion_step(generator, images, text_context, target_size=256, sample_types=None, mask=None):
     """
     Train SOTA image diffusion on text-image pairs.
     
@@ -313,7 +313,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=384,
         generator: Image generator model (MobileDiffusionGenerator)
         images: Batch of images (B, C, H, W) in [0, 1] range
         text_context: Text embeddings (B, seq_len, hidden_dim)
-        target_size: Target image size for diffusion (default 384 to match SigLIP)
+        target_size: Target image size for diffusion (256 for memory efficiency)
         sample_types: List of sample types to filter valid samples
         mask: Optional inpainting mask (B, 1, H, W)
     
@@ -853,14 +853,14 @@ def compute_multi_scale_stft_loss(pred: torch.Tensor, target: torch.Tensor) -> t
 # These are inference-only versions without gradient computation
 # ============================================================================
 
-def eval_image_diffusion_step(generator, images, text_context, target_size=384, sample_types=None, mask=None):
+def eval_image_diffusion_step(generator, images, text_context, target_size=256, sample_types=None, mask=None):
     """Evaluate image diffusion: compute loss without gradient tracking.
     
     Args:
         generator: Image diffusion generator model
         images: Input images (B, C, H, W)
         text_context: Text embeddings for conditioning
-        target_size: Target image size for generation (default 384 to match SigLIP)
+        target_size: Target image size for generation (256 for memory efficiency)
         sample_types: List of sample types for filtering
         mask: Optional mask for inpainting/editing tasks
         
@@ -944,14 +944,14 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=384, 
         return None
 
 
-def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=384, sample_types=None):
+def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """Evaluate video diffusion: compute loss without gradient tracking.
     
     Args:
         video_generator: Video diffusion generator model
         video_frames: Input video frames (B, T, C, H, W)
         text_context: Text embeddings for conditioning
-        target_size: Target frame size (default 384 to match SigLIP)
+        target_size: Target frame size (256 for memory efficiency)
         sample_types: List of sample types for filtering
         
     Returns:
