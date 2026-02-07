@@ -12,7 +12,7 @@ from safetensors.torch import save_model, load_model
 from transformers import LlamaConfig
 
 from config import XoronConfig
-from models.components.lora import LoRALinear, LoRAConfig, apply_lora_to_model, get_lora_parameters
+from models.components.lora import LoRALinear, LoRAConfig, apply_lora_to_model, get_lora_parameters, freeze_non_lora_params
 from models.components.attention import MultimodalFusionLayer
 from models.components.projectors import MultimodalProjector
 from models.encoders.vision import VisionEncoder
@@ -305,7 +305,16 @@ class XoronMultimodalModel(nn.Module):
         return next(self.vision_encoder.parameters()).device
 
     def apply_lora(self):
-        """Apply LoRA to the LLM and optionally cross-attention layers."""
+        """
+        Apply LoRA to the LLM and optionally cross-attention layers.
+        
+        MEMORY OPTIMIZATION:
+        - LoRA layers share base weights (no cloning)
+        - All non-LoRA params are frozen and gradients cleared
+        - Only LoRA params (A, B, magnitude) are trainable
+        
+        This reduces memory from ~2x model size to ~1x model size + small LoRA overhead
+        """
         if self.lora_applied:
             print("⚠️ LoRA already applied")
             return
@@ -338,6 +347,12 @@ class XoronMultimodalModel(nn.Module):
                 self.cross_attention_layers[i] = apply_lora_to_model(layer, cross_attn_lora_config)
 
         self.lora_applied = True
+        
+        # CRITICAL: Freeze all non-LoRA parameters to save memory
+        # This ensures only LoRA params get gradient buffers and optimizer states
+        print("\n🔒 Freezing non-LoRA parameters for memory efficiency...")
+        freeze_non_lora_params(self)
+        
         self._print_stats()
 
     def get_trainable_params(self):

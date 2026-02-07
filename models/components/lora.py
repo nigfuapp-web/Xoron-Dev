@@ -6,6 +6,7 @@ Features:
 - DoRA (Weight-Decomposed LoRA) for better performance
 - LoRA+ with different learning rates for A and B matrices
 - Rank-stabilized LoRA (rsLoRA) scaling
+- Memory-efficient: shares base weights instead of cloning (CRITICAL for multi-GPU training)
 """
 
 import math
@@ -23,6 +24,11 @@ class LoRALinear(nn.Module):
     - Standard LoRA
     - DoRA (Weight-Decomposed LoRA)
     - rsLoRA (rank-stabilized scaling)
+    
+    MEMORY OPTIMIZATION:
+    - Does NOT clone base weights - shares them with original module
+    - Only LoRA params (A, B, magnitude) consume additional memory
+    - Base weights are frozen and can be kept in lower precision
     """
     def __init__(
         self,
@@ -34,6 +40,7 @@ class LoRALinear(nn.Module):
         merge_weights: bool = False,
         use_dora: bool = False,
         use_rslora: bool = True,
+        base_layer: nn.Linear = None,  # Pass existing layer to share weights
     ):
         super().__init__()
         self.r = r
@@ -42,11 +49,19 @@ class LoRALinear(nn.Module):
         self.merged = False
         self.use_dora = use_dora
         self.use_rslora = use_rslora
+        self.in_features = in_features
+        self.out_features = out_features
 
-        # Original linear layer (frozen during LoRA training)
-        self.linear = nn.Linear(in_features, out_features, bias=False)
+        # MEMORY OPTIMIZATION: Share base layer instead of creating new one
+        # This is CRITICAL - cloning weights doubles memory usage!
+        if base_layer is not None:
+            # Use the existing layer directly (no memory duplication!)
+            self.linear = base_layer
+        else:
+            # Only create new layer if no base provided (for standalone use)
+            self.linear = nn.Linear(in_features, out_features, bias=False)
 
-        # LoRA low-rank matrices
+        # LoRA low-rank matrices - these are the ONLY new parameters
         if r > 0:
             self.lora_A = nn.Parameter(torch.zeros(r, in_features))
             self.lora_B = nn.Parameter(torch.zeros(out_features, r))
@@ -68,8 +83,11 @@ class LoRALinear(nn.Module):
             if use_dora:
                 self.magnitude = nn.Parameter(torch.ones(out_features))
 
-        # Freeze original weights by default
+        # Freeze original weights by default - CRITICAL for memory savings
+        # When requires_grad=False, PyTorch doesn't allocate gradient buffers
         self.linear.weight.requires_grad = False
+        if hasattr(self.linear, 'bias') and self.linear.bias is not None:
+            self.linear.bias.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.r > 0 and not self.merged:
@@ -147,12 +165,22 @@ def apply_lora_to_model(model: nn.Module, lora_config: LoRAConfig) -> nn.Module:
     """
     Apply LoRA to specified modules in a model.
     Returns the model with LoRA layers applied.
+    
+    MEMORY OPTIMIZATION:
+    - Passes the original nn.Linear layer directly to LoRALinear
+    - This SHARES weights instead of cloning them (saves ~50% memory for target modules)
+    - Only LoRA parameters (A, B, magnitude) are newly allocated
+    
+    For a 16GB model with 30% of weights in target modules:
+    - Old behavior: Clone ~5GB = 21GB total
+    - New behavior: Share weights = 16GB + ~50MB LoRA params
     """
     if not lora_config.enable_lora:
         return model
 
     lora_layers_added = 0
     modules_to_replace = []
+    total_base_params = 0
 
     for name, module in model.named_modules():
         if not isinstance(module, nn.Linear):
@@ -160,6 +188,7 @@ def apply_lora_to_model(model: nn.Module, lora_config: LoRAConfig) -> nn.Module:
         module_name = name.split('.')[-1]
         if module_name in lora_config.target_modules:
             modules_to_replace.append((name, module))
+            total_base_params += module.weight.numel()
 
     for name, module in modules_to_replace:
         parts = name.split('.')
@@ -171,6 +200,8 @@ def apply_lora_to_model(model: nn.Module, lora_config: LoRAConfig) -> nn.Module:
         else:
             parent = model
 
+        # MEMORY OPTIMIZATION: Pass existing layer to share weights!
+        # This is the KEY change - we don't clone weights anymore
         lora_layer = LoRALinear(
             in_features=module.in_features,
             out_features=module.out_features,
@@ -179,30 +210,90 @@ def apply_lora_to_model(model: nn.Module, lora_config: LoRAConfig) -> nn.Module:
             lora_dropout=lora_config.lora_dropout,
             use_dora=lora_config.use_dora,
             use_rslora=lora_config.use_rslora,
+            base_layer=module,  # PASS EXISTING LAYER - NO CLONING!
         )
 
-        lora_layer.linear.weight.data = module.weight.data.clone()
-        if module.bias is not None:
-            lora_layer.linear.bias = nn.Parameter(module.bias.data.clone())
+        # NOTE: We no longer clone weights here!
+        # The LoRALinear now uses the original module directly
+        # This saves memory equal to the size of all target module weights
 
         setattr(parent, attr_name, lora_layer)
         lora_layers_added += 1
 
+    # Calculate memory savings
+    lora_params = lora_layers_added * (lora_config.r * (modules_to_replace[0][1].in_features + modules_to_replace[0][1].out_features)) if modules_to_replace else 0
+    base_mem_saved_mb = (total_base_params * 2) / (1024 * 1024)  # FP16 = 2 bytes
+    lora_mem_added_mb = (lora_params * 4) / (1024 * 1024)  # FP32 LoRA params = 4 bytes
+    
     variant = "DoRA" if lora_config.use_dora else ("rsLoRA" if lora_config.use_rslora else "LoRA")
     print(f"✅ {variant} applied to {lora_layers_added} layers (r={lora_config.r}, alpha={lora_config.lora_alpha})")
+    print(f"   💾 Memory optimization: {base_mem_saved_mb:.1f}MB base weights SHARED (not cloned)")
+    print(f"   📊 New LoRA params: ~{lora_mem_added_mb:.1f}MB (trainable)")
     return model
 
 
 def get_lora_parameters(model: nn.Module) -> List[nn.Parameter]:
-    """Get only the LoRA parameters for training."""
+    """
+    Get only the LoRA parameters for training.
+    
+    MEMORY OPTIMIZATION:
+    - Sets requires_grad=False on all non-LoRA params
+    - Clears any accumulated gradients on frozen params to free memory
+    - Returns only LoRA params for optimizer
+    """
     lora_params = []
+    frozen_count = 0
+    freed_grad_memory = 0
+    
     for name, param in model.named_parameters():
         if 'lora_A' in name or 'lora_B' in name or 'magnitude' in name:
             param.requires_grad = True
             lora_params.append(param)
         else:
             param.requires_grad = False
+            frozen_count += 1
+            # MEMORY OPTIMIZATION: Clear any existing gradients on frozen params
+            # This prevents gradients from accumulating if they were computed before freezing
+            if param.grad is not None:
+                freed_grad_memory += param.grad.numel() * param.grad.element_size()
+                param.grad = None
+    
+    if freed_grad_memory > 0:
+        print(f"   🧹 Cleared {freed_grad_memory / (1024**2):.1f}MB of gradient memory from frozen params")
+    
     return lora_params
+
+
+def freeze_non_lora_params(model: nn.Module) -> int:
+    """
+    Freeze all non-LoRA parameters and clear their gradients.
+    
+    CRITICAL for memory efficiency during LoRA training:
+    - Frozen params don't compute gradients (no backprop memory)
+    - Frozen params don't store gradient buffers
+    - Optimizer won't create states for frozen params
+    
+    Returns:
+        Number of frozen parameters
+    """
+    frozen_params = 0
+    freed_memory = 0
+    
+    for name, param in model.named_parameters():
+        is_lora = 'lora_A' in name or 'lora_B' in name or 'magnitude' in name
+        if not is_lora:
+            param.requires_grad = False
+            frozen_params += param.numel()
+            # Clear any accumulated gradients
+            if param.grad is not None:
+                freed_memory += param.grad.numel() * param.grad.element_size()
+                param.grad = None
+    
+    print(f"   ❄️ Frozen {frozen_params:,} non-LoRA parameters")
+    if freed_memory > 0:
+        print(f"   🧹 Freed {freed_memory / (1024**2):.1f}MB of gradient memory")
+    
+    return frozen_params
 
 
 def get_lora_plus_param_groups(

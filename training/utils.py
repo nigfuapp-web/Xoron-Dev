@@ -311,14 +311,29 @@ def create_optimizer_and_scheduler(
     Note on FP16 stability:
         FP16 models REQUIRE FP32 optimizer states to prevent overflow in Adam.
         This function automatically uses FP32OptimizerWrapper for FP16 models.
+        
+    MEMORY OPTIMIZATION:
+        Only trainable parameters (requires_grad=True) are tracked by optimizer.
+        For LoRA, this means only LoRA params get optimizer states (~2-3x param size).
+        Frozen base weights don't consume any optimizer memory.
     """
     # Check model dtype
     model_dtype = next(model.parameters()).dtype
     is_fp16 = model_dtype == torch.float16
     
+    # MEMORY OPTIMIZATION: Only get trainable parameters
+    # This is CRITICAL for LoRA - we don't want optimizer states for frozen weights
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    num_trainable = sum(p.numel() for p in trainable_params)
+    num_total = sum(p.numel() for p in model.parameters())
+    
+    print(f"   📊 Optimizer will track {num_trainable:,} params ({100*num_trainable/num_total:.1f}% of {num_total:,} total)")
+    print(f"   💾 Optimizer memory: ~{(num_trainable * 8) / (1024**2):.1f}MB (8 bytes/param for Adam states)")
+    
     # For FP16 models, use FP32OptimizerWrapper to prevent optimizer overflow
     if is_fp16:
         # Use FP32OptimizerWrapper which maintains FP32 copies
+        # NOTE: FP32OptimizerWrapper already filters for requires_grad=True internally
         optimizer = FP32OptimizerWrapper(
             optimizer_class=AdamW,
             model=model,
@@ -327,16 +342,18 @@ def create_optimizer_and_scheduler(
             eps=eps,
         )
     elif use_8bit_optimizer and BNB_AVAILABLE:
+        # FIXED: Use only trainable params, not model.parameters()
         optimizer = bnb.optim.AdamW8bit(
-            model.parameters(),
+            trainable_params,  # Only trainable params!
             lr=learning_rate,
             weight_decay=weight_decay,
             eps=eps,
         )
         print("   ✅ Using 8-bit AdamW optimizer (saves ~75% optimizer memory)")
     else:
+        # FIXED: Use only trainable params, not model.parameters()
         optimizer = AdamW(
-            model.parameters(),
+            trainable_params,  # Only trainable params!
             lr=learning_rate,
             weight_decay=weight_decay,
             eps=eps,
