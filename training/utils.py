@@ -394,10 +394,16 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         if mask is not None:
             mask = mask[valid_mask]
 
-        # Resize to target size - ensure dtype is preserved after interpolation
-        images = F.interpolate(images.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
+        # Resize to target size - detach before interpolation to avoid FP32 in gradient graph
+        # Interpolation requires FP32 but we don't need gradients through the resize op
+        with torch.no_grad():
+            images = F.interpolate(images.float(), size=(target_size, target_size), mode='bilinear', align_corners=False)
+            if mask is not None:
+                mask = F.interpolate(mask.float(), size=(target_size // 8, target_size // 8), mode='nearest')
+        # Convert back to model dtype and re-enable gradients
+        images = images.to(gen_dtype).requires_grad_(True)
         if mask is not None:
-            mask = F.interpolate(mask.float(), size=(target_size // 8, target_size // 8), mode='nearest').to(gen_dtype)
+            mask = mask.to(gen_dtype)
 
         # Normalize images to [-1, 1] for diffusion
         images_norm = images * 2 - 1
@@ -523,8 +529,11 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                 single_context = text_context[i:i+1]  # [1, seq_len, dim]
                 
                 # Resize frames to target size (128x128 -> 32x32 latent)
+                # Use no_grad for interpolation to avoid FP32 in gradient graph
                 single_video = single_video.contiguous().view(T, C, H, W)
-                single_video = F.interpolate(single_video.float(), size=(target_size, target_size), mode='bilinear', align_corners=False).to(gen_dtype)
+                with torch.no_grad():
+                    single_video = F.interpolate(single_video.float(), size=(target_size, target_size), mode='bilinear', align_corners=False)
+                single_video = single_video.to(gen_dtype).requires_grad_(True)
                 single_video = single_video.contiguous().view(1, C, T, target_size, target_size)
 
                 # Normalize to [-1, 1] for diffusion
