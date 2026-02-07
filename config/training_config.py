@@ -232,9 +232,21 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
     Create a device map for Model Parallelism.
     Distributes model components across available GPUs.
 
-    Strategy:
-    - GPU 0: Encoders (vision, video, audio) + Projectors
-    - GPU 1+: LLM backbone + Cross-attention + Generators + Audio decoders
+    Strategy for 2 GPUs:
+    ┌─────────────────┬─────────────────────────────────────────┬────────┬──────────┐
+    │ Category        │ Components                              │ Device │ Size     │
+    ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
+    │ Visual Input    │ video_encoder, vision_encoder           │ cuda:0 │ ~5.41 GB │
+    │ Audio Input     │ audio_encoder, audio_projector          │ cuda:0 │ ~0.69 GB │
+    │ Flow Control    │ projector, video_generator              │ cuda:0 │ ~0.20 GB │
+    ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
+    │ Reasoning (LLM) │ llm, modality_markers                   │ cuda:1 │ ~3.01 GB │
+    │ Speech Output   │ audio_decoder, waveform_decoder         │ cuda:1 │ ~2.86 GB │
+    │ Image Output    │ generator                               │ cuda:1 │ ~1.26 GB │
+    │ Bridge          │ cross_attention                         │ cuda:1 │ ~0.35 GB │
+    └─────────────────┴─────────────────────────────────────────┴────────┴──────────┘
+    GPU 0 Total: ~6.30 GB (Input/Encoding)
+    GPU 1 Total: ~7.48 GB (Reasoning/Output)
     """
     if num_gpus <= 1:
         return {
@@ -242,7 +254,7 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
             'audio_decoder': 'cuda:0',
-            'waveform_decoder': 'cuda:0',  # Raw waveform decoder for Speech-to-Speech
+            'waveform_decoder': 'cuda:0',
             'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
             'llm': 'cuda:0',
@@ -253,37 +265,52 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'primary': 'cuda:0',
         }
     elif num_gpus == 2:
-        # MEMORY OPTIMIZED: Better balance across GPUs to prevent OOM
-        # GPU 0: Encoders + generators (image/video)
-        # GPU 1: LLM + audio decoder + waveform_decoder + cross_attention + modality_markers
+        # Optimized layout for 2 GPUs
+        # GPU 0 (~6.30 GB): Input/Encoding components
+        # GPU 1 (~7.48 GB): Reasoning/Output components
         return {
+            # === GPU 0: Input/Encoding (~6.30 GB) ===
+            # Visual Input (~5.41 GB)
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
+            # Audio Input (~0.69 GB)
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:1',  # On GPU 1 to balance memory
-            'waveform_decoder': 'cuda:1',  # On GPU 1 with audio_decoder (shares context)
-            'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
+            # Flow Control (~0.20 GB)
+            'projector': 'cuda:0',
+            'video_generator': 'cuda:0',
+            
+            # === GPU 1: Reasoning/Output (~7.48 GB) ===
+            # Reasoning/LLM (~3.01 GB)
             'llm': 'cuda:1',
+            'modality_markers': 'cuda:1',
+            # Speech Output (~2.86 GB)
+            'audio_decoder': 'cuda:1',
+            'waveform_decoder': 'cuda:1',
+            # Image Output (~1.26 GB)
+            'generator': 'cuda:1',
+            # Bridge (~0.35 GB)
             'cross_attention': 'cuda:1',
-            'generator': 'cuda:0',  # IMAGE generator on GPU 0
-            'video_generator': 'cuda:0',  # VIDEO generator on GPU 0
-            'modality_markers': 'cuda:1',  # On GPU 1 with LLM
+            
             'primary': 'cuda:0',
         }
     else:
+        # 3+ GPUs: Spread output generators to GPU 2
         return {
+            # GPU 0: Input/Encoding
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
-            'waveform_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',  # With audio_decoder
-            'projector': 'cuda:0',
             'audio_projector': 'cuda:0',
+            'projector': 'cuda:0',
+            # GPU 1: Reasoning
             'llm': 'cuda:1',
+            'modality_markers': 'cuda:1',
             'cross_attention': 'cuda:1',
+            # GPU 2: Output Generation
+            'audio_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
+            'waveform_decoder': 'cuda:2' if num_gpus > 2 else 'cuda:1',
             'generator': 'cuda:2' if num_gpus > 2 else 'cuda:1',
             'video_generator': 'cuda:2' if num_gpus > 2 else 'cuda:1',
-            'modality_markers': 'cuda:1',
             'primary': 'cuda:0',
         }
