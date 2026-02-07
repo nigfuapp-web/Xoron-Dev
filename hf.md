@@ -110,7 +110,7 @@ datasets:
 * **Vision Encoder:** SigLIP-2 (384px) with **TiTok-style 1D tokenization**, **Dual-Stream Attention**, and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** for video (up to 16 frames).
 * **Image Generation:** **MoE-DiT** (Diffusion Transformer with MoE) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style).
 * **Video Generation:** **3D Causal Transformers** with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing**.
-* **Audio:** **Conformer encoder with RMLA** (Rotary Multi-Head Latent Attention), **Raw Waveform Tokenizer**, **MAS** (Monotonic Alignment Search) for fluid alignment, and **Zero-Shot Speaker Cloning** with In-Context Audio Prompting.
+* **Audio:** **Conformer encoder with RMLA** (Rotary Multi-Head Latent Attention) and **Raw Waveform Tokenizer** for ASR; **Mel Spectrogram decoder** with **MAS** (Monotonic Alignment Search) for TTS; **Zero-Shot Speaker Cloning** with In-Context Audio Prompting.
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
 * **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
 * **Fine-tuning:** LoRA variants including **rsLoRA**, **DoRA**, and **LoRA+** with configurable learning rate ratio.
@@ -181,12 +181,14 @@ datasets:
 | Feature | Description |
 |---------|-------------|
 | Sample Rate | 16kHz |
-| Input | **Raw Waveform Tokenizer** (not mel spectrogram) |
-| Encoder | Conformer blocks with **RMLA** (Rotary Multi-Head Latent Attention) |
+| **Encoder (ASR)** | **Raw Waveform Tokenizer** → Conformer blocks with **RMLA** |
+| **Decoder (TTS)** | Text → **Mel Spectrogram** (80 mels) → Vocoder → Audio |
 | KV Compression | LoRA-style KV compression (rank 256) |
-| Decoder Alignment | **MAS** (Monotonic Alignment Search) for text-to-audio |
+| Decoder Alignment | **MAS** (Monotonic Alignment Search) for text-to-mel alignment |
 | Voice Cloning | **Zero-Shot Speaker Cloning** with speaker embedding (256-dim) |
 | In-Context Prompting | Enabled for voice cloning from reference audio |
+
+> **Note:** The encoder uses raw waveform directly for speech understanding, while the decoder generates mel spectrograms that require an external vocoder (e.g., HiFi-GAN) to produce final audio output.
 
 ---
 
