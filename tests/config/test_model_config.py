@@ -90,7 +90,7 @@ class TestXoronConfig(unittest.TestCase):
         self.assertEqual(config.video_min_frames, 8)
         self.assertEqual(config.video_max_frames, 32)
         self.assertEqual(config.video_base_frames, 16)
-        self.assertEqual(config.multi_scale_strategy, "progressive")
+        self.assertEqual(config.multi_scale_strategy, "random")
         
     def test_audio_configuration(self):
         """Test SOTA audio-related configuration."""
