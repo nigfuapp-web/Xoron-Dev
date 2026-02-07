@@ -822,6 +822,8 @@ class XoronMultimodalModel(nn.Module):
             component_map['generator'] = self.generator
         if self.video_generator is not None:
             component_map['video_generator'] = self.video_generator
+        if hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None:
+            component_map['waveform_decoder'] = self.waveform_decoder
         
         saved_files = []
         total_size = 0
@@ -990,6 +992,8 @@ class XoronMultimodalModel(nn.Module):
             component_map['generator'] = self.generator
         if self.video_generator is not None:
             component_map['video_generator'] = self.video_generator
+        if hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None:
+            component_map['waveform_decoder'] = self.waveform_decoder
         
         saved_files = []
         
@@ -1238,6 +1242,8 @@ class XoronMultimodalModel(nn.Module):
             component_map['generator'] = self.generator
         if self.video_generator is not None:
             component_map['video_generator'] = self.video_generator
+        if hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None:
+            component_map['waveform_decoder'] = self.waveform_decoder
         
         total_loaded = 0
         total_params = sum(len(list(c.parameters())) for c in component_map.values() if c is not None)
