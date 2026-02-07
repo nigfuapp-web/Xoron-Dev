@@ -428,7 +428,7 @@ def generate_svg() -> str:
   <!-- Stats Box -->
 {rounded_rect(stats_x, stats_y, 180, out_h, 12, COLORS['bg_secondary'], COLORS['border'], 1, 'shadow')}
 {text_element(stats_x + 90, stats_y + 22, '📊 Model Stats', 14, COLORS['text_primary'], 'bold')}
-{text_element(stats_x + 90, stats_y + 44, '~500M Parameters', 11, COLORS['text_muted'])}
+{text_element(stats_x + 90, stats_y + 44, '2.8B Parameters', 11, COLORS['text_muted'])}
 {text_element(stats_x + 90, stats_y + 60, '128K Context', 11, COLORS['text_muted'])}
 {text_element(stats_x + 90, stats_y + 76, '6 MoE / 12 Total', 11, COLORS['text_muted'])}
 ''')
