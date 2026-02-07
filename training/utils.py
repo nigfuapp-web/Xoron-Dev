@@ -654,7 +654,9 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         # Need at least 2 samples for contrastive learning
         if audio_features.shape[0] < 2:
             # For single sample, use MSE loss between audio and text embeddings instead
-            audio_embeds = audio_encoder(audio_features)
+            audio_out = audio_encoder(audio_features)
+            # AudioEncoder returns (features, commitment_loss) tuple
+            audio_embeds = audio_out[0] if isinstance(audio_out, tuple) else audio_out
             audio_pooled = audio_embeds.mean(dim=1)
             text_pooled = text_embeds.mean(dim=1)
             # Project to same dimension if needed
@@ -665,7 +667,9 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
             loss = F.mse_loss(audio_pooled, text_pooled)
             return loss
 
-        audio_embeds = audio_encoder(audio_features)
+        audio_out = audio_encoder(audio_features)
+        # AudioEncoder returns (features, commitment_loss) tuple
+        audio_embeds = audio_out[0] if isinstance(audio_out, tuple) else audio_out
         audio_pooled = audio_embeds.mean(dim=1)
         text_pooled = text_embeds.mean(dim=1)
         audio_pooled = F.normalize(audio_pooled, dim=-1)
