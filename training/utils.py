@@ -616,6 +616,40 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         return None
 
 
+def _truncate_audio_for_memory(audio_features: torch.Tensor, max_samples: int = 80000) -> torch.Tensor:
+    """
+    Truncate audio to save GPU memory during training.
+    
+    For raw waveform at 16kHz, 80000 samples = 5 seconds of audio.
+    This is enough for training while preventing OOM.
+    
+    Args:
+        audio_features: [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
+        max_samples: Maximum number of samples/frames to keep
+        
+    Returns:
+        Truncated audio tensor
+    """
+    if audio_features.dim() == 2:
+        # Raw waveform [B, T] - truncate time dimension
+        if audio_features.shape[1] > max_samples:
+            audio_features = audio_features[:, :max_samples]
+    elif audio_features.dim() == 3:
+        # Mel spectrogram [B, mel_bins, time] - truncate time dimension
+        max_frames = max_samples // 256  # Approximate conversion for hop_length=256
+        if audio_features.shape[2] > max_frames:
+            audio_features = audio_features[:, :, :max_frames]
+    return audio_features
+
+
+def _clear_audio_memory():
+    """Clear GPU memory after audio processing to prevent OOM."""
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types=None):
     """Train ASR: audio -> text alignment.
     
@@ -635,6 +669,11 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
 
         enc_device = next(audio_encoder.parameters()).device
         enc_dtype = next(audio_encoder.parameters()).dtype
+        
+        # MEMORY OPTIMIZATION: Truncate long audio to prevent OOM
+        # 80000 samples = 5 seconds at 16kHz - enough for training
+        audio_features = _truncate_audio_for_memory(audio_features, max_samples=80000)
+        
         # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
         audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
         text_embeds = text_embeds.to(device=enc_device, dtype=enc_dtype)
@@ -682,6 +721,8 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
                 audio_pooled = audio_pooled[..., :min_dim]
                 text_pooled = text_pooled[..., :min_dim]
             loss = F.mse_loss(audio_pooled, text_pooled)
+            # Clean up intermediate tensors
+            del audio_out, audio_embeds, audio_pooled, text_pooled
             return loss
 
         audio_out = audio_encoder(audio_features)
@@ -694,6 +735,8 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         similarity = torch.matmul(audio_pooled, text_pooled.T)
         labels = torch.arange(similarity.shape[0], device=enc_device)
         loss = F.cross_entropy(similarity, labels)
+        # Clean up intermediate tensors
+        del audio_out, audio_embeds, audio_pooled, text_pooled, similarity
         return loss
     except Exception as e:
         # Log the exception for debugging
@@ -723,6 +766,11 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
 
         dec_device = next(audio_decoder.parameters()).device
         dec_dtype = next(audio_decoder.parameters()).dtype
+        
+        # MEMORY OPTIMIZATION: Truncate long audio to prevent OOM
+        # 80000 samples = 5 seconds at 16kHz - enough for training
+        target_audio = _truncate_audio_for_memory(target_audio, max_samples=80000)
+        
         # Match input dtype to model dtype to avoid "mat1 and mat2 must have the same dtype" errors
         target_audio = target_audio.to(device=dec_device, dtype=dec_dtype)
         text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
@@ -750,6 +798,8 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
                     target_mel = torch.log(target_mel.clamp(min=1e-5))
                     # Cast back to model dtype for forward pass
                     target_mel = target_mel.to(dtype=dec_dtype)
+                # Clean up mel_transform to free memory
+                del mel_transform
             except Exception as e:
                 # Fallback: skip this step if mel conversion fails
                 return None
@@ -775,39 +825,38 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
         target_mel = gpu_safe_index(target_mel, valid_mask)
         text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
-        # Get target audio features for MAS if audio encoder is available
+        # MEMORY OPTIMIZATION: Disable MAS during training to save memory on multi-GPU setups
+        # MAS requires extra memory for alignment matrix computation
+        # The decoder can learn alignment implicitly through duration prediction
         audio_features = None
-        if use_mas and audio_encoder is not None:
-            with torch.no_grad():
-                # Encode target mel to get audio features for alignment
-                audio_out, _ = audio_encoder(target_mel)
-                audio_features = audio_out
-
-        # Forward pass with MAS
+        use_mas_training = False  # Disabled to save memory
+        
+        # Forward pass without MAS to save memory
         pred_mel, durations, alignment = audio_decoder(
             text_embeds, 
             target_length=target_mel.shape[-1],
             audio_features=audio_features,
-            use_mas=use_mas and audio_features is not None,
+            use_mas=use_mas_training,
         )
         
         # Mel reconstruction loss
         mel_loss = F.mse_loss(pred_mel, target_mel)
         
-        # MAS alignment loss (self-supervised)
-        mas_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
-        if use_mas and hasattr(audio_decoder, 'mas') and audio_features is not None:
-            mas_loss = audio_decoder.mas.compute_duration(alignment).sum() * 0.0  # Placeholder for actual MAS loss
-            # The actual MAS loss is computed inside the decoder during forward pass
-        
-        # Duration prediction loss (if we have ground truth durations)
+        # Duration prediction loss - use simple L1 loss on durations
+        # This provides supervision without the memory overhead of MAS
         duration_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
-        if alignment is not None:
-            # Use alignment to compute pseudo ground-truth durations
-            gt_durations = alignment.sum(dim=-1)  # [B, T_text]
-            duration_loss = F.mse_loss(durations, gt_durations)
+        if durations is not None:
+            # Target duration is proportional to output length
+            target_duration = torch.ones_like(durations) * (target_mel.shape[-1] / durations.shape[-1])
+            duration_loss = F.l1_loss(durations, target_duration)
         
-        total_loss = mel_loss + 0.1 * duration_loss + 0.01 * mas_loss
+        total_loss = mel_loss + 0.1 * duration_loss
+        
+        # Clean up intermediate tensors
+        del pred_mel, target_mel
+        if alignment is not None:
+            del alignment
+        
         return total_loss
         
     except Exception as e:
@@ -849,6 +898,11 @@ def train_waveform_decoder_step(
             return None
         if target_waveform.numel() == 0:
             return None
+        
+        # MEMORY OPTIMIZATION: Truncate waveform to prevent OOM
+        # 48000 samples = 3 seconds at 16kHz for waveform decoder (smaller than encoder)
+        # Waveform decoder is most memory-intensive, so use shorter clips
+        target_waveform = _truncate_audio_for_memory(target_waveform, max_samples=48000)
         
         # Get waveform decoder device and dtype
         dec_device = next(waveform_decoder.parameters()).device
@@ -893,8 +947,12 @@ def train_waveform_decoder_step(
             # Move to waveform decoder device and convert to its dtype
             pred_mel = pred_mel.to(device=dec_device, dtype=dec_dtype)
         
+        # Clean up text_embeds_for_audio as we don't need it anymore
+        del text_embeds_for_audio
+        
         # Step 2: Project mel to hidden_size for waveform decoder
         mel_features = pred_mel.transpose(1, 2)  # [B, T_mel, n_mels]
+        del pred_mel  # Clean up
         
         if mel_to_hidden is not None:
             mel_to_hidden = mel_to_hidden.to(device=dec_device, dtype=dec_dtype)
@@ -910,8 +968,11 @@ def train_waveform_decoder_step(
             else:
                 audio_features = mel_features
         
+        del mel_features  # Clean up
+        
         # Step 3: Generate waveform
         pred_waveform = waveform_decoder(audio_features, target_length=target_waveform.shape[-1])
+        del audio_features  # Clean up
         
         # Ensure output is same dtype as target for loss computation
         if pred_waveform.dtype != target_waveform.dtype:
@@ -921,16 +982,14 @@ def train_waveform_decoder_step(
         # L1 loss (time domain) - this is the main training signal with gradients
         l1_loss = F.l1_loss(pred_waveform, target_waveform)
         
-        # Multi-scale STFT loss (frequency domain) - computed WITHOUT gradients
-        # STFT doesn't support FP16 backprop, so we detach and use it as regularization
-        # The L1 loss provides the main gradient signal
-        with torch.no_grad():
-            stft_loss = compute_multi_scale_stft_loss(
-                pred_waveform.detach().float(), 
-                target_waveform.detach().float()
-            )
+        # MEMORY OPTIMIZATION: Skip STFT loss computation - it's only for monitoring
+        # and adds extra memory overhead that can cause OOM
+        # The L1 loss provides sufficient training signal for waveform reconstruction
         
-        # Return only L1 loss for gradients (STFT is for monitoring only)
+        # Clean up
+        del pred_waveform, target_waveform
+        
+        # Return only L1 loss for gradients
         return l1_loss
         
     except Exception as e:

@@ -1012,6 +1012,11 @@ class XoronTrainer:
                     num_vid_diff += 1
 
             # Voice ASR (use configurable loss weight)
+            # MEMORY OPTIMIZATION: Clear cache before voice training to prevent OOM
+            has_voice_samples = any(t == 'voice_asr' for t in sample_types) or any(t == 'voice_tts' for t in sample_types)
+            if has_voice_samples and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             if any(t == 'voice_asr' for t in sample_types):
                 asr_loss = train_voice_asr_step(
                     self.model.audio_encoder, audio_features, text_embeds,
@@ -1023,6 +1028,7 @@ class XoronTrainer:
                     total_loss = total_loss + self.asr_loss_weight * asr_loss
                     epoch_asr_loss += asr_loss.item()
                     num_asr += 1
+                    del asr_loss  # Clean up
 
             # Voice TTS (use configurable loss weight)
             if any(t == 'voice_tts' for t in sample_types):
@@ -1036,6 +1042,7 @@ class XoronTrainer:
                     total_loss = total_loss + self.tts_loss_weight * tts_loss
                     epoch_tts_loss += tts_loss.item()
                     num_tts += 1
+                    del tts_loss  # Clean up
                 
                 # Train waveform decoder for Speech-to-Speech (direct audio output)
                 # Note: When use_raw_waveform=True in config, audio_features contains raw waveform
@@ -1072,6 +1079,11 @@ class XoronTrainer:
                             total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
                             epoch_waveform_loss += waveform_loss.item()
                             num_waveform += 1
+                            del waveform_loss  # Clean up
+            
+            # MEMORY OPTIMIZATION: Clear cache after voice training
+            if has_voice_samples and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # CRITICAL: Final loss clamping before backward (FP16 safety)
             # This prevents gradient explosion from extreme loss values

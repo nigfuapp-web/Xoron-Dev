@@ -1032,6 +1032,7 @@ class AudioEncoder(nn.Module):
     - Conformer blocks with RMLA
     - Zero-shot speaker encoding
     - In-context audio prompting
+    - Gradient checkpointing support for memory efficiency
     """
 
     def __init__(
@@ -1048,6 +1049,7 @@ class AudioEncoder(nn.Module):
         self.hidden_size = hidden_size
         self.max_audio_length = max_audio_length
         self.use_raw_waveform = use_raw_waveform
+        self.gradient_checkpointing = False  # Memory optimization flag
 
         # Raw waveform tokenizer
         if use_raw_waveform:
@@ -1098,6 +1100,21 @@ class AudioEncoder(nn.Module):
             print(f"      - Raw Waveform Tokenizer enabled")
         print(f"      - Zero-Shot Speaker Encoder enabled")
         print(f"      - In-Context Audio Prompting enabled")
+
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing to save memory during training."""
+        self.gradient_checkpointing = True
+        # Enable for nested modules if they support it
+        if hasattr(self, 'waveform_tokenizer') and self.waveform_tokenizer is not None:
+            if hasattr(self.waveform_tokenizer, 'gradient_checkpointing'):
+                self.waveform_tokenizer.gradient_checkpointing = True
+        if hasattr(self, 'speaker_encoder') and self.speaker_encoder is not None:
+            if hasattr(self.speaker_encoder, 'gradient_checkpointing'):
+                self.speaker_encoder.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -1158,9 +1175,19 @@ class AudioEncoder(nn.Module):
         if audio_prompt is not None:
             x = self.audio_prompting(x, audio_prompt=audio_prompt)
 
-        # Conformer blocks
-        for block in self.conformer_blocks:
-            x, _ = block(x, mask)
+        # Conformer blocks with optional gradient checkpointing
+        if self.gradient_checkpointing and self.training:
+            from torch.utils.checkpoint import checkpoint
+            for block in self.conformer_blocks:
+                # Use checkpoint to save memory during training
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                x, _ = checkpoint(create_custom_forward(block), x, mask, use_reentrant=False)
+        else:
+            for block in self.conformer_blocks:
+                x, _ = block(x, mask)
 
         # Output projection
         x = self.output_proj(x)
@@ -1255,6 +1282,7 @@ class AudioDecoder(nn.Module):
     - In-context audio prompting
     - Variance adaptor with duration, pitch, energy prediction
     - RMLA-based FFT blocks
+    - Gradient checkpointing support for memory efficiency
     """
 
     def __init__(
@@ -1270,6 +1298,7 @@ class AudioDecoder(nn.Module):
         self.hidden_size = hidden_size
         self.n_mels = n_mels
         self.max_audio_length = max_audio_length
+        self.gradient_checkpointing = False  # Memory optimization flag
 
         # Monotonic Alignment Search
         self.mas = MonotonicAlignmentSearch(hidden_size)
@@ -1343,6 +1372,14 @@ class AudioDecoder(nn.Module):
         print(f"      - Zero-Shot Speaker Cloning enabled")
         print(f"      - In-Context Audio Prompting enabled")
 
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing to save memory during training."""
+        self.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.gradient_checkpointing = False
+
     def forward(
         self,
         text_embeds: torch.Tensor,
@@ -1402,9 +1439,18 @@ class AudioDecoder(nn.Module):
         if audio_prompt is not None:
             x = self.audio_prompting(x, audio_prompt=audio_prompt)
 
-        # Encoder
-        for block in self.encoder_blocks:
-            x = block(x)
+        # Encoder with optional gradient checkpointing
+        if self.gradient_checkpointing and self.training:
+            from torch.utils.checkpoint import checkpoint
+            for block in self.encoder_blocks:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                x = checkpoint(create_custom_forward(block), x, use_reentrant=False)
+        else:
+            for block in self.encoder_blocks:
+                x = block(x)
 
         # Monotonic Alignment Search
         alignment = None
@@ -1444,9 +1490,18 @@ class AudioDecoder(nn.Module):
         energy_emb = self.energy_embed(energy_up).transpose(1, 2)
         x = x + pitch_emb + energy_emb
 
-        # Decoder
-        for block in self.decoder_blocks:
-            x = block(x)
+        # Decoder with optional gradient checkpointing
+        if self.gradient_checkpointing and self.training:
+            from torch.utils.checkpoint import checkpoint
+            for block in self.decoder_blocks:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                x = checkpoint(create_custom_forward(block), x, use_reentrant=False)
+        else:
+            for block in self.decoder_blocks:
+                x = block(x)
 
         # Mel output
         mel = self.mel_linear(x).transpose(1, 2)  # [B, n_mels, T']
