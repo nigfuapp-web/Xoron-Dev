@@ -54,8 +54,8 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    max_per_epoch: int = 20000
-    max_per_dataset: int = 200  # Prevent any single dataset from dominating the epoch
+    max_per_epoch: int = 1000
+    max_per_dataset: int = 10  # Prevent any single dataset from dominating the epoch
     sample_repeat: int = 2  # Each sample shown N times within gradient accumulation window
 
     # Training settings - optimized for ~31GB VRAM
@@ -63,7 +63,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 16  # REDUCED: 128 too high for FP16 stability, causes gradient explosion
     learning_rate: float = 1e-4  # INCREASED: FP32 optimizer states prevent overflow, can use higher LR
     weight_decay: float = 0.01
-    num_epochs: int = 1
+    num_epochs: int = 5
     warmup_ratio: float = 0.05  # INCREASED: longer warmup for stability
     max_seq_length: int = 1024
     max_grad_norm: float = 1.0  # INCREASED: FP32 optimizer states are stable, can use standard clipping
