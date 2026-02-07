@@ -257,19 +257,8 @@ class VoiceProcessor:
             waveform = None
             sr = sampling_rate or self.sample_rate
 
-            # Handle torchcodec AudioDecoder
-            if hasattr(audio_data, 'get_all_samples'):
-                try:
-                    samples = audio_data.get_all_samples()
-                    waveform = samples.data.float()
-                    sr = samples.sample_rate
-                    if waveform.dim() == 2:
-                        waveform = waveform.mean(dim=0)
-                except Exception:
-                    pass
-
             # Handle dict format
-            elif isinstance(audio_data, dict):
+            if isinstance(audio_data, dict):
                 # Try array first (most common)
                 if 'array' in audio_data and audio_data['array'] is not None:
                     array = audio_data['array']

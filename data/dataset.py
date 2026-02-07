@@ -655,16 +655,6 @@ class TrueStreamingDataset(IterableDataset):
                 return mel
         
         try:
-            # Handle torchcodec AudioDecoder (new HuggingFace datasets format)
-            if hasattr(audio_data, 'get_all_samples'):
-                try:
-                    samples = audio_data.get_all_samples()
-                    waveform = samples.data.float()
-                    sr = samples.sample_rate
-                    return _waveform_to_output(waveform, sr)
-                except Exception:
-                    pass
-            
             # Handle URL - download audio first
             if isinstance(audio_data, str) and audio_data.startswith('http'):
                 temp_audio_path = self._download_audio_from_url(audio_data)
