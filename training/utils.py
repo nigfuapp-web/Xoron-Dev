@@ -16,6 +16,28 @@ except ImportError:
     pass
 
 
+def gpu_safe_index(tensor: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Safely index a tensor using a boolean mask, ensuring indices stay on GPU.
+    
+    Boolean indexing in PyTorch can sometimes create CPU index tensors internally,
+    causing "index is on cpu" errors. This function explicitly creates GPU indices.
+    
+    Args:
+        tensor: The tensor to index (on GPU)
+        mask: Boolean mask tensor (should be on same device as tensor)
+        
+    Returns:
+        Indexed tensor with selected rows
+    """
+    device = tensor.device
+    # Get indices where mask is True, ensure they're on the same device
+    indices = mask.nonzero(as_tuple=False).squeeze(-1).to(device)
+    if indices.dim() == 0:
+        indices = indices.unsqueeze(0)
+    return tensor.index_select(0, indices)
+
+
 class FP32OptimizerWrapper:
     """
     Wrapper that maintains FP32 master weights for FP16 models ON GPU.
@@ -376,23 +398,23 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         # Filter by sample type if provided - train on image generation/editing samples
         image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
         if sample_types is not None:
-            type_mask = torch.tensor([t in image_sample_types for t in sample_types], device=gen_device)
+            type_mask = torch.tensor([t in image_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            images = images[type_mask]
-            text_context = text_context[type_mask]
+            images = gpu_safe_index(images, type_mask)
+            text_context = gpu_safe_index(text_context, type_mask)
             if mask is not None:
-                mask = mask[type_mask]
+                mask = gpu_safe_index(mask, type_mask)
 
         # Filter to only samples with valid (non-zero) images
         valid_mask = images.abs().sum(dim=(1, 2, 3)) > 1e-6
         if not valid_mask.any():
             return None
         
-        images = images[valid_mask]
-        text_context = text_context[valid_mask]
+        images = gpu_safe_index(images, valid_mask)
+        text_context = gpu_safe_index(text_context, valid_mask)
         if mask is not None:
-            mask = mask[valid_mask]
+            mask = gpu_safe_index(mask, valid_mask)
 
         # Resize to target size - detach before interpolation to avoid FP32 in gradient graph
         # Interpolation requires FP32 but we don't need gradients through the resize op
@@ -471,11 +493,11 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
                               'video_preference', 'video_likert', 'text_to_video']
         if sample_types is not None:
-            type_mask = torch.tensor([t in video_sample_types for t in sample_types], device=gen_device)
+            type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            video_frames = video_frames[type_mask]
-            text_context = text_context[type_mask]
+            video_frames = gpu_safe_index(video_frames, type_mask)
+            text_context = gpu_safe_index(text_context, type_mask)
 
         # Handle dimension ordering: ensure [B, C, T, H, W]
         if video_frames.dim() == 5:
@@ -495,7 +517,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         # Limit frames during training (max 16 frames)
         max_train_frames = 16
         if T > max_train_frames:
-            frame_indices = torch.linspace(0, T - 1, max_train_frames).long()
+            frame_indices = torch.linspace(0, T - 1, max_train_frames, device=gen_device).long()
             video_frames = video_frames[:, :, frame_indices]
             T = max_train_frames
 
@@ -512,8 +534,8 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if not valid_mask.any():
             return None
         
-        video_frames = video_frames[valid_mask]
-        text_context = text_context[valid_mask]
+        video_frames = gpu_safe_index(video_frames, valid_mask)
+        text_context = gpu_safe_index(text_context, valid_mask)
         B = video_frames.shape[0]
         del valid_mask
 
@@ -606,11 +628,11 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
 
         # First filter by sample type if provided - only train on voice_asr samples
         if sample_types is not None:
-            type_mask = torch.tensor([t == 'voice_asr' for t in sample_types], device=enc_device)
+            type_mask = torch.tensor([t == 'voice_asr' for t in sample_types], dtype=torch.bool, device=enc_device)
             if not type_mask.any():
                 return None
-            audio_features = audio_features[type_mask]
-            text_embeds = text_embeds[type_mask]
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            text_embeds = gpu_safe_index(text_embeds, type_mask)
 
         # Then filter to only samples with valid (non-zero) audio
         # Handle both 2D and 3D tensors
@@ -626,8 +648,8 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
             return None
         
         # Filter audio_features and text_embeds to only valid samples
-        audio_features = audio_features[valid_mask]
-        text_embeds = text_embeds[valid_mask]
+        audio_features = gpu_safe_index(audio_features, valid_mask)
+        text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
         # Need at least 2 samples for contrastive learning
         if audio_features.shape[0] < 2:
@@ -710,11 +732,11 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
 
         # First filter by sample type if provided - only train on voice_tts samples
         if sample_types is not None:
-            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], device=dec_device)
+            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
-            target_mel = target_mel[type_mask]
-            text_embeds = text_embeds[type_mask]
+            target_mel = gpu_safe_index(target_mel, type_mask)
+            text_embeds = gpu_safe_index(text_embeds, type_mask)
 
         # Then filter to only samples with valid (non-zero) target mel
         valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6
@@ -724,8 +746,8 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
             return None
         
         # Filter target_mel and text_embeds to only valid samples
-        target_mel = target_mel[valid_mask]
-        text_embeds = text_embeds[valid_mask]
+        target_mel = gpu_safe_index(target_mel, valid_mask)
+        text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
         # Get target audio features for MAS if audio encoder is available
         audio_features = None
@@ -811,15 +833,11 @@ def train_waveform_decoder_step(
         
         # Filter by sample type if provided
         if sample_types is not None:
-            # Create boolean mask directly on GPU device
-            type_list = [t == 'voice_tts' for t in sample_types]
-            type_mask = torch.tensor(type_list, dtype=torch.bool, device=dec_device)
+            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
-            # Get indices on GPU and use for indexing
-            valid_indices = torch.where(type_mask)[0].to(dec_device)
-            target_waveform = target_waveform.index_select(0, valid_indices)
-            text_embeds = text_embeds.index_select(0, valid_indices)
+            target_waveform = gpu_safe_index(target_waveform, type_mask)
+            text_embeds = gpu_safe_index(text_embeds, type_mask)
         
         # Filter to valid samples (non-silent audio)
         valid_mask = target_waveform.abs().sum(dim=-1) > 1e-6
@@ -828,10 +846,8 @@ def train_waveform_decoder_step(
         if num_valid == 0:
             return None
         
-        # Get indices on GPU and use index_select for safe device handling
-        valid_indices = torch.where(valid_mask)[0].to(dec_device)
-        target_waveform = target_waveform.index_select(0, valid_indices)
-        text_embeds = text_embeds.index_select(0, valid_indices)
+        target_waveform = gpu_safe_index(target_waveform, valid_mask)
+        text_embeds = gpu_safe_index(text_embeds, valid_mask)
         
         # Step 1: Generate mel features through audio decoder (no grad for decoder)
         with torch.no_grad():
@@ -989,12 +1005,12 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
 
         # Filter by sample type if provided
         if sample_types is not None:
-            type_mask = torch.tensor([t in ['image_generation', 'image_editing'] for t in sample_types], device=gen_device)
+            type_mask = torch.tensor([t in ['image_generation', 'image_editing'] for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            images = images[type_mask]
+            images = gpu_safe_index(images, type_mask)
             if text_context is not None and text_context.dim() >= 2:
-                text_context = text_context[type_mask]
+                text_context = gpu_safe_index(text_context, type_mask)
 
         # Filter non-zero images
         valid_mask = images.abs().sum(dim=(1, 2, 3)) > 1e-6
@@ -1003,9 +1019,9 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
         if num_valid == 0:
             return None
 
-        images = images[valid_mask]
+        images = gpu_safe_index(images, valid_mask)
         if text_context is not None and text_context.dim() >= 2:
-            text_context = text_context[valid_mask]
+            text_context = gpu_safe_index(text_context, valid_mask)
 
         # Resize if needed
         if images.shape[2] != target_size or images.shape[3] != target_size:
@@ -1080,12 +1096,12 @@ def eval_video_diffusion_step(video_generator, video_frames, text_context, targe
         # Filter by sample type
         video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
         if sample_types is not None:
-            type_mask = torch.tensor([t in video_sample_types for t in sample_types], device=gen_device)
+            type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            video_frames = video_frames[type_mask]
+            video_frames = gpu_safe_index(video_frames, type_mask)
             if text_context is not None and text_context.dim() >= 2:
-                text_context = text_context[type_mask]
+                text_context = gpu_safe_index(text_context, type_mask)
 
         # Filter non-zero videos
         valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6
@@ -1094,9 +1110,9 @@ def eval_video_diffusion_step(video_generator, video_frames, text_context, targe
         if num_valid == 0:
             return None
 
-        video_frames = video_frames[valid_mask]
+        video_frames = gpu_safe_index(video_frames, valid_mask)
         if text_context is not None and text_context.dim() >= 2:
-            text_context = text_context[valid_mask]
+            text_context = gpu_safe_index(text_context, valid_mask)
 
         # Resize if needed
         current_h, current_w = video_frames.shape[3], video_frames.shape[4]
@@ -1182,11 +1198,11 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
 
         # Filter by sample type
         if sample_types is not None:
-            type_mask = torch.tensor([t == 'voice_asr' for t in sample_types], device=enc_device)
+            type_mask = torch.tensor([t == 'voice_asr' for t in sample_types], dtype=torch.bool, device=enc_device)
             if not type_mask.any():
                 return None
-            audio_features = audio_features[type_mask]
-            text_embeds = text_embeds[type_mask]
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            text_embeds = gpu_safe_index(text_embeds, type_mask)
 
         # Filter valid audio - handle both 2D and 3D
         if audio_features.dim() == 2:
@@ -1198,8 +1214,8 @@ def eval_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_types
         if num_valid == 0:
             return None
 
-        audio_features = audio_features[valid_mask]
-        text_embeds = text_embeds[valid_mask]
+        audio_features = gpu_safe_index(audio_features, valid_mask)
+        text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
         with torch.no_grad():
             # For single sample, use MSE loss
@@ -1275,11 +1291,11 @@ def eval_voice_tts_step(audio_decoder, text_embeds, target_audio, sample_types=N
 
         # Filter by sample type
         if sample_types is not None:
-            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], device=dec_device)
+            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], dtype=torch.bool, device=dec_device)
             if not type_mask.any():
                 return None
-            target_mel = target_mel[type_mask]
-            text_embeds = text_embeds[type_mask]
+            target_mel = gpu_safe_index(target_mel, type_mask)
+            text_embeds = gpu_safe_index(text_embeds, type_mask)
 
         # Filter valid mel spectrograms
         valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6
@@ -1288,8 +1304,8 @@ def eval_voice_tts_step(audio_decoder, text_embeds, target_audio, sample_types=N
         if num_valid == 0:
             return None
 
-        target_mel = target_mel[valid_mask]
-        text_embeds = text_embeds[valid_mask]
+        target_mel = gpu_safe_index(target_mel, valid_mask)
+        text_embeds = gpu_safe_index(text_embeds, valid_mask)
 
         with torch.no_grad():
             pred_mel, durations = audio_decoder(text_embeds, target_length=target_mel.shape[-1])
