@@ -1705,24 +1705,40 @@ def run_cli_mode(args):
     
     # Apply auto-freeze based on modality flags (applies to ALL modes: --build, --hf, etc.)
     # All component groups: vision, video, audio, llm, cross_attention, image_generation, video_generation, modality_markers
+    # 
+    # IMPORTANT: LLM is NEVER frozen - it's trained from scratch and always needs full weight training + LoRA
+    # Only non-LLM components are selectively frozen based on training mode
     auto_freeze = []
     
     if args.video:
-        # Video mode: train video understanding and generation, keep vision for frame encoding
+        # Video mode: train LLM + video + vision (for frame encoding)
+        # Freeze: image_generation, audio
         auto_freeze = ['image_generation', 'audio']
     elif args.image:
-        # Image mode: train image understanding and generation
+        # Image mode: train LLM + vision + image_generation
+        # Freeze: video, video_generation, audio
         auto_freeze = ['video', 'video_generation', 'audio']
     elif args.text:
-        # Text mode: train ONLY the LLM and related text components
+        # Text mode: train LLM only (still full weights + LoRA)
+        # Freeze: all non-LLM components
         auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
     elif args.voice:
-        # Voice mode: train audio understanding and generation
+        # Voice mode: train LLM + audio
+        # Freeze: vision, video, image/video generation
         auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
+    
+    # NEVER freeze LLM - remove it if somehow added
+    if 'llm' in auto_freeze:
+        auto_freeze.remove('llm')
     
     # Combine auto-freeze with any user-specified freeze components
     if auto_freeze:
         freeze_components = list(set(freeze_components + auto_freeze))
+    
+    # Safety: ensure LLM is never in freeze list
+    if 'llm' in freeze_components:
+        freeze_components.remove('llm')
+        print("⚠️ Removed 'llm' from freeze list - LLM must always train (from scratch)")
     
     # List checkpoints
     if args.list:

@@ -1394,16 +1394,23 @@ class XoronMultimodalModel(nn.Module):
         """
         Freeze specific components of the model.
         
-        IMPORTANT: LoRA parameters are NEVER frozen by this method!
-        Even if 'llm' is frozen, LoRA adapters (lora_A, lora_B, magnitude) stay trainable.
-        This allows parallel fine-tuning: frozen base weights + trainable LoRA.
+        IMPORTANT RULES:
+        1. LLM is NEVER frozen - it's trained from scratch and always needs full weight training
+        2. LoRA parameters are NEVER frozen - they should always be trainable
         
         Args:
             components: List of component group names to freeze.
-                       Valid groups: 'vision', 'video', 'audio', 'llm', 
+                       Valid groups: 'vision', 'video', 'audio', 
                        'cross_attention', 'image_generation', 'video_generation',
                        'modality_markers'
+                       
+                       NOTE: 'llm' is NOT a valid group to freeze - will be ignored!
         """
+        # SAFETY: Never freeze LLM - it's trained from scratch
+        if 'llm' in components:
+            print(f"   ⚠️ Ignoring 'llm' in freeze list - LLM must always train (from scratch)")
+            components = [c for c in components if c != 'llm']
+        
         print(f"\n❄️ Freezing components: {components}")
         
         for group_name in components:
@@ -1423,7 +1430,7 @@ class XoronMultimodalModel(nn.Module):
                                 is_lora = 'lora_A' in name or 'lora_B' in name or 'magnitude' in name
                                 if not is_lora:
                                     param.requires_grad = False
-                        print(f"   ❄️ Frozen: {attr_name} (LoRA params preserved)")
+                        print(f"   ❄️ Frozen: {attr_name}")
         
         # Ensure LoRA params are trainable after freezing
         if self.lora_applied:
@@ -1463,9 +1470,15 @@ class XoronMultimodalModel(nn.Module):
         """
         Freeze all components except the specified ones.
         
+        NOTE: LLM is always kept trainable regardless of input - it's trained from scratch.
+        
         Args:
             components: List of component group names to keep trainable.
         """
+        # Always keep LLM trainable - it's from scratch
+        if 'llm' not in components:
+            components = components + ['llm']
+        
         all_groups = list(COMPONENT_GROUPS.keys())
         groups_to_freeze = [g for g in all_groups if g not in components]
         self.freeze_components(groups_to_freeze)
