@@ -697,6 +697,157 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_mel, audio_encoder=N
         return None
 
 
+def train_waveform_decoder_step(
+    waveform_decoder, 
+    audio_decoder,
+    text_embeds, 
+    target_waveform,
+    mel_to_hidden=None,
+    sample_types=None,
+):
+    """
+    Train the waveform decoder for Speech-to-Speech output.
+    
+    This trains the model to convert mel features to raw audio waveform,
+    enabling direct speech output without an external vocoder.
+    
+    Args:
+        waveform_decoder: RawWaveformDecoder model
+        audio_decoder: AudioDecoder model (for generating mel features)
+        text_embeds: Text embeddings (B, seq_len, hidden_dim)
+        target_waveform: Target audio waveform (B, audio_len)
+        mel_to_hidden: Linear projection from mel dims to hidden_size
+        sample_types: List of sample types to filter valid samples
+        
+    Returns:
+        loss: Waveform reconstruction loss (L1 + multi-scale STFT loss)
+    """
+    if waveform_decoder is None or target_waveform is None:
+        return None
+    
+    try:
+        if not isinstance(target_waveform, torch.Tensor):
+            return None
+        if target_waveform.numel() == 0:
+            return None
+        
+        dec_device = next(waveform_decoder.parameters()).device
+        dec_dtype = next(waveform_decoder.parameters()).dtype
+        
+        target_waveform = target_waveform.to(device=dec_device, dtype=dec_dtype)
+        text_embeds = text_embeds.to(device=dec_device, dtype=dec_dtype)
+        
+        # Filter by sample type if provided
+        if sample_types is not None:
+            type_mask = torch.tensor([t == 'voice_tts' for t in sample_types], device=dec_device)
+            if not type_mask.any():
+                return None
+            target_waveform = target_waveform[type_mask]
+            text_embeds = text_embeds[type_mask]
+        
+        # Filter to valid samples (non-silent audio)
+        valid_mask = target_waveform.abs().sum(dim=-1) > 1e-6
+        num_valid = valid_mask.sum().item()
+        
+        if num_valid == 0:
+            return None
+        
+        target_waveform = target_waveform[valid_mask]
+        text_embeds = text_embeds[valid_mask]
+        
+        # Step 1: Generate mel features through audio decoder (no grad for decoder)
+        with torch.no_grad():
+            pred_mel, durations, _ = audio_decoder(text_embeds)
+            # pred_mel: [B, n_mels, T_mel]
+        
+        # Step 2: Project mel to hidden_size for waveform decoder
+        mel_features = pred_mel.transpose(1, 2)  # [B, T_mel, n_mels]
+        
+        if mel_to_hidden is not None:
+            mel_to_hidden = mel_to_hidden.to(device=dec_device, dtype=dec_dtype)
+            audio_features = mel_to_hidden(mel_features)  # [B, T_mel, hidden_size]
+        else:
+            # Fallback: pad/project mel features
+            hidden_size = waveform_decoder.hidden_size
+            n_mels = mel_features.shape[-1]
+            if n_mels != hidden_size:
+                # Simple linear projection
+                proj = torch.nn.functional.pad(mel_features, (0, hidden_size - n_mels))
+                audio_features = proj
+            else:
+                audio_features = mel_features
+        
+        # Step 3: Generate waveform
+        pred_waveform = waveform_decoder(audio_features, target_length=target_waveform.shape[-1])
+        
+        # Step 4: Compute losses
+        # L1 loss (time domain)
+        l1_loss = F.l1_loss(pred_waveform, target_waveform)
+        
+        # Multi-scale STFT loss (frequency domain) - helps with audio quality
+        stft_loss = compute_multi_scale_stft_loss(pred_waveform, target_waveform)
+        
+        total_loss = l1_loss + stft_loss
+        return total_loss
+        
+    except Exception as e:
+        print(f"      ⚠️ Waveform decoder training error: {type(e).__name__}: {str(e)[:100]}")
+        return None
+
+
+def compute_multi_scale_stft_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """
+    Multi-scale STFT loss for waveform reconstruction.
+    
+    Uses multiple FFT sizes to capture both fine and coarse spectral details.
+    This is crucial for high-quality audio generation.
+    
+    Args:
+        pred: Predicted waveform [B, T]
+        target: Target waveform [B, T]
+        
+    Returns:
+        loss: Combined multi-scale spectral loss
+    """
+    fft_sizes = [512, 1024, 2048]
+    hop_sizes = [128, 256, 512]
+    win_sizes = [512, 1024, 2048]
+    
+    total_loss = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+    
+    for fft_size, hop_size, win_size in zip(fft_sizes, hop_sizes, win_sizes):
+        # Compute STFT
+        window = torch.hann_window(win_size, device=pred.device, dtype=pred.dtype)
+        
+        try:
+            pred_stft = torch.stft(
+                pred, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
+                window=window, return_complex=True
+            )
+            target_stft = torch.stft(
+                target, n_fft=fft_size, hop_length=hop_size, win_length=win_size,
+                window=window, return_complex=True
+            )
+            
+            # Magnitude loss
+            pred_mag = pred_stft.abs()
+            target_mag = target_stft.abs()
+            mag_loss = F.l1_loss(pred_mag, target_mag)
+            
+            # Log magnitude loss (perceptually important)
+            pred_log_mag = torch.log(pred_mag + 1e-7)
+            target_log_mag = torch.log(target_mag + 1e-7)
+            log_mag_loss = F.l1_loss(pred_log_mag, target_log_mag)
+            
+            total_loss = total_loss + mag_loss + log_mag_loss
+            
+        except Exception:
+            # Skip this scale if STFT fails (e.g., audio too short)
+            continue
+    
+    return total_loss / len(fft_sizes)
+
+
 # ============================================================================
 # EVALUATION FUNCTIONS
 # These are inference-only versions without gradient computation

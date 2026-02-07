@@ -1033,6 +1033,22 @@ class XoronTrainer:
                     total_loss = total_loss + self.tts_loss_weight * tts_loss
                     epoch_tts_loss += tts_loss.item()
                     num_tts += 1
+                
+                # Train waveform decoder for Speech-to-Speech (direct audio output)
+                if hasattr(self.model, 'waveform_decoder') and self.model.waveform_decoder is not None:
+                    from training.utils import train_waveform_decoder_step
+                    waveform_loss = train_waveform_decoder_step(
+                        self.model.waveform_decoder,
+                        self.model.audio_decoder,
+                        text_embeds,
+                        batch.get('waveform', batch.get('audio', None)),
+                        mel_to_hidden=getattr(self.model, '_mel_to_hidden', None),
+                        sample_types=sample_types,
+                    )
+                    if waveform_loss is not None:
+                        waveform_loss = waveform_loss.to(total_loss.device)
+                        # Use same weight as TTS
+                        total_loss = total_loss + self.tts_loss_weight * 0.5 * waveform_loss
 
             # CRITICAL: Final loss clamping before backward (FP16 safety)
             # This prevents gradient explosion from extreme loss values
