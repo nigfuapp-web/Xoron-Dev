@@ -54,7 +54,7 @@ class TrainingConfig:
     final_model_dir: str = field(default_factory=lambda: _get_default_paths().final_model_dir)
 
     # Dataset settings
-    max_per_epoch: int = 2000
+    max_per_epoch: int = 400
     max_per_dataset: int = 100  # Prevent any single dataset from dominating the epoch
     sample_repeat: int = 2  # Each sample shown N times within gradient accumulation window
 
