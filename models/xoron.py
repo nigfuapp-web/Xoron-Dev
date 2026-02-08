@@ -1167,59 +1167,18 @@ class XoronMultimodalModel(nn.Module):
         elif os.path.exists(model_path):
             print(f"   📦 Loading weights from safetensors...")
             
-            try:
-                if strict:
-                    load_model(model, model_path)
-                else:
-                    # Manual loading with shape filtering for architecture changes
-                    checkpoint_state_dict = {}
-                    with safe_open(model_path, framework="pt", device="cpu") as f:
-                        for key in f.keys():
-                            checkpoint_state_dict[key] = f.get_tensor(key)
-                    
-                    # Filter out tensors with shape mismatches
-                    model_state_dict = model.state_dict()
-                    filtered_state_dict = {}
-                    skipped_keys = []
-                    size_mismatch_keys = []
-                    
-                    for key, checkpoint_tensor in checkpoint_state_dict.items():
-                        if key in model_state_dict:
-                            model_tensor = model_state_dict[key]
-                            if checkpoint_tensor.shape == model_tensor.shape:
-                                filtered_state_dict[key] = checkpoint_tensor
-                            else:
-                                size_mismatch_keys.append((key, checkpoint_tensor.shape, model_tensor.shape))
-                        else:
-                            skipped_keys.append(key)
-                    
-                    # Load filtered state dict
-                    missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
-                    
-                    # Report what happened
-                    loaded_count = len(filtered_state_dict)
-                    total_model_params = len(model_state_dict)
-                    print(f"   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
-                
-                model.lora_applied = lora_was_applied
-                
-            except Exception as e:
-                print(f"   ⚠️ Error loading safetensors: {e}")
-                print(f"   🔄 Attempting fallback loading...")
+            if strict:
+                load_model(model, model_path)
+            else:
                 checkpoint_state_dict = {}
                 with safe_open(model_path, framework="pt", device="cpu") as f:
                     for key in f.keys():
                         checkpoint_state_dict[key] = f.get_tensor(key)
                 
-                # Filter by shape
-                model_state_dict = model.state_dict()
-                filtered_state_dict = {
-                    k: v for k, v in checkpoint_state_dict.items()
-                    if k in model_state_dict and v.shape == model_state_dict[k].shape
-                }
-                model.load_state_dict(filtered_state_dict, strict=False)
-                print(f"   ✅ Loaded {len(filtered_state_dict)}/{len(model_state_dict)} parameters")
-                model.lora_applied = lora_was_applied
+                model.load_state_dict(checkpoint_state_dict, strict=False)
+                print(f"   ✅ Loaded weights from checkpoint")
+            
+            model.lora_applied = lora_was_applied
         else:
             # Try loading from pytorch format
             pytorch_path = os.path.join(path, "pytorch_model.bin")
@@ -1227,21 +1186,8 @@ class XoronMultimodalModel(nn.Module):
                 print(f"   📦 Loading weights from pytorch_model.bin...")
                 checkpoint_state_dict = torch.load(pytorch_path, map_location='cpu')
                 
-                # Filter by shape
-                model_state_dict = model.state_dict()
-                filtered_state_dict = {}
-                size_mismatch_count = 0
-                
-                for key, checkpoint_tensor in checkpoint_state_dict.items():
-                    if key in model_state_dict:
-                        if checkpoint_tensor.shape == model_state_dict[key].shape:
-                            filtered_state_dict[key] = checkpoint_tensor
-                        else:
-                            size_mismatch_count += 1
-                
-                missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
-                
-                print(f"   ✅ Loaded {len(filtered_state_dict)}/{len(model_state_dict)} parameters")
+                model.load_state_dict(checkpoint_state_dict, strict=False)
+                print(f"   ✅ Loaded weights from checkpoint")
                     
                 model.lora_applied = lora_was_applied
             else:
@@ -1292,16 +1238,12 @@ class XoronMultimodalModel(nn.Module):
         if hasattr(self, 'waveform_decoder') and self.waveform_decoder is not None:
             component_map['waveform_decoder'] = self.waveform_decoder
         
-        total_loaded = 0
-        total_params = sum(len(list(c.parameters())) for c in component_map.values() if c is not None)
-        
         for comp_name, component in component_map.items():
             if component is None:
                 continue
                 
             comp_path = os.path.join(path, f"{comp_name}.safetensors")
             if not os.path.exists(comp_path):
-                print(f"   ⚠️ Component file not found: {comp_name}.safetensors")
                 continue
             
             try:
@@ -1310,23 +1252,10 @@ class XoronMultimodalModel(nn.Module):
                     for key in f.keys():
                         checkpoint_state[key] = f.get_tensor(key)
                 
-                if strict:
-                    component.load_state_dict(checkpoint_state)
-                    loaded = len(checkpoint_state)
-                else:
-                    # Filter by shape for non-strict loading
-                    model_state = component.state_dict()
-                    filtered_state = {}
-                    for key, tensor in checkpoint_state.items():
-                        if key in model_state and tensor.shape == model_state[key].shape:
-                            filtered_state[key] = tensor
-                    
-                    component.load_state_dict(filtered_state, strict=False)
-                    loaded = len(filtered_state)
+                component.load_state_dict(checkpoint_state, strict=strict)
                 
                 size_mb = sum(t.numel() * t.element_size() for t in checkpoint_state.values()) / (1024 * 1024)
-                print(f"   ✅ Loaded {comp_name}: {loaded} params ({size_mb:.1f} MB)")
-                total_loaded += loaded
+                print(f"   ✅ Loaded {comp_name} ({size_mb:.1f} MB)")
                 
             except Exception as e:
                 print(f"   ⚠️ Error loading {comp_name}: {e}")
@@ -1346,7 +1275,7 @@ class XoronMultimodalModel(nn.Module):
             except Exception as e:
                 print(f"   ⚠️ Error loading modality_markers: {e}")
         
-        print(f"   📋 Total: {total_loaded} parameters loaded across {len(component_map)} components")
+        print(f"   ✅ Components loaded successfully")
 
     @staticmethod
     def load_training_state(path: str) -> Optional[Dict]:

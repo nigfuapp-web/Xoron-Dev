@@ -686,16 +686,10 @@ def load_model_from_huggingface(hf_model_id, training_config):
         # Load weights based on format
         if is_component_format and component_files:
             # COMPONENT FORMAT: Load each component's weights separately
-            # Build a combined state dict from all component files
             print(f"\n   📦 Loading weights from component files...")
             
-            # Build combined checkpoint state dict from all component files
-            # Key mapping strategy:
-            # 1. Try key as-is (for keys that already have correct prefix like projector.layers.0)
-            # 2. Try with component name prefix (video_encoder.encoder_blocks.0)
             checkpoint_state_dict = {}
-            model_state_dict = model.state_dict()
-            model_keys_set = set(model_state_dict.keys())
+            model_keys_set = set(model.state_dict().keys())
             
             for comp_name, comp_file in component_files.items():
                 print(f"      Loading {comp_name}...")
@@ -705,115 +699,42 @@ def load_model_from_huggingface(hf_model_id, training_config):
                         for key in f.keys():
                             tensor = f.get_tensor(key)
                             
-                            # Try multiple key formats to find a match in model
-                            # Order matters - try most specific first
-                            possible_keys = [
-                                key,  # As-is (for keys that already have correct prefix like projector.layers.0)
-                                f"{comp_name}.{key}",  # With component name as prefix (video_encoder.encoder_blocks.0)
-                            ]
-                            
-                            # Find the first key that exists in the model
-                            matched_key = None
-                            for pk in possible_keys:
-                                if pk in model_keys_set:
-                                    matched_key = pk
-                                    break
-                            
-                            if matched_key:
-                                checkpoint_state_dict[matched_key] = tensor
-                            else:
-                                # If no match found, use the key with component name prefix
-                                # This will be reported as skipped later
+                            # Try key as-is first, then with component prefix
+                            if key in model_keys_set:
+                                checkpoint_state_dict[key] = tensor
+                            elif f"{comp_name}.{key}" in model_keys_set:
                                 checkpoint_state_dict[f"{comp_name}.{key}"] = tensor
+                            else:
+                                checkpoint_state_dict[key] = tensor
                                 
                 except Exception as e:
                     print(f"      ⚠️ Error loading {comp_name}: {e}")
             
-            # Filter out tensors with shape mismatches
-            model_state_dict = model.state_dict()
-            filtered_state_dict = {}
-            skipped_keys = []
-            size_mismatch_keys = []
-            
-            for key, checkpoint_tensor in checkpoint_state_dict.items():
-                if key in model_state_dict:
-                    model_tensor = model_state_dict[key]
-                    if checkpoint_tensor.shape == model_tensor.shape:
-                        filtered_state_dict[key] = checkpoint_tensor
-                    else:
-                        size_mismatch_keys.append((key, checkpoint_tensor.shape, model_tensor.shape))
-                else:
-                    skipped_keys.append(key)
-            
-            # Load filtered state dict using load_state_dict for reliability
-            missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
-            
-            # Report results
-            loaded_count = len(filtered_state_dict)
-            total_model_params = len(model_state_dict)
-            
-            print(f"\n   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
+            model.load_state_dict(checkpoint_state_dict, strict=False)
+            print(f"\n   ✅ Loaded weights from checkpoint")
             
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
             
         elif os.path.exists(model_path):
             # SINGLE FILE FORMAT: model.safetensors
-            print(f"   📦 Loading weights from safetensors (non-strict mode)...")
+            print(f"   📦 Loading weights from safetensors...")
             checkpoint_state_dict = {}
             with safe_open(model_path, framework="pt", device="cpu") as f:
                 for key in f.keys():
                     checkpoint_state_dict[key] = f.get_tensor(key)
             
-            # Filter out tensors with shape mismatches
-            model_state_dict = model.state_dict()
-            filtered_state_dict = {}
-            skipped_keys = []
-            size_mismatch_keys = []
-            
-            for key, checkpoint_tensor in checkpoint_state_dict.items():
-                if key in model_state_dict:
-                    model_tensor = model_state_dict[key]
-                    if checkpoint_tensor.shape == model_tensor.shape:
-                        filtered_state_dict[key] = checkpoint_tensor
-                    else:
-                        size_mismatch_keys.append((key, checkpoint_tensor.shape, model_tensor.shape))
-                else:
-                    skipped_keys.append(key)
-            
-            # Load filtered state dict
-            missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
-            
-            # Report what happened
-            loaded_count = len(filtered_state_dict)
-            total_model_params = len(model_state_dict)
-            print(f"   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
+            model.load_state_dict(checkpoint_state_dict, strict=False)
+            print(f"   ✅ Loaded weights from checkpoint")
             
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
             
         elif os.path.exists(pytorch_path):
             # SINGLE FILE FORMAT: pytorch_model.bin
             print(f"   📦 Loading weights from pytorch_model.bin...")
-            if 'state_dict' not in dir():
-                checkpoint_state_dict = torch.load(pytorch_path, map_location='cpu')
-            else:
-                checkpoint_state_dict = state_dict
+            checkpoint_state_dict = torch.load(pytorch_path, map_location='cpu')
             
-            # Filter out tensors with shape mismatches
-            model_state_dict = model.state_dict()
-            filtered_state_dict = {}
-            size_mismatch_keys = []
-            
-            for key, checkpoint_tensor in checkpoint_state_dict.items():
-                if key in model_state_dict:
-                    model_tensor = model_state_dict[key]
-                    if checkpoint_tensor.shape == model_tensor.shape:
-                        filtered_state_dict[key] = checkpoint_tensor
-                    else:
-                        size_mismatch_keys.append(key)
-            
-            missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
-            
-            print(f"   ✅ Loaded {len(filtered_state_dict)}/{len(model_state_dict)} parameters")
+            model.load_state_dict(checkpoint_state_dict, strict=False)
+            print(f"   ✅ Loaded weights from checkpoint")
                 
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
         else:
