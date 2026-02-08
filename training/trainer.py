@@ -72,7 +72,7 @@ class XoronTrainer:
         tokenizer=None,
         eval_dataset=None,
         hf_token: str = None,
-        hf_repo_id: str = None,
+        hf_repo_id: str = "Backup-bdg/Xoron-Dev-MultiMoe",
     ):
         self.model = model
         self.train_dataset = train_dataset
