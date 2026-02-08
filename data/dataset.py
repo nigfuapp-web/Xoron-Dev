@@ -1141,12 +1141,7 @@ class TrueStreamingDataset(IterableDataset):
                 "sample_type": dtype,
             }
         
-        except Exception as e:
-            # Log the actual error so we can debug why samples fail
-            import traceback
-            print(f"   🔴 _process_raw_sample FAILED: {type(e).__name__}: {str(e)[:100]}", flush=True)
-            # Uncomment below for full traceback if needed:
-            # traceback.print_exc()
+        except Exception:
             return None
 
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
@@ -1306,9 +1301,6 @@ class TrueStreamingDataset(IterableDataset):
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
                     if processed is not None:
-                        # SUCCESS - reset failure counter
-                        source["_consecutive_fails"] = 0
-                        
                         # Yield the SAME processed sample multiple times
                         # Sample is loaded from stream once, processed once, yielded sample_repeat times
                         # This is memory efficient - same tensors are reused
@@ -1354,37 +1346,13 @@ class TrueStreamingDataset(IterableDataset):
                             # Auto-save state if path is set
                             if self._state_save_path:
                                 self.save_streaming_state(self._state_save_path)
-                    else:
-                        # FAILURE - _process_raw_sample returned None
-                        # Track consecutive failures to detect stuck sources
-                        source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
-                        
-                        # Log failures so we can see what's happening
-                        if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] == 10:
-                            print(f"   ⚠️ {source['name']}: sample processing failed ({source['_consecutive_fails']}/10)", flush=True)
-                        
-                        # After 10 consecutive failures, this source is broken - mark exhausted
-                        if source["_consecutive_fails"] >= 10:
-                            print(f"   ❌ {source['name']}: 10 consecutive failures, marking EXHAUSTED", flush=True)
-                            source["exhausted"] = True
-                            sources_to_remove.append(source_idx)
                 
                 except StopIteration:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
                 except Exception as e:
-                    # FAILURE - exception during processing
-                    source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
-                    
-                    # Log errors so we can actually SEE them
-                    if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] == 10:
-                        print(f"   ⚠️ {source['name']}: {type(e).__name__}: {str(e)[:80]} (fail #{source['_consecutive_fails']}/10)", flush=True)
-                    
-                    # After 10 consecutive failures, mark exhausted
-                    if source["_consecutive_fails"] >= 10:
-                        print(f"   ❌ {source['name']}: 10 consecutive errors, marking EXHAUSTED", flush=True)
-                        source["exhausted"] = True
-                        sources_to_remove.append(source_idx)
+                    # Skip problematic samples but log for debugging
+                    logger.debug(f"Sample processing skipped in {source.get('name', 'unknown')}: {e}")
             
             # Remove exhausted sources
             for idx in sorted(sources_to_remove, reverse=True):
