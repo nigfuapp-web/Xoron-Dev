@@ -1044,9 +1044,18 @@ class TrueStreamingDataset(IterableDataset):
             # Only process audio for audio samples - use minimal placeholder for others
             is_audio_sample = dtype in ['voice_asr', 'voice_tts']
             audio_features = None
+            speaker_ref_audio = None  # For voice cloning
             
             if is_audio_sample and raw_audio_data:
                 audio_features = self._process_audio(raw_audio_data, sample_metadata)
+                
+                # For TTS with voice cloning: use the same audio as speaker reference
+                # This teaches the model to capture speaker characteristics
+                if dtype == 'voice_tts' and audio_features is not None:
+                    use_self_as_ref = sample_metadata.get('use_self_as_reference', True)
+                    if use_self_as_ref:
+                        # Clone the audio for speaker reference (will be processed separately)
+                        speaker_ref_audio = audio_features.clone()
             
             if audio_features is None:
                 # Use minimal tensor for non-audio samples to save memory
@@ -1079,6 +1088,39 @@ class TrueStreamingDataset(IterableDataset):
                             pad = torch.zeros(audio_features.shape[0], self.audio_max_length - audio_features.shape[1])
                             audio_features = torch.cat([audio_features, pad], dim=1)
             
+            # Process speaker reference audio for voice cloning
+            # Use a shorter segment (3 seconds) as reference to learn speaker characteristics
+            if speaker_ref_audio is not None:
+                if self.use_raw_waveform:
+                    # Use first 3 seconds as speaker reference (enough to capture voice characteristics)
+                    ref_samples = self.audio_sample_rate * 3  # 3 seconds
+                    if speaker_ref_audio.dim() == 1:
+                        if speaker_ref_audio.shape[0] > ref_samples:
+                            speaker_ref_audio = speaker_ref_audio[:ref_samples]
+                        elif speaker_ref_audio.shape[0] < ref_samples:
+                            pad = torch.zeros(ref_samples - speaker_ref_audio.shape[0])
+                            speaker_ref_audio = torch.cat([speaker_ref_audio, pad], dim=0)
+                else:
+                    # For mel spectrogram, use first ~3 seconds worth of frames
+                    ref_frames = int(3 * self.audio_sample_rate / 256)  # hop_length=256
+                    if speaker_ref_audio.dim() == 2:
+                        if speaker_ref_audio.shape[1] > ref_frames:
+                            speaker_ref_audio = speaker_ref_audio[:, :ref_frames]
+                        elif speaker_ref_audio.shape[1] < ref_frames:
+                            pad = torch.zeros(speaker_ref_audio.shape[0], ref_frames - speaker_ref_audio.shape[1])
+                            speaker_ref_audio = torch.cat([speaker_ref_audio, pad], dim=1)
+            else:
+                # No speaker reference - use zeros (model will learn generic voice)
+                if is_audio_sample and dtype == 'voice_tts':
+                    if self.use_raw_waveform:
+                        speaker_ref_audio = torch.zeros(self.audio_sample_rate * 3)
+                    else:
+                        ref_frames = int(3 * self.audio_sample_rate / 256)
+                        speaker_ref_audio = torch.zeros(self.audio_n_mels, ref_frames)
+                else:
+                    # Minimal placeholder for non-TTS samples
+                    speaker_ref_audio = torch.zeros(1)
+            
             # Validate: ensure we have at least some valid labels to train on
             # Samples with ALL -100 labels cause NaN loss and waste compute
             num_valid_labels = (labels != -100).sum().item()
@@ -1093,6 +1135,7 @@ class TrueStreamingDataset(IterableDataset):
                 "pixel_values": pixel_values,
                 "video_frames": video_frames,
                 "audio_features": audio_features,
+                "speaker_ref_audio": speaker_ref_audio,  # For voice cloning
                 "sample_type": dtype,
             }
         

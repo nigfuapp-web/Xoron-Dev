@@ -1274,10 +1274,23 @@ class MultimodalFormatter:
 
     def format_voice_tts_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format TTS samples for text-to-speech training.
+        Format TTS samples for text-to-speech training with voice cloning support.
         
         Uses audio prompting tokens for zero-shot voice cloning.
         The model learns to generate speech from text using speaker reference audio.
+        
+        For voice cloning training:
+        - Extract speaker_id from dataset (LibriTTS-R, HiFi-TTS, etc.)
+        - The same speaker's audio serves as both reference and target
+        - Model learns to capture speaker characteristics (pitch, tone, emotion)
+        
+        Returns:
+            Dict with:
+            - text: Formatted text with tokens
+            - type: "voice_tts"
+            - has_audio: True
+            - speaker_id: Speaker identifier for grouping (if available)
+            - use_self_as_reference: True (use target audio as speaker reference)
         """
         try:
             # LibriTTS-R uses 'text_normalized', MLS uses 'transcript'
@@ -1292,19 +1305,58 @@ class MultimodalFormatter:
             if len(text) < 2:
                 return None
             
+            # Extract speaker ID for voice cloning
+            # Different datasets use different field names
+            speaker_id = sample.get("speaker_id")
+            if speaker_id is None:
+                speaker_id = sample.get("speaker", sample.get("spk_id", sample.get("speaker_name")))
+            if speaker_id is None:
+                # Try to extract from path (LibriTTS format: speaker/chapter/utterance)
+                audio_path = sample.get("audio", {})
+                if isinstance(audio_path, dict):
+                    audio_path = audio_path.get("path", "")
+                if isinstance(audio_path, str) and "/" in audio_path:
+                    parts = audio_path.split("/")
+                    if len(parts) >= 2:
+                        speaker_id = parts[-3] if len(parts) >= 3 else parts[-2]
+            
             # Use audio prompting tokens for zero-shot voice cloning
-            # [SPEECH] placeholder will be replaced with actual audio embeddings during training
-            formatted_text = (
-                f"{self.t['user_start']}\nSay: {text}\n{self.t['user_end']}\n"
-                f"{self.t['assistant_start']}\n"
-                f"{self.t['speak_start']}[SPEECH]{self.t['speak_end']}\n"
-                f"{self.t['assistant_end']}"
-            )
+            # Include speaker reference marker when we have speaker info
+            if speaker_id is not None:
+                # Format with speaker reference - model will learn to clone this voice
+                formatted_text = (
+                    f"{self.t['user_start']}\n"
+                    f"{self.t.get('speaker_ref_start', '<|speaker_ref|>')}[SPEAKER_REF]{self.t.get('speaker_ref_end', '<|/speaker_ref|>')}\n"
+                    f"Say in this voice: {text}\n"
+                    f"{self.t['user_end']}\n"
+                    f"{self.t['assistant_start']}\n"
+                    f"{self.t['speak_start']}[SPEECH]{self.t['speak_end']}\n"
+                    f"{self.t['assistant_end']}"
+                )
+            else:
+                # No speaker info - basic TTS without cloning
+                formatted_text = (
+                    f"{self.t['user_start']}\nSay: {text}\n{self.t['user_end']}\n"
+                    f"{self.t['assistant_start']}\n"
+                    f"{self.t['speak_start']}[SPEECH]{self.t['speak_end']}\n"
+                    f"{self.t['assistant_end']}"
+                )
             
             # Wrap with sequence tokens
             formatted_text = self._wrap_sequence(formatted_text)
             
-            return {"text": formatted_text, "type": "voice_tts", "has_audio": True}
+            result = {
+                "text": formatted_text, 
+                "type": "voice_tts", 
+                "has_audio": True,
+                "use_self_as_reference": True,  # Use target audio as speaker reference
+            }
+            
+            # Include speaker_id if available (for potential speaker grouping)
+            if speaker_id is not None:
+                result["speaker_id"] = str(speaker_id)
+            
+            return result
         except:
             pass
         return None

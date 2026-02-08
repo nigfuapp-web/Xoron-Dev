@@ -189,9 +189,12 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             # Handle audio_features - use minimal tensor if not needed
             if need_audio:
                 audio_features_list = []
+                speaker_ref_list = []  # For voice cloning
                 max_audio_len = 1000  # For mel spectrograms
                 max_waveform_samples = 160000  # 10 seconds at 16kHz for raw waveform
+                max_ref_samples = 48000  # 3 seconds at 16kHz for speaker reference
                 target_mel_bins = 80
+                ref_mel_frames = 187  # ~3 seconds at 16kHz with hop_length=256
                 
                 # Detect if we're using raw waveform (1D with large T) or mel spectrogram (2D)
                 # Skip minimal placeholders (size 1) when detecting
@@ -207,8 +210,11 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 
                 for b in batch:
                     af = b.get("audio_features")
+                    sr = b.get("speaker_ref_audio")  # Speaker reference for voice cloning
+                    
                     # Check if this is a valid audio tensor (not minimal placeholder)
                     is_valid_audio = af is not None and isinstance(af, torch.Tensor) and af.numel() > 100
+                    is_valid_ref = sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100
                     
                     if is_valid_audio:
                         if use_raw_waveform and af.dim() == 1:
@@ -248,11 +254,52 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                             audio_features_list.append(torch.zeros(max_waveform_samples))
                         else:
                             audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                    
+                    # Handle speaker reference audio for voice cloning
+                    if is_valid_ref:
+                        if use_raw_waveform and sr.dim() == 1:
+                            # Raw waveform reference
+                            if sr.shape[0] > max_ref_samples:
+                                sr = sr[:max_ref_samples]
+                            elif sr.shape[0] < max_ref_samples:
+                                pad = torch.zeros(max_ref_samples - sr.shape[0])
+                                sr = torch.cat([sr, pad], dim=0)
+                            speaker_ref_list.append(sr)
+                        elif not use_raw_waveform and sr.dim() == 2:
+                            # Mel spectrogram reference
+                            if sr.shape[0] != target_mel_bins:
+                                sr = F.interpolate(
+                                    sr.unsqueeze(0).unsqueeze(0),
+                                    size=(target_mel_bins, sr.shape[1]),
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).squeeze(0).squeeze(0)
+                            if sr.shape[1] != ref_mel_frames:
+                                if sr.shape[1] > ref_mel_frames:
+                                    sr = sr[:, :ref_mel_frames]
+                                else:
+                                    pad = torch.zeros(target_mel_bins, ref_mel_frames - sr.shape[1])
+                                    sr = torch.cat([sr, pad], dim=1)
+                            speaker_ref_list.append(sr)
+                        else:
+                            # Mismatched - use zeros
+                            if use_raw_waveform:
+                                speaker_ref_list.append(torch.zeros(max_ref_samples))
+                            else:
+                                speaker_ref_list.append(torch.zeros(target_mel_bins, ref_mel_frames))
+                    else:
+                        # No speaker reference - use zeros
+                        if use_raw_waveform:
+                            speaker_ref_list.append(torch.zeros(max_ref_samples))
+                        else:
+                            speaker_ref_list.append(torch.zeros(target_mel_bins, ref_mel_frames))
                 
                 audio_features = torch.stack(audio_features_list)
+                speaker_ref_audio = torch.stack(speaker_ref_list)
             else:
                 # Minimal tensor to save memory when audio not needed
                 audio_features = torch.zeros(batch_size, 1)
+                speaker_ref_audio = torch.zeros(batch_size, 1)
 
             return {
                 "input_ids": input_ids,
@@ -261,6 +308,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 "pixel_values": pixel_values,
                 "video_frames": video_frames_tensor,
                 "audio_features": audio_features,
+                "speaker_ref_audio": speaker_ref_audio,  # For voice cloning
                 "sample_type": sample_types,
             }
         except Exception:
@@ -271,6 +319,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             vf_size = video_size if need_video else 1
             af_bins = 80 if need_audio else 1
             af_len = 1000 if need_audio else 1
+            ref_len = 187 if need_audio else 1  # ~3 seconds of mel frames
             
             return {
                 "input_ids": torch.stack([b["input_ids"] for b in batch]),
@@ -279,6 +328,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 "pixel_values": torch.zeros(batch_size, 3, vs, vs),
                 "video_frames": torch.zeros(batch_size, vf_count, 3, vf_size, vf_size),
                 "audio_features": torch.zeros(batch_size, af_bins, af_len),
+                "speaker_ref_audio": torch.zeros(batch_size, af_bins, ref_len),  # For voice cloning
                 "sample_type": ["text"] * batch_size,
             }
 
@@ -736,16 +786,36 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         return None
 
 
-def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder=None, sample_types=None, use_mas=True):
-    """Train TTS: text -> audio generation with Monotonic Alignment Search (MAS).
+def train_voice_tts_step(
+    audio_decoder, 
+    text_embeds, 
+    target_audio, 
+    audio_encoder=None, 
+    speaker_ref_audio=None,
+    sample_types=None, 
+    use_mas=True
+):
+    """Train TTS with voice cloning: text + speaker reference -> audio generation.
+    
+    This function trains the audio decoder to:
+    1. Generate mel spectrograms from text embeddings
+    2. Clone speaker characteristics from reference audio (voice cloning)
+    3. Learn proper text-to-audio alignment via MAS
     
     Args:
-        audio_decoder: Audio decoder model (with MAS support)
+        audio_decoder: Audio decoder model (with MAS and speaker embedding support)
         text_embeds: Text embeddings (B, seq_len, hidden_dim)
         target_audio: Target audio - either [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
-        audio_encoder: Optional audio encoder for extracting target audio features (for MAS)
+        audio_encoder: Audio encoder for extracting features (for MAS and speaker embedding)
+        speaker_ref_audio: Speaker reference audio for voice cloning [B, T] or [B, mel_bins, time]
         sample_types: List of sample types to filter valid samples (e.g., ['voice_tts', 'text', ...])
         use_mas: Whether to use Monotonic Alignment Search for alignment loss
+        
+    Voice Cloning Training:
+        - speaker_ref_audio provides a reference of the target speaker's voice
+        - The audio encoder extracts speaker embeddings from this reference
+        - The decoder learns to generate audio matching the speaker's characteristics
+        - This enables zero-shot voice cloning at inference time
     """
     if audio_decoder is None or target_audio is None:
         return None
@@ -804,6 +874,9 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
                 return None
             target_mel = gpu_safe_index(target_mel, type_mask)
             text_embeds = gpu_safe_index(text_embeds, type_mask)
+            # Also filter speaker reference if provided
+            if speaker_ref_audio is not None and isinstance(speaker_ref_audio, torch.Tensor):
+                speaker_ref_audio = gpu_safe_index(speaker_ref_audio.to(device=dec_device, dtype=dec_dtype), type_mask)
 
         # Then filter to only samples with valid (non-zero) target mel
         valid_mask = target_mel.abs().sum(dim=(1, 2)) > 1e-6
@@ -815,20 +888,62 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
         # Filter target_mel and text_embeds to only valid samples
         target_mel = gpu_safe_index(target_mel, valid_mask)
         text_embeds = gpu_safe_index(text_embeds, valid_mask)
+        if speaker_ref_audio is not None and isinstance(speaker_ref_audio, torch.Tensor):
+            speaker_ref_audio = gpu_safe_index(speaker_ref_audio, valid_mask)
+
+        # ============================================================
+        # VOICE CLONING: Extract speaker embedding from reference audio
+        # ============================================================
+        speaker_embedding = None
+        if audio_encoder is not None and speaker_ref_audio is not None:
+            # Check if speaker reference is valid (not zeros)
+            ref_is_valid = speaker_ref_audio.abs().sum() > 1e-6
+            
+            if ref_is_valid:
+                with torch.no_grad():
+                    # Convert speaker reference to mel if it's raw waveform
+                    if speaker_ref_audio.dim() == 2:
+                        try:
+                            import torchaudio.transforms as T
+                            mel_transform = T.MelSpectrogram(
+                                sample_rate=16000, n_fft=1024, hop_length=256, n_mels=80
+                            ).to(dec_device)
+                            speaker_ref_mel = mel_transform(speaker_ref_audio.float())
+                            speaker_ref_mel = torch.log(speaker_ref_mel.clamp(min=1e-5))
+                            speaker_ref_mel = speaker_ref_mel.to(dtype=dec_dtype)
+                            del mel_transform
+                        except:
+                            speaker_ref_mel = None
+                    else:
+                        speaker_ref_mel = speaker_ref_audio
+                    
+                    # Extract speaker embedding using audio encoder
+                    if speaker_ref_mel is not None:
+                        # AudioEncoder.forward with speaker_ref returns (features, speaker_embedding)
+                        if hasattr(audio_encoder, 'speaker_encoder') and audio_encoder.speaker_encoder is not None:
+                            # Use the speaker encoder directly
+                            speaker_embedding = audio_encoder.speaker_encoder(speaker_ref_mel)
+                        else:
+                            # Fallback: use pooled audio features as speaker embedding
+                            audio_out = audio_encoder(speaker_ref_mel)
+                            audio_features = audio_out[0] if isinstance(audio_out, tuple) else audio_out
+                            # Pool over time dimension to get speaker representation
+                            speaker_embedding = audio_features.mean(dim=1)  # [B, hidden_size]
 
         # Get target audio features for MAS if audio encoder is available
         audio_features_for_mas = None
         if use_mas and audio_encoder is not None:
             with torch.no_grad():
                 # Encode target mel to get audio features for alignment
-                audio_out, _ = audio_encoder(target_mel)
-                audio_features_for_mas = audio_out
+                audio_out = audio_encoder(target_mel)
+                audio_features_for_mas = audio_out[0] if isinstance(audio_out, tuple) else audio_out
 
-        # Forward pass with MAS enabled
+        # Forward pass with MAS and speaker embedding enabled
         pred_mel, durations, alignment = audio_decoder(
             text_embeds, 
             target_length=target_mel.shape[-1],
             audio_features=audio_features_for_mas,
+            speaker_embedding=speaker_embedding,  # Voice cloning!
             use_mas=use_mas and audio_features_for_mas is not None,
         )
         
@@ -848,7 +963,22 @@ def train_voice_tts_step(audio_decoder, text_embeds, target_audio, audio_encoder
             gt_durations = alignment.sum(dim=-1)  # [B, T_text]
             duration_loss = F.mse_loss(durations, gt_durations)
         
-        total_loss = mel_loss + 0.1 * duration_loss + 0.01 * mas_loss
+        # Speaker consistency loss (optional - encourages consistent speaker characteristics)
+        speaker_loss = torch.tensor(0.0, device=dec_device, dtype=dec_dtype)
+        if speaker_embedding is not None and audio_encoder is not None:
+            # Re-encode the predicted mel and compare speaker embeddings
+            # This encourages the model to preserve speaker identity
+            try:
+                with torch.no_grad():
+                    pred_audio_out = audio_encoder(pred_mel.detach())
+                    pred_features = pred_audio_out[0] if isinstance(pred_audio_out, tuple) else pred_audio_out
+                    pred_speaker = pred_features.mean(dim=1)
+                # Cosine similarity loss for speaker consistency
+                speaker_loss = 1.0 - F.cosine_similarity(pred_speaker, speaker_embedding, dim=-1).mean()
+            except:
+                pass  # Skip speaker loss if it fails
+        
+        total_loss = mel_loss + 0.1 * duration_loss + 0.01 * mas_loss + 0.05 * speaker_loss
         
         # Clean up intermediate tensors
         del pred_mel, target_mel

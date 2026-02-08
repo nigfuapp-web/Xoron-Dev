@@ -1045,11 +1045,19 @@ class XoronTrainer:
                     num_asr += 1
                     del asr_loss  # Clean up
 
-            # Voice TTS (use configurable loss weight)
+            # Voice TTS with Voice Cloning (use configurable loss weight)
             if any(t == 'voice_tts' for t in sample_types):
+                # Get speaker reference audio for voice cloning
+                speaker_ref_audio = batch.get("speaker_ref_audio")
+                
                 tts_loss = train_voice_tts_step(
-                    self.model.audio_decoder, text_embeds, audio_features,
-                    sample_types=sample_types
+                    self.model.audio_decoder, 
+                    text_embeds, 
+                    audio_features,
+                    audio_encoder=self.model.audio_encoder,  # For speaker embedding extraction
+                    speaker_ref_audio=speaker_ref_audio,  # Voice cloning reference
+                    sample_types=sample_types,
+                    use_mas=getattr(self.config, 'use_mas', True),  # MAS for alignment
                 )
                 if tts_loss is not None:
                     # Move to same device AND dtype as total_loss
