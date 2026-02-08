@@ -33,7 +33,8 @@ except ImportError:
     COMPONENT_GROUPS = {
         'vision': ['vision_encoder', 'projector'],
         'video': ['video_encoder'],
-        'audio': ['audio_encoder', 'audio_decoder', 'audio_projector'],
+        'audio': ['audio_encoder', 'audio_decoder', 'audio_projector', 'waveform_decoder'],
+        'speech': ['waveform_decoder'],  # Specifically for Speech-to-Speech
         'llm': ['llm'],
         'cross_attention': ['cross_attention_layers'],
         'image_generation': ['generator'],
@@ -137,25 +138,71 @@ def show_current_config(config: Dict[str, Any]):
     print(f"   Hidden Size: {model.get('hidden_size', 1024)}")
     print(f"   Layers: {model.get('num_layers', 12)}")
     print(f"   Heads: {model.get('num_heads', 16)}")
-    print(f"   MoE Experts: {model.get('num_experts', 8)}")
-    print(f"   LoRA Rank: {model.get('lora_r', 32)}")
-    print(f"   Multi-Scale: {model.get('use_multi_scale', True)}")
-    print(f"   Video Max Frames: {model.get('video_max_frames', 32)}")
-    print(f"   Image Base Size: {model.get('image_base_size', 256)}")
-    print(f"   Video Base Size: {model.get('video_base_size', 256)}")
+    print(f"   FFN Size: {model.get('intermediate_size', 2048)}")
+    print(f"   Context: {model.get('max_position_embeddings', 131072)//1024}K positions")
+
+    print("\n🎯 MoE Configuration:")
+    print(f"   MoE Enabled: {model.get('use_moe', True)}")
+    print(f"   Experts: {model.get('num_experts', 8)} + Shared={model.get('use_shared_expert', True)}")
+    print(f"   Top-k: {model.get('num_experts_per_tok', 2)}")
+    print(f"   MoE Frequency: Every {model.get('moe_layer_freq', 2)} layers")
+    print(f"   Aux-Lossless: {model.get('use_aux_lossless', True)}")
+
+    print("\n🔧 LoRA Configuration:")
+    lora_type = "DoRA" if model.get('use_dora', False) else ("rsLoRA" if model.get('use_rslora', True) else "LoRA")
+    print(f"   LoRA Enabled: {model.get('use_lora', True)} ({lora_type})")
+    print(f"   Rank: {model.get('lora_r', 32)}, Alpha: {model.get('lora_alpha', 64)}")
+    print(f"   LoRA+ Ratio: {model.get('lora_plus_lr_ratio', 4.0)}x")
+
+    print("\n👁️ Vision Configuration:")
+    print(f"   TiTok: {model.get('use_vision_titok', True)}")
+    print(f"   Dual-Stream: {model.get('use_vision_dual_stream', True)}")
+    print(f"   Vision Tokens: {model.get('num_vision_tokens', 64)}")
+
+    print("\n🎬 Video Configuration:")
+    print(f"   3D-RoPE: {model.get('use_video_3d_rope', True)}")
+    print(f"   Temporal MoE: {model.get('use_video_temporal_moe', True)}")
+    print(f"   Encoder Layers: {model.get('num_video_encoder_layers', 4)}")
+
+    print("\n📐 Multi-Scale Configuration:")
+    print(f"   Enabled: {model.get('use_multi_scale', True)}")
+    print(f"   Image: {model.get('image_min_size', 128)}-{model.get('image_max_size', 512)}px (base: {model.get('image_base_size', 256)})")
+    print(f"   Video: {model.get('video_min_size', 128)}-{model.get('video_max_size', 384)}px (base: {model.get('video_base_size', 256)})")
+    print(f"   Frames: {model.get('video_min_frames', 8)}-{model.get('video_max_frames', 32)} (base: {model.get('video_base_frames', 16)})")
+
+    print("\n🎨 Generation Configuration:")
+    print(f"   Flow Matching: {model.get('generation_use_flow_matching', True)}")
+    print(f"   Dual-Stream: {model.get('generation_use_dual_stream', True)}")
+    print(f"   MoE Experts: {model.get('generation_num_experts', 4)}")
+    print(f"   Inference Steps: {model.get('generation_inference_steps', 50)}")
+    print(f"   CFG Scale: {model.get('generation_cfg_scale', 7.5)}")
+
+    print("\n🎤 Audio Configuration:")
+    print(f"   Raw Waveform: {model.get('use_raw_waveform', True)}")
+    print(f"   MAS: {model.get('use_mas', True)}")
+    print(f"   In-Context Prompting: {model.get('use_in_context_audio_prompting', True)}")
+    print(f"   Sample Rate: {model.get('audio_sample_rate', 16000)}Hz")
+    print(f"   Speaker Embed: {model.get('audio_speaker_embed_dim', 256)}d")
+
+    print("\n⚡ Attention Configuration:")
+    print(f"   Ring Attention: {model.get('use_ring_attention', True)} (chunk: {model.get('ring_attention_chunk_size', 4096)})")
+    print(f"   Cross-Attention: {model.get('use_cross_attention', True)} ({model.get('cross_attention_layers', 4)} layers)")
+    print(f"   Flash Attention: {model.get('use_flash_attention', True)}")
 
     print("\n⚙️ Training Configuration:")
     training = config['training']
-    print(f"   Epochs: {training.get('num_epochs', 12)}")
-    print(f"   Batch Size: {training.get('batch_size', 5)}")
-    print(f"   Gradient Accumulation: {training.get('gradient_accumulation_steps', 32)}")
-    print(f"   Learning Rate: {training.get('learning_rate', 2e-4)}")
+    print(f"   Epochs: {training.get('num_epochs', 2)}")
+    print(f"   Batch Size: {training.get('batch_size', 1)}")
+    print(f"   Gradient Accumulation: {training.get('gradient_accumulation_steps', 16)}")
+    print(f"   Effective Batch: {training.get('batch_size', 1) * training.get('gradient_accumulation_steps', 16)}")
+    print(f"   Learning Rate: {training.get('learning_rate', 1e-4)}")
     print(f"   Max Seq Length: {training.get('max_seq_length', 1024)}")
-    print(f"   Max Per Epoch: {training.get('max_per_epoch', 2000)}")
-    print(f"   Max Per Dataset: {training.get('max_per_dataset', 100)}")
+    print(f"   Max Per Epoch: {training.get('max_per_epoch', 1000)}")
+    print(f"   Max Per Dataset: {training.get('max_per_dataset', 50)}")
     print(f"   Sample Repeat: {training.get('sample_repeat', 2)}x")
-    print(f"   Streaming: True (memory efficient)")
-    print(f"   FP16: {training.get('fp16', True)}")
+    print(f"   FP16: {training.get('fp16', True)}, BF16: {training.get('bf16', False)}")
+    print(f"   Gradient Checkpointing: {training.get('gradient_checkpointing', True)}")
+    print(f"   8-bit Optimizer: {training.get('use_8bit_optimizer', True)}")
 
     print("\n🔧 Fine-tuning Configuration:")
     ft = config.get('finetune', get_default_finetune_config())
@@ -295,31 +342,121 @@ def configure_model(config: Dict[str, Any]):
 
     print("\nCurrent values shown in brackets. Press Enter to keep current value.\n")
 
+    # Core architecture
+    print("=== Core Architecture ===")
     model['hidden_size'] = get_input("Hidden size", model.get('hidden_size', 1024), int)
     model['num_layers'] = get_input("Number of layers", model.get('num_layers', 12), int)
     model['num_heads'] = get_input("Number of attention heads", model.get('num_heads', 16), int)
+    model['intermediate_size'] = get_input("FFN intermediate size", model.get('intermediate_size', 2048), int)
+    model['max_position_embeddings'] = get_input("Max context length", model.get('max_position_embeddings', 131072), int)
+
+    # MoE configuration
+    print("\n=== MoE Configuration ===")
     model['num_experts'] = get_input("Number of MoE experts", model.get('num_experts', 8), int)
-    model['num_experts_per_tok'] = get_input("Experts per token", model.get('num_experts_per_tok', 2), int)
-    model['lora_r'] = get_input("LoRA rank", model.get('lora_r', 32), int)
-    model['lora_alpha'] = get_input("LoRA alpha", model.get('lora_alpha', 64), int)
-    
-    # Multi-scale configuration (consolidated size/frame settings)
-    model['video_max_frames'] = get_input("Video max frames", model.get('video_max_frames', 32), int)
-    model['video_base_frames'] = get_input("Video base frames", model.get('video_base_frames', 16), int)
-    model['image_base_size'] = get_input("Image base size", model.get('image_base_size', 256), int)
-    model['video_base_size'] = get_input("Video base size", model.get('video_base_size', 256), int)
+    model['num_experts_per_tok'] = get_input("Experts per token (top-k)", model.get('num_experts_per_tok', 2), int)
+    model['moe_layer_freq'] = get_input("MoE layer frequency (every N layers)", model.get('moe_layer_freq', 2), int)
 
     use_moe = get_input("Enable MoE? (y/n)", 'y' if model.get('use_moe', True) else 'n')
     model['use_moe'] = use_moe.lower() in ('y', 'yes', 'true', '1')
 
+    use_shared_expert = get_input("Enable Shared Expert (DeepSeek-style)? (y/n)", 'y' if model.get('use_shared_expert', True) else 'n')
+    model['use_shared_expert'] = use_shared_expert.lower() in ('y', 'yes', 'true', '1')
+
+    # LoRA configuration
+    print("\n=== LoRA Configuration ===")
+    model['lora_r'] = get_input("LoRA rank", model.get('lora_r', 32), int)
+    model['lora_alpha'] = get_input("LoRA alpha", model.get('lora_alpha', 64), int)
+    model['lora_dropout'] = get_input("LoRA dropout", model.get('lora_dropout', 0.05), float)
+
     use_lora = get_input("Enable LoRA? (y/n)", 'y' if model.get('use_lora', True) else 'n')
     model['use_lora'] = use_lora.lower() in ('y', 'yes', 'true', '1')
 
-    use_cross = get_input("Enable Cross-Attention? (y/n)", 'y' if model.get('use_cross_attention', True) else 'n')
-    model['use_cross_attention'] = use_cross.lower() in ('y', 'yes', 'true', '1')
-    
+    use_rslora = get_input("Enable rsLoRA (rank-stabilized)? (y/n)", 'y' if model.get('use_rslora', True) else 'n')
+    model['use_rslora'] = use_rslora.lower() in ('y', 'yes', 'true', '1')
+
+    use_dora = get_input("Enable DoRA (weight-decomposed)? (y/n)", 'y' if model.get('use_dora', False) else 'n')
+    model['use_dora'] = use_dora.lower() in ('y', 'yes', 'true', '1')
+
+    model['lora_plus_lr_ratio'] = get_input("LoRA+ LR ratio (B matrix learns faster)", model.get('lora_plus_lr_ratio', 4.0), float)
+
+    # Vision configuration
+    print("\n=== Vision Configuration ===")
+    use_vision_titok = get_input("Enable TiTok tokenization? (y/n)", 'y' if model.get('use_vision_titok', True) else 'n')
+    model['use_vision_titok'] = use_vision_titok.lower() in ('y', 'yes', 'true', '1')
+
+    use_vision_dual_stream = get_input("Enable Dual-Stream Attention? (y/n)", 'y' if model.get('use_vision_dual_stream', True) else 'n')
+    model['use_vision_dual_stream'] = use_vision_dual_stream.lower() in ('y', 'yes', 'true', '1')
+
+    model['num_vision_tokens'] = get_input("Number of vision tokens", model.get('num_vision_tokens', 64), int)
+
+    # Video configuration
+    print("\n=== Video Configuration ===")
+    use_video_3d_rope = get_input("Enable 3D-RoPE for video? (y/n)", 'y' if model.get('use_video_3d_rope', True) else 'n')
+    model['use_video_3d_rope'] = use_video_3d_rope.lower() in ('y', 'yes', 'true', '1')
+
+    use_video_temporal_moe = get_input("Enable Temporal MoE for video? (y/n)", 'y' if model.get('use_video_temporal_moe', True) else 'n')
+    model['use_video_temporal_moe'] = use_video_temporal_moe.lower() in ('y', 'yes', 'true', '1')
+
+    model['num_video_encoder_layers'] = get_input("Video encoder layers", model.get('num_video_encoder_layers', 4), int)
+    model['num_video_experts'] = get_input("Video temporal experts", model.get('num_video_experts', 4), int)
+
+    # Multi-scale configuration
+    print("\n=== Multi-Scale Training ===")
     use_multi_scale = get_input("Enable Multi-Scale Training? (y/n)", 'y' if model.get('use_multi_scale', True) else 'n')
     model['use_multi_scale'] = use_multi_scale.lower() in ('y', 'yes', 'true', '1')
+
+    model['image_base_size'] = get_input("Image base size (px)", model.get('image_base_size', 256), int)
+    model['image_min_size'] = get_input("Image min size (px)", model.get('image_min_size', 128), int)
+    model['image_max_size'] = get_input("Image max size (px)", model.get('image_max_size', 512), int)
+
+    model['video_base_size'] = get_input("Video base size (px)", model.get('video_base_size', 256), int)
+    model['video_min_size'] = get_input("Video min size (px)", model.get('video_min_size', 128), int)
+    model['video_max_size'] = get_input("Video max size (px)", model.get('video_max_size', 384), int)
+
+    model['video_base_frames'] = get_input("Video base frames", model.get('video_base_frames', 16), int)
+    model['video_min_frames'] = get_input("Video min frames", model.get('video_min_frames', 8), int)
+    model['video_max_frames'] = get_input("Video max frames", model.get('video_max_frames', 32), int)
+
+    # Generation configuration
+    print("\n=== Generation Configuration ===")
+    use_flow_matching = get_input("Enable Flow Matching (vs DDPM)? (y/n)", 'y' if model.get('generation_use_flow_matching', True) else 'n')
+    model['generation_use_flow_matching'] = use_flow_matching.lower() in ('y', 'yes', 'true', '1')
+
+    use_gen_dual_stream = get_input("Enable Dual-Stream in generator? (y/n)", 'y' if model.get('generation_use_dual_stream', True) else 'n')
+    model['generation_use_dual_stream'] = use_gen_dual_stream.lower() in ('y', 'yes', 'true', '1')
+
+    model['generation_num_experts'] = get_input("Generator MoE experts", model.get('generation_num_experts', 4), int)
+    model['generation_inference_steps'] = get_input("Generation inference steps", model.get('generation_inference_steps', 50), int)
+    model['generation_cfg_scale'] = get_input("CFG guidance scale", model.get('generation_cfg_scale', 7.5), float)
+
+    # Audio configuration
+    print("\n=== Audio Configuration ===")
+    use_raw_waveform = get_input("Enable Raw Waveform (vs mel spectrogram)? (y/n)", 'y' if model.get('use_raw_waveform', True) else 'n')
+    model['use_raw_waveform'] = use_raw_waveform.lower() in ('y', 'yes', 'true', '1')
+
+    use_mas = get_input("Enable MAS (Monotonic Alignment Search)? (y/n)", 'y' if model.get('use_mas', True) else 'n')
+    model['use_mas'] = use_mas.lower() in ('y', 'yes', 'true', '1')
+
+    use_in_context = get_input("Enable In-Context Audio Prompting? (y/n)", 'y' if model.get('use_in_context_audio_prompting', True) else 'n')
+    model['use_in_context_audio_prompting'] = use_in_context.lower() in ('y', 'yes', 'true', '1')
+
+    model['audio_sample_rate'] = get_input("Audio sample rate (Hz)", model.get('audio_sample_rate', 16000), int)
+    model['audio_speaker_embed_dim'] = get_input("Speaker embedding dimension", model.get('audio_speaker_embed_dim', 256), int)
+
+    # Attention configuration
+    print("\n=== Attention Configuration ===")
+    use_ring_attention = get_input("Enable Ring Attention (128K context)? (y/n)", 'y' if model.get('use_ring_attention', True) else 'n')
+    model['use_ring_attention'] = use_ring_attention.lower() in ('y', 'yes', 'true', '1')
+
+    model['ring_attention_chunk_size'] = get_input("Ring Attention chunk size", model.get('ring_attention_chunk_size', 4096), int)
+
+    use_cross = get_input("Enable Cross-Attention fusion? (y/n)", 'y' if model.get('use_cross_attention', True) else 'n')
+    model['use_cross_attention'] = use_cross.lower() in ('y', 'yes', 'true', '1')
+
+    model['cross_attention_layers'] = get_input("Cross-Attention layers", model.get('cross_attention_layers', 4), int)
+
+    use_flash = get_input("Enable Flash Attention? (y/n)", 'y' if model.get('use_flash_attention', True) else 'n')
+    model['use_flash_attention'] = use_flash.lower() in ('y', 'yes', 'true', '1')
 
     print("\n✅ Model configuration updated")
 
