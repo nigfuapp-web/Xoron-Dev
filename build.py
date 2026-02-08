@@ -431,6 +431,10 @@ def load_model_from_huggingface(hf_model_id, training_config):
     This downloads the model from HuggingFace and loads it with proper
     vocab size detection and LoRA structure handling.
     
+    Supports both:
+    - Single file format: model.safetensors or pytorch_model.bin
+    - Component format: separate .safetensors files per component (llm.safetensors, vision_encoder.safetensors, etc.)
+    
     Args:
         hf_model_id: HuggingFace model identifier (e.g., 'Backup-bdg/Xoron-Dev-MultiMoe')
         training_config: Training configuration
@@ -481,6 +485,25 @@ def load_model_from_huggingface(hf_model_id, training_config):
             print(f"\n   📋 Config reports architecture version {config_arch_version}")
             print(f"      (Config has component markers - will verify against weights)")
         
+        # Check for component-based save format (separate safetensors files per component)
+        components_json_path = os.path.join(cache_dir, "components.json")
+        is_component_format = os.path.exists(components_json_path)
+        component_files = {}
+        available_components = []
+        
+        if is_component_format:
+            with open(components_json_path, 'r') as f:
+                components_info = json.load(f)
+            available_components = components_info.get('components', [])
+            print(f"\n   📦 Detected COMPONENT-BASED save format")
+            print(f"   📋 Available components: {', '.join(available_components)}")
+            
+            # Map component names to their safetensors files
+            for comp in available_components:
+                comp_file = os.path.join(cache_dir, f"{comp}.safetensors")
+                if os.path.exists(comp_file):
+                    component_files[comp] = comp_file
+        
         # Detect architecture features from checkpoint weights
         model_path = os.path.join(cache_dir, "model.safetensors")
         pytorch_path = os.path.join(cache_dir, "pytorch_model.bin")
@@ -496,6 +519,9 @@ def load_model_from_huggingface(hf_model_id, training_config):
         checkpoint_has_audio_decoder = False
         checkpoint_has_vision_encoder = False
         checkpoint_has_video_encoder = False
+        checkpoint_has_projector = False
+        checkpoint_has_audio_projector = False
+        checkpoint_has_modality_markers = False
         
         def detect_architecture_from_keys(keys):
             """Detect which components exist in checkpoint from parameter keys."""
@@ -504,6 +530,8 @@ def load_model_from_huggingface(hf_model_id, training_config):
             nonlocal checkpoint_has_generator, checkpoint_has_cross_attention
             nonlocal checkpoint_has_audio_encoder, checkpoint_has_audio_decoder
             nonlocal checkpoint_has_vision_encoder, checkpoint_has_video_encoder
+            nonlocal checkpoint_has_projector, checkpoint_has_audio_projector
+            nonlocal checkpoint_has_modality_markers
             
             # Check for LoRA structure in keys
             checkpoint_has_lora_structure = any('.lora_A' in k or '.lora_B' in k or '.linear.weight' in k for k in keys)
@@ -516,7 +544,7 @@ def load_model_from_huggingface(hf_model_id, training_config):
                     checkpoint_has_video_generator = True
                 elif key.startswith('generator.'):
                     checkpoint_has_generator = True
-                elif key.startswith('cross_attention_layers.'):
+                elif key.startswith('cross_attention_layers.') or key.startswith('cross_attention.'):
                     checkpoint_has_cross_attention = True
                 elif key.startswith('audio_encoder.'):
                     checkpoint_has_audio_encoder = True
@@ -526,8 +554,52 @@ def load_model_from_huggingface(hf_model_id, training_config):
                     checkpoint_has_vision_encoder = True
                 elif key.startswith('video_encoder.'):
                     checkpoint_has_video_encoder = True
+                elif key.startswith('projector.'):
+                    checkpoint_has_projector = True
+                elif key.startswith('audio_projector.'):
+                    checkpoint_has_audio_projector = True
+                elif key.startswith('modality_markers.'):
+                    checkpoint_has_modality_markers = True
         
-        if os.path.exists(model_path):
+        # For component format, detect architecture from available component files
+        if is_component_format and component_files:
+            print(f"\n   🔍 Detecting architecture from component files...")
+            
+            # Set flags based on which component files exist
+            checkpoint_has_vision_encoder = 'vision_encoder' in component_files
+            checkpoint_has_video_encoder = 'video_encoder' in component_files
+            checkpoint_has_audio_encoder = 'audio_encoder' in component_files
+            checkpoint_has_audio_decoder = 'audio_decoder' in component_files
+            checkpoint_has_waveform_decoder = 'waveform_decoder' in component_files
+            checkpoint_has_generator = 'generator' in component_files
+            checkpoint_has_video_generator = 'video_generator' in component_files
+            checkpoint_has_cross_attention = 'cross_attention' in component_files
+            checkpoint_has_projector = 'projector' in component_files
+            checkpoint_has_audio_projector = 'audio_projector' in component_files
+            checkpoint_has_modality_markers = 'modality_markers' in component_files
+            
+            # Check LLM for vocab size and LoRA structure
+            if 'llm' in component_files:
+                try:
+                    with safe_open(component_files['llm'], framework="pt") as f:
+                        keys = list(f.keys())
+                        checkpoint_has_lora_structure = any('.lora_A' in k or '.lora_B' in k or '.linear.weight' in k for k in keys)
+                        
+                        if checkpoint_has_lora_structure:
+                            print(f"   🔧 Detected LoRA structure in LLM checkpoint")
+                        
+                        # Detect vocab size from embed_tokens or lm_head
+                        for key in keys:
+                            if 'embed_tokens.weight' in key or 'lm_head.weight' in key:
+                                shape = f.get_tensor(key).shape
+                                checkpoint_vocab_size = shape[0]
+                                print(f"   📊 Detected checkpoint vocab size: {checkpoint_vocab_size}")
+                                break
+                except Exception as e:
+                    print(f"   ⚠️ Could not inspect llm.safetensors: {e}")
+        
+        # For single file format, detect from model.safetensors or pytorch_model.bin
+        elif os.path.exists(model_path):
             try:
                 with safe_open(model_path, framework="pt") as f:
                     keys = list(f.keys())
@@ -564,7 +636,7 @@ def load_model_from_huggingface(hf_model_id, training_config):
         
         # Print detected architecture
         print(f"\n   🔍 Detected checkpoint architecture:")
-        print(f"      - LLM: ✅ (vocab_size={checkpoint_vocab_size or 'unknown'})")
+        print(f"      - LLM: {'✅' if 'llm' in component_files or os.path.exists(model_path) or os.path.exists(pytorch_path) else '❌'} (vocab_size={checkpoint_vocab_size or 'unknown'})")
         print(f"      - Vision Encoder: {'✅' if checkpoint_has_vision_encoder else '❌ (will init randomly)'}")
         print(f"      - Video Encoder: {'✅' if checkpoint_has_video_encoder else '❌ (will init randomly)'}")
         print(f"      - Audio Encoder: {'✅' if checkpoint_has_audio_encoder else '❌ (will init randomly)'}")
@@ -573,6 +645,9 @@ def load_model_from_huggingface(hf_model_id, training_config):
         print(f"      - Image Generator: {'✅' if checkpoint_has_generator else '❌ (will init randomly)'}")
         print(f"      - Video Generator: {'✅' if checkpoint_has_video_generator else '❌ (will init randomly)'}")
         print(f"      - Cross Attention: {'✅' if checkpoint_has_cross_attention else '❌ (will init randomly)'}")
+        print(f"      - Projector: {'✅' if checkpoint_has_projector else '❌ (will init randomly)'}")
+        print(f"      - Audio Projector: {'✅' if checkpoint_has_audio_projector else '❌ (will init randomly)'}")
+        print(f"      - Modality Markers: {'✅' if checkpoint_has_modality_markers else '❌ (will init randomly)'}")
         print(f"      - LoRA: {'✅' if checkpoint_has_lora_structure else '❌'}")
         
         # Update config vocab_size if checkpoint has different size
@@ -608,10 +683,101 @@ def load_model_from_huggingface(hf_model_id, training_config):
             print(f"   🔧 Applying LoRA before loading weights...")
             model.apply_lora()
         
-        # Load weights with strict=False to handle architecture changes
-        if os.path.exists(model_path):
+        # Load weights based on format
+        if is_component_format and component_files:
+            # COMPONENT FORMAT: Load each component's weights separately
+            # Build a combined state dict from all component files
+            print(f"\n   📦 Loading weights from component files...")
+            
+            # Component name mapping (file name -> model prefix)
+            # This maps the component file name to the prefix used in model.state_dict()
+            component_prefix_map = {
+                'llm': 'llm.',
+                'vision_encoder': 'vision_encoder.',
+                'video_encoder': 'video_encoder.',
+                'audio_encoder': 'audio_encoder.',
+                'audio_decoder': 'audio_decoder.',
+                'projector': 'projector.',
+                'audio_projector': 'audio_projector.',
+                'cross_attention': 'cross_attention_layers.',
+                'generator': 'generator.',
+                'video_generator': 'video_generator.',
+                'waveform_decoder': 'waveform_decoder.',
+                'modality_markers': 'modality_markers.',
+            }
+            
+            # Build combined checkpoint state dict from all component files
+            checkpoint_state_dict = {}
+            
+            for comp_name, comp_file in component_files.items():
+                prefix = component_prefix_map.get(comp_name, f'{comp_name}.')
+                print(f"      Loading {comp_name}...")
+                
+                try:
+                    with safe_open(comp_file, framework="pt", device="cpu") as f:
+                        for key in f.keys():
+                            tensor = f.get_tensor(key)
+                            # Keys in component files should already have the prefix
+                            # But if not, add it
+                            if not key.startswith(prefix) and not any(key.startswith(p) for p in component_prefix_map.values()):
+                                full_key = f"{prefix}{key}"
+                            else:
+                                full_key = key
+                            checkpoint_state_dict[full_key] = tensor
+                except Exception as e:
+                    print(f"      ⚠️ Error loading {comp_name}: {e}")
+            
+            # Filter out tensors with shape mismatches
+            model_state_dict = model.state_dict()
+            filtered_state_dict = {}
+            skipped_keys = []
+            size_mismatch_keys = []
+            
+            for key, checkpoint_tensor in checkpoint_state_dict.items():
+                if key in model_state_dict:
+                    model_tensor = model_state_dict[key]
+                    if checkpoint_tensor.shape == model_tensor.shape:
+                        filtered_state_dict[key] = checkpoint_tensor
+                    else:
+                        size_mismatch_keys.append((key, checkpoint_tensor.shape, model_tensor.shape))
+                else:
+                    skipped_keys.append(key)
+            
+            # Load filtered state dict using load_state_dict for reliability
+            missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
+            
+            # Report results
+            loaded_count = len(filtered_state_dict)
+            total_model_params = len(model_state_dict)
+            
+            print(f"\n   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
+            
+            if size_mismatch_keys:
+                print(f"   ⚠️ Size mismatches: {len(size_mismatch_keys)} keys")
+                components = {}
+                for key, ckpt_shape, model_shape in size_mismatch_keys:
+                    comp = key.split('.')[0]
+                    components[comp] = components.get(comp, 0) + 1
+                for comp, count in sorted(components.items()):
+                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
+            
+            if missing:
+                print(f"   ⚠️ Missing keys (not in checkpoint): {len(missing)} keys")
+                components = {}
+                for key in missing:
+                    comp = key.split('.')[0]
+                    components[comp] = components.get(comp, 0) + 1
+                for comp, count in sorted(components.items()):
+                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
+            
+            if skipped_keys:
+                print(f"   ⚠️ Skipped keys (not in model): {len(skipped_keys)} keys")
+            
+            model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
+            
+        elif os.path.exists(model_path):
+            # SINGLE FILE FORMAT: model.safetensors
             print(f"   📦 Loading weights from safetensors (non-strict mode)...")
-            # Use safe_open for non-strict loading
             checkpoint_state_dict = {}
             with safe_open(model_path, framework="pt", device="cpu") as f:
                 for key in f.keys():
@@ -643,7 +809,6 @@ def load_model_from_huggingface(hf_model_id, training_config):
             
             if size_mismatch_keys:
                 print(f"   ⚠️ Size mismatches (architecture changed): {len(size_mismatch_keys)} keys")
-                # Group by component
                 components = {}
                 for key, ckpt_shape, model_shape in size_mismatch_keys:
                     comp = key.split('.')[0]
@@ -666,6 +831,7 @@ def load_model_from_huggingface(hf_model_id, training_config):
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
             
         elif os.path.exists(pytorch_path):
+            # SINGLE FILE FORMAT: pytorch_model.bin
             print(f"   📦 Loading weights from pytorch_model.bin...")
             if 'state_dict' not in dir():
                 checkpoint_state_dict = torch.load(pytorch_path, map_location='cpu')
