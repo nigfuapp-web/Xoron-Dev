@@ -1354,13 +1354,13 @@ class TrueStreamingDataset(IterableDataset):
                         # Track consecutive failures to detect stuck sources
                         source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
                         
-                        # Log every 50 failures so we can see what's happening
-                        if source["_consecutive_fails"] % 50 == 1:
-                            print(f"   ⚠️ {source['name']}: sample processing failed ({source['_consecutive_fails']} consecutive)", flush=True)
+                        # Log failures so we can see what's happening
+                        if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] == 10:
+                            print(f"   ⚠️ {source['name']}: sample processing failed ({source['_consecutive_fails']}/10)", flush=True)
                         
-                        # After 200 consecutive failures, this source is broken - mark exhausted
-                        if source["_consecutive_fails"] >= 200:
-                            print(f"   ❌ {source['name']}: 200 consecutive failures, marking EXHAUSTED", flush=True)
+                        # After 10 consecutive failures, this source is broken - mark exhausted
+                        if source["_consecutive_fails"] >= 10:
+                            print(f"   ❌ {source['name']}: 10 consecutive failures, marking EXHAUSTED", flush=True)
                             source["exhausted"] = True
                             sources_to_remove.append(source_idx)
                 
@@ -1371,13 +1371,13 @@ class TrueStreamingDataset(IterableDataset):
                     # FAILURE - exception during processing
                     source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
                     
-                    # Log first 3 errors and then every 50th so we can actually SEE them
-                    if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] % 50 == 0:
-                        print(f"   ⚠️ {source['name']}: {type(e).__name__}: {str(e)[:80]} (fail #{source['_consecutive_fails']})", flush=True)
+                    # Log errors so we can actually SEE them
+                    if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] == 10:
+                        print(f"   ⚠️ {source['name']}: {type(e).__name__}: {str(e)[:80]} (fail #{source['_consecutive_fails']}/10)", flush=True)
                     
-                    # After 200 consecutive failures, mark exhausted
-                    if source["_consecutive_fails"] >= 200:
-                        print(f"   ❌ {source['name']}: 200 consecutive errors, marking EXHAUSTED", flush=True)
+                    # After 10 consecutive failures, mark exhausted
+                    if source["_consecutive_fails"] >= 10:
+                        print(f"   ❌ {source['name']}: 10 consecutive errors, marking EXHAUSTED", flush=True)
                         source["exhausted"] = True
                         sources_to_remove.append(source_idx)
             
