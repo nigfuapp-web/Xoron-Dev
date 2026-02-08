@@ -689,43 +689,19 @@ def load_model_from_huggingface(hf_model_id, training_config):
             # Build a combined state dict from all component files
             print(f"\n   📦 Loading weights from component files...")
             
-            # Component name mapping (file name -> model prefix to ADD if key doesn't have one)
-            # Some components save keys WITH prefix (projector -> projector.layers.0...)
-            # Some save keys WITHOUT prefix (video_encoder -> encoder_blocks.0...)
-            # Some save keys as bare names (modality_markers -> audio_start)
-            component_prefix_map = {
-                'llm': 'llm.',
-                'vision_encoder': 'vision_encoder.',
-                'video_encoder': 'video_encoder.',
-                'audio_encoder': 'audio_encoder.',
-                'audio_decoder': 'audio_decoder.',
-                'projector': '',  # projector.safetensors already has 'projector.' prefix in keys
-                'audio_projector': '',  # likely already has prefix
-                'cross_attention': 'cross_attention_layers.',
-                'generator': 'generator.',
-                'video_generator': 'video_generator.',
-                'waveform_decoder': 'waveform_decoder.',
-                'modality_markers': '',  # keys are bare: audio_start, video_end, etc.
-            }
-            
             # Build combined checkpoint state dict from all component files
+            # Key mapping strategy:
+            # 1. Try key as-is (for keys that already have correct prefix like projector.layers.0)
+            # 2. Try with component name prefix (video_encoder.encoder_blocks.0)
             checkpoint_state_dict = {}
             model_state_dict = model.state_dict()
             model_keys_set = set(model_state_dict.keys())
             
-            # Debug: show sample model keys for video_encoder
-            video_encoder_model_keys = [k for k in model_keys_set if k.startswith('video_encoder.')]
-            if video_encoder_model_keys:
-                print(f"      Model has {len(video_encoder_model_keys)} video_encoder keys")
-                print(f"      Sample: {video_encoder_model_keys[0]}")
-            
             for comp_name, comp_file in component_files.items():
-                prefix = component_prefix_map.get(comp_name, f'{comp_name}.')
                 print(f"      Loading {comp_name}...")
                 
                 try:
                     with safe_open(comp_file, framework="pt", device="cpu") as f:
-                        loaded_count = 0
                         for key in f.keys():
                             tensor = f.get_tensor(key)
                             
@@ -734,7 +710,6 @@ def load_model_from_huggingface(hf_model_id, training_config):
                             possible_keys = [
                                 key,  # As-is (for keys that already have correct prefix like projector.layers.0)
                                 f"{comp_name}.{key}",  # With component name as prefix (video_encoder.encoder_blocks.0)
-                                f"{prefix}{key}" if prefix else key,  # With component prefix from map
                             ]
                             
                             # Find the first key that exists in the model
@@ -746,13 +721,10 @@ def load_model_from_huggingface(hf_model_id, training_config):
                             
                             if matched_key:
                                 checkpoint_state_dict[matched_key] = tensor
-                                loaded_count += 1
                             else:
                                 # If no match found, use the key with component name prefix
                                 # This will be reported as skipped later
                                 checkpoint_state_dict[f"{comp_name}.{key}"] = tensor
-                        
-                        print(f"         Matched {loaded_count}/{len(list(f.keys()))} keys")
                                 
                 except Exception as e:
                     print(f"      ⚠️ Error loading {comp_name}: {e}")
