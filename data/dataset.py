@@ -1193,6 +1193,7 @@ class TrueStreamingDataset(IterableDataset):
                 "epoch_count": 0,  # Per-epoch count (resets each epoch)
                 "stream_position": stream_position,  # Cumulative position in data stream
                 "modality": source_modality,  # Which modality this source belongs to
+                "consecutive_failures": 0,  # Track failures to mark exhausted if too many
             })
         
         # Track stats by category
@@ -1266,6 +1267,9 @@ class TrueStreamingDataset(IterableDataset):
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
                     if processed is not None:
+                        # SUCCESS - reset failure counter
+                        source["consecutive_failures"] = 0
+                        
                         # Yield the SAME processed sample multiple times
                         # Sample is loaded from stream once, processed once, yielded sample_repeat times
                         # This is memory efficient - same tensors are reused
@@ -1315,13 +1319,25 @@ class TrueStreamingDataset(IterableDataset):
                 except StopIteration:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
+                    print(f"   ℹ️ {source.get('name', 'unknown')}: exhausted (no more data)", flush=True)
                 except Exception as e:
-                    # Skip problematic samples but show full traceback for debugging
-                    print(f"\n⚠️ SAMPLE ERROR in {source.get('name', 'unknown')}:", flush=True)
+                    # Track consecutive failures
+                    source["consecutive_failures"] = source.get("consecutive_failures", 0) + 1
+                    max_failures = 50  # Mark exhausted after 50 consecutive failures
+                    
+                    # Show error with failure count
+                    print(f"\n⚠️ SAMPLE ERROR in {source.get('name', 'unknown')} (failure {source['consecutive_failures']}/{max_failures}):", flush=True)
                     print(f"   Error: {type(e).__name__}: {e}", flush=True)
                     print(f"   Full traceback:", flush=True)
                     traceback.print_exc()
-                    print(f"   → Skipping this sample and continuing...\n", flush=True)
+                    
+                    # Mark exhausted if too many consecutive failures
+                    if source["consecutive_failures"] >= max_failures:
+                        source["exhausted"] = True
+                        sources_to_remove.append(source_idx)
+                        print(f"   ❌ {source.get('name', 'unknown')}: marked EXHAUSTED after {max_failures} consecutive failures\n", flush=True)
+                    else:
+                        print(f"   → Skipping this sample and continuing...\n", flush=True)
             
             # Remove exhausted sources
             for idx in sorted(sources_to_remove, reverse=True):
