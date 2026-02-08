@@ -337,8 +337,12 @@ class XoronConfig:
             print(f"   - Frames: {self.video_min_frames}-{self.video_max_frames}, base={self.video_base_frames}")
         else:
             print(f"📐 Multi-Scale: DISABLED (fixed {self.image_base_size}x{self.image_base_size})")
-        print(f"🎨 Image Gen: {self.image_base_size}x{self.image_base_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
-        print(f"🎬 Video Gen: {self.video_base_frames} frames @ {self.video_base_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
+        if self.use_multi_scale:
+            print(f"🎨 Image Gen: {self.image_min_size}-{self.image_max_size}px, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
+            print(f"🎬 Video Gen: {self.video_min_frames}-{self.video_max_frames} frames @ {self.video_min_size}-{self.video_max_size}px, 3D-RoPE={self.generation_video_use_3d_rope}")
+        else:
+            print(f"🎨 Image Gen: {self.image_base_size}x{self.image_base_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
+            print(f"🎬 Video Gen: {self.video_base_frames} frames @ {self.video_base_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
         print(f"🎤 Audio: {self.audio_sample_rate}Hz, RawWaveform={self.use_raw_waveform}, MAS={self.use_mas}")
         print(f"   - Zero-Shot Cloning: speaker_dim={self.audio_speaker_embed_dim}, In-Context Prompting={self.use_in_context_audio_prompting}")
         print(f"📝 Tokenizer: {self.tokenizer_name} (vocab: {self.vocab_size:,})")

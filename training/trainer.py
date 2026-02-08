@@ -124,6 +124,11 @@ class XoronTrainer:
         # Get generation sizes from multi-scale config
         self.img_gen_size = xoron_config.image_base_size
         self.vid_gen_size = xoron_config.video_base_size
+        self.use_multi_scale = getattr(xoron_config, 'use_multi_scale', True)
+        self.img_min_size = getattr(xoron_config, 'image_min_size', 256)
+        self.img_max_size = getattr(xoron_config, 'image_max_size', 512)
+        self.vid_min_size = getattr(xoron_config, 'video_min_size', 256)
+        self.vid_max_size = getattr(xoron_config, 'video_max_size', 448)
         
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)
@@ -700,7 +705,10 @@ class XoronTrainer:
         
         # Concise settings
         precision = 'BF16' if self.amp_dtype == torch.bfloat16 else ('FP16' if self.use_amp else 'FP32')
-        print(f"   ⚙️ {precision} | grad_clip={self.max_grad_norm} | img={self.img_gen_size}px | vid={self.vid_gen_size}px")
+        if self.use_multi_scale:
+            print(f"   ⚙️ {precision} | grad_clip={self.max_grad_norm} | img={self.img_min_size}-{self.img_max_size}px | vid={self.vid_min_size}-{self.vid_max_size}px")
+        else:
+            print(f"   ⚙️ {precision} | grad_clip={self.max_grad_norm} | img={self.img_gen_size}px | vid={self.vid_gen_size}px")
         print("=" * 60)
 
         self.model.train()
