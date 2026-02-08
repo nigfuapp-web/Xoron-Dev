@@ -1200,27 +1200,6 @@ class XoronMultimodalModel(nn.Module):
                     loaded_count = len(filtered_state_dict)
                     total_model_params = len(model_state_dict)
                     print(f"   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
-                    
-                    if size_mismatch_keys:
-                        print(f"   ⚠️ Size mismatches (architecture changed): {len(size_mismatch_keys)} keys")
-                        components = {}
-                        for key, ckpt_shape, model_shape in size_mismatch_keys:
-                            comp = key.split('.')[0]
-                            components[comp] = components.get(comp, 0) + 1
-                        for comp, count in sorted(components.items()):
-                            print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-                    
-                    if missing:
-                        print(f"   ⚠️ Missing keys (new architecture): {len(missing)} keys")
-                        components = {}
-                        for key in missing:
-                            comp = key.split('.')[0]
-                            components[comp] = components.get(comp, 0) + 1
-                        for comp, count in sorted(components.items()):
-                            print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-                    
-                    if skipped_keys:
-                        print(f"   ⚠️ Skipped keys (old architecture): {len(skipped_keys)} keys")
                 
                 model.lora_applied = lora_was_applied
                 
@@ -1263,10 +1242,6 @@ class XoronMultimodalModel(nn.Module):
                 missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
                 
                 print(f"   ✅ Loaded {len(filtered_state_dict)}/{len(model_state_dict)} parameters")
-                if size_mismatch_count:
-                    print(f"   ⚠️ Size mismatches: {size_mismatch_count} (will be randomly initialized)")
-                if missing:
-                    print(f"   ⚠️ Missing keys: {len(missing)} (new architecture)")
                     
                 model.lora_applied = lora_was_applied
             else:

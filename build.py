@@ -754,27 +754,6 @@ def load_model_from_huggingface(hf_model_id, training_config):
             
             print(f"\n   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
             
-            if size_mismatch_keys:
-                print(f"   ⚠️ Size mismatches: {len(size_mismatch_keys)} keys")
-                components = {}
-                for key, ckpt_shape, model_shape in size_mismatch_keys:
-                    comp = key.split('.')[0]
-                    components[comp] = components.get(comp, 0) + 1
-                for comp, count in sorted(components.items()):
-                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-            
-            if missing:
-                print(f"   ⚠️ Missing keys (not in checkpoint): {len(missing)} keys")
-                components = {}
-                for key in missing:
-                    comp = key.split('.')[0]
-                    components[comp] = components.get(comp, 0) + 1
-                for comp, count in sorted(components.items()):
-                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-            
-            if skipped_keys:
-                print(f"   ⚠️ Skipped keys (not in model): {len(skipped_keys)} keys")
-            
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
             
         elif os.path.exists(model_path):
@@ -809,27 +788,6 @@ def load_model_from_huggingface(hf_model_id, training_config):
             total_model_params = len(model_state_dict)
             print(f"   ✅ Loaded {loaded_count}/{total_model_params} parameters from checkpoint")
             
-            if size_mismatch_keys:
-                print(f"   ⚠️ Size mismatches (architecture changed): {len(size_mismatch_keys)} keys")
-                components = {}
-                for key, ckpt_shape, model_shape in size_mismatch_keys:
-                    comp = key.split('.')[0]
-                    components[comp] = components.get(comp, 0) + 1
-                for comp, count in sorted(components.items()):
-                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-            
-            if missing:
-                print(f"   ⚠️ Missing keys (new architecture): {len(missing)} keys")
-                components = {}
-                for key in missing:
-                    comp = key.split('.')[0]
-                    components[comp] = components.get(comp, 0) + 1
-                for comp, count in sorted(components.items()):
-                    print(f"      - {comp}: {count} parameters (will be randomly initialized)")
-            
-            if skipped_keys:
-                print(f"   ⚠️ Skipped keys (old architecture): {len(skipped_keys)} keys")
-            
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
             
         elif os.path.exists(pytorch_path):
@@ -856,10 +814,6 @@ def load_model_from_huggingface(hf_model_id, training_config):
             missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
             
             print(f"   ✅ Loaded {len(filtered_state_dict)}/{len(model_state_dict)} parameters")
-            if size_mismatch_keys:
-                print(f"   ⚠️ Size mismatches: {len(size_mismatch_keys)} (will be randomly initialized)")
-            if missing:
-                print(f"   ⚠️ Missing keys: {len(missing)} (new architecture)")
                 
             model.lora_applied = lora_was_applied or checkpoint_has_lora_structure
         else:
