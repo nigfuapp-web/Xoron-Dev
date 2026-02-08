@@ -1584,17 +1584,25 @@ Examples:
   python build.py --finetune <path>  # Fine-tune from checkpoint
   python build.py --list             # List available checkpoints
   
-Modality-specific training:
+Modality-specific training (can combine multiple flags):
   python build.py --video            # Train on video datasets only
   python build.py --image            # Train on image datasets only
   python build.py --text             # Train on text datasets only
   python build.py --voice            # Train on voice/audio datasets only
+  
+  # Combined modality training:
+  python build.py --text --image     # Train on text + image datasets
+  python build.py --text --video     # Train on text + video datasets
+  python build.py --image --video    # Train on image + video datasets
+  python build.py --text --image --video  # Train on text + image + video
+  python build.py --text --image --video --voice  # Same as no flags (all)
 
 HuggingFace model training:
   python build.py --hf --text        # Load from HF and train on text
   python build.py --hf --image       # Load from HF and train on images
   python build.py --hf --video       # Load from HF and train on video
   python build.py --hf --voice       # Load from HF and train on voice/audio
+  python build.py --hf --text --image  # Load from HF and train on text + image
   python build.py --hf               # Load from HF and train on all modalities
 
 Export options:
@@ -1678,23 +1686,43 @@ def run_cli_mode(args):
     if args.lr:
         training_config.learning_rate = args.lr
     
-    # Determine the effective mode from shorthand flags or --mode argument
-    effective_mode = args.mode  # Default from --mode argument
+    # Determine the effective mode(s) from shorthand flags or --mode argument
+    # Supports combining multiple flags: --text --image --video
+    active_modes = []
     
-    # Shorthand flags override --mode
+    # Collect all active mode flags
+    if args.text:
+        active_modes.append('text')
+    if args.image:
+        active_modes.append('image')
     if args.video:
-        effective_mode = 'video'
-    elif args.image:
-        effective_mode = 'image'
-    elif args.text:
-        effective_mode = 'text'
-    elif args.voice:
-        effective_mode = 'audio'  # --voice maps to 'audio' mode
+        active_modes.append('video')
+    if args.voice:
+        active_modes.append('audio')  # --voice maps to 'audio' mode
     
-    # Apply dataset mode
-    if effective_mode and effective_mode != 'all':
-        dataset_configs = get_finetune_datasets(effective_mode)
-        print(f"\n📊 Using {effective_mode} datasets")
+    # If no flags specified, use --mode argument or default to 'all'
+    if not active_modes:
+        if args.mode and args.mode != 'all':
+            active_modes = [args.mode]
+        else:
+            active_modes = []  # Empty means 'all'
+    
+    # For backwards compatibility, set effective_mode for single mode or 'multi' for multiple
+    if len(active_modes) == 0:
+        effective_mode = 'all'
+    elif len(active_modes) == 1:
+        effective_mode = active_modes[0]
+    else:
+        effective_mode = 'multi'  # Multiple modes combined
+    
+    # Apply dataset mode - use filter_datasets_by_modalities for multi-mode support
+    if active_modes:
+        from config.dataset_config import filter_datasets_by_modalities
+        dataset_configs = filter_datasets_by_modalities(modalities=active_modes)
+        mode_str = ' + '.join(active_modes)
+        print(f"\n📊 Using {mode_str} datasets")
+    else:
+        print(f"\n📊 Using all datasets")
     
     # Parse freeze/train-only components
     freeze_components = []
@@ -1710,24 +1738,33 @@ def run_cli_mode(args):
     # 
     # IMPORTANT: LLM is NEVER frozen - it's trained from scratch and always needs full weight training + LoRA
     # Only non-LLM components are selectively frozen based on training mode
+    # 
+    # Supports combining flags: --text --image will train text + image components
     auto_freeze = []
     
-    if args.video:
-        # Video mode: train LLM + video + vision (for frame encoding)
-        # Freeze: image_generation, audio
-        auto_freeze = ['image_generation', 'audio']
-    elif args.image:
-        # Image mode: train LLM + vision + image_generation
-        # Freeze: video, video_generation, audio
-        auto_freeze = ['video', 'video_generation', 'audio']
-    elif args.text:
-        # Text mode: train LLM only (still full weights + LoRA)
-        # Freeze: all non-LLM components
-        auto_freeze = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
-    elif args.voice:
-        # Voice mode: train LLM + audio
-        # Freeze: vision, video, image/video generation
-        auto_freeze = ['vision', 'video', 'image_generation', 'video_generation']
+    # All possible components that can be frozen (excluding LLM which is never frozen)
+    all_freezable = {'vision', 'video', 'audio', 'image_generation', 'video_generation'}
+    
+    # Determine which components to TRAIN based on active modes
+    components_to_train = set()
+    
+    if 'text' in active_modes:
+        # Text mode: train LLM only (no additional components)
+        pass  # LLM is always trained
+    if 'image' in active_modes:
+        # Image mode: train vision + image_generation
+        components_to_train.update(['vision', 'image_generation'])
+    if 'video' in active_modes:
+        # Video mode: train video + vision (for frame encoding) + video_generation
+        components_to_train.update(['vision', 'video', 'video_generation'])
+    if 'audio' in active_modes:
+        # Audio/voice mode: train audio
+        components_to_train.add('audio')
+    
+    # If specific modes are active, freeze everything NOT being trained
+    if active_modes:
+        auto_freeze = list(all_freezable - components_to_train)
+    # If no modes specified (all), don't auto-freeze anything
     
     # NEVER freeze LLM - remove it if somehow added
     if 'llm' in auto_freeze:
