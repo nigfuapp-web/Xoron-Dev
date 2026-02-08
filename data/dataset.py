@@ -1009,13 +1009,25 @@ class TrueStreamingDataset(IterableDataset):
                         labels[i] = -100  # Mask non-assistant tokens
             
             # Process media on-demand
-            pixel_values = self._process_image(raw_image_data) if raw_image_data else None
-            if pixel_values is None:
-                pixel_values = torch.zeros(3, self.image_size, self.image_size)
-            
-            video_frames = None
+            # SKIP samples with failed media - don't train on zero tensors
+            is_image_dtype = dtype in ['image_caption', 'image_vqa', 'image_generation', 'image_editing', 'ui_to_code']
             is_video_dtype = dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']
+            is_audio_sample = dtype in ['voice_asr', 'voice_tts']
             
+            # Process image
+            pixel_values = self._process_image(raw_image_data) if raw_image_data else None
+            
+            # Skip image samples with no valid image - only train on real data
+            if is_image_dtype:
+                if pixel_values is None or pixel_values.abs().mean() < 1e-6:
+                    return None  # Skip - don't train on zeros
+            
+            # Use minimal placeholder for non-image samples
+            if pixel_values is None:
+                pixel_values = torch.zeros(3, 1, 1)  # Minimal, collate handles it
+            
+            # Process video
+            video_frames = None
             if raw_video_data and is_video_dtype:
                 video_frames = self._process_video_frames(raw_video_data, sample_metadata)
                 if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
@@ -1034,16 +1046,16 @@ class TrueStreamingDataset(IterableDataset):
                         ).squeeze(0)
                     video_frames = img_tensor.unsqueeze(0).expand(self.max_video_frames, -1, -1, -1).clone()
             
-            # Skip video samples with no valid frames - get next sample instead
+            # Skip video samples with no valid frames - only train on real data
             if is_video_dtype:
                 if video_frames is None or video_frames.abs().mean() < 1e-6:
-                    return None  # Skip this sample
+                    return None  # Skip - don't train on zeros
             
+            # Use minimal placeholder for non-video samples
             if video_frames is None:
-                video_frames = torch.zeros(self.max_video_frames, 3, self.video_size, self.video_size)
+                video_frames = torch.zeros(1, 3, 1, 1)  # Minimal, collate handles it
             
-            # Only process audio for audio samples - use minimal placeholder for others
-            is_audio_sample = dtype in ['voice_asr', 'voice_tts']
+            # Process audio
             audio_features = None
             speaker_ref_audio = None  # For voice cloning
             
@@ -1051,26 +1063,19 @@ class TrueStreamingDataset(IterableDataset):
                 audio_features = self._process_audio(raw_audio_data, sample_metadata)
                 
                 # For TTS with voice cloning: use the same audio as speaker reference
-                # This teaches the model to capture speaker characteristics
                 if dtype == 'voice_tts' and audio_features is not None:
                     use_self_as_ref = sample_metadata.get('use_self_as_reference', True)
                     if use_self_as_ref:
-                        # Clone the audio for speaker reference (will be processed separately)
                         speaker_ref_audio = audio_features.clone()
             
+            # Skip audio samples with no valid audio - only train on real data
+            if is_audio_sample:
+                if audio_features is None or audio_features.abs().mean() < 1e-6:
+                    return None  # Skip - don't train on zeros
+            
+            # Use minimal placeholder for non-audio samples
             if audio_features is None:
-                # Use minimal tensor for non-audio samples to save memory
-                # For audio samples with failed processing, use proper size
-                if is_audio_sample:
-                    if self.use_raw_waveform:
-                        max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
-                        audio_features = torch.zeros(max_waveform_samples)
-                    else:
-                        audio_features = torch.zeros(self.audio_n_mels, self.audio_max_length)
-                else:
-                    # Minimal placeholder for non-audio samples (image, video, text)
-                    # Collate function will handle this appropriately
-                    audio_features = torch.zeros(1)
+                audio_features = torch.zeros(1)  # Minimal, collate handles it
             else:
                 # Pad/truncate actual audio data
                 if self.use_raw_waveform:
