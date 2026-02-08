@@ -63,7 +63,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 16  # REDUCED: 128 too high for FP16 stability, causes gradient explosion
     learning_rate: float = 1e-4  # INCREASED: FP32 optimizer states prevent overflow, can use higher LR
     weight_decay: float = 0.01
-    num_epochs: int = 5
+    num_epochs: int = 3
     warmup_ratio: float = 0.05  # INCREASED: longer warmup for stability
     max_seq_length: int = 1024
     max_grad_norm: float = 1.0  # INCREASED: FP32 optimizer states are stable, can use standard clipping
