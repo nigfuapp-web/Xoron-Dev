@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import time
+import traceback
 import torch
 import torch.nn.functional as F
 from torch.utils.data import IterableDataset
@@ -1351,8 +1352,12 @@ class TrueStreamingDataset(IterableDataset):
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
                 except Exception as e:
-                    # Skip problematic samples but log for debugging
-                    logger.debug(f"Sample processing skipped in {source.get('name', 'unknown')}: {e}")
+                    # Skip problematic samples but show full traceback for debugging
+                    print(f"\n⚠️ SAMPLE ERROR in {source.get('name', 'unknown')}:", flush=True)
+                    print(f"   Error: {type(e).__name__}: {e}", flush=True)
+                    print(f"   Full traceback:", flush=True)
+                    traceback.print_exc()
+                    print(f"   → Skipping this sample and continuing...\n", flush=True)
             
             # Remove exhausted sources
             for idx in sorted(sources_to_remove, reverse=True):
