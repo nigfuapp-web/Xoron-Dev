@@ -1040,8 +1040,11 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     if is_dual_training:
         mode_names = list(modality_max_values.keys())
         print(f"\n🔀 Using DUAL TRAINING mode: {' + '.join(mode_names)}")
+        for mod, max_val in modality_max_values.items():
+            print(f"   {mod}: {max_val} samples/epoch")
     
     # Create streaming dataset with per-dataset limits and sample repetition
+    # Pass modality_max_values for per-modality limits in dual training mode
     print(f"\n📁 Loading train datasets...")
     train_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
@@ -1058,6 +1061,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         video_size=xoron_config.video_base_size,         # Multi-scale config
         resume_state_path=resume_streaming_state,
         use_raw_waveform=use_raw_waveform,
+        modality_max_values=modality_max_values if is_dual_training else None,  # Per-modality limits
     )
     
     # Count train datasets

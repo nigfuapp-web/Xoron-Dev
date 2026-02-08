@@ -50,6 +50,7 @@ class TrueStreamingDataset(IterableDataset):
         audio_sample_rate: int = 16000,  # From XoronConfig.audio_sample_rate
         resume_state_path: str = None,
         use_raw_waveform: bool = True,  # From XoronConfig.use_raw_waveform
+        modality_max_values: Dict[str, int] = None,  # Per-modality max samples for dual training
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -68,6 +69,11 @@ class TrueStreamingDataset(IterableDataset):
         self.audio_max_length = audio_max_length
         self.audio_sample_rate = audio_sample_rate
         self.use_raw_waveform = use_raw_waveform
+        
+        # Per-modality max samples for dual/multi training mode
+        # e.g., {'text': 3300, 'video': 1000} means text stops at 3300, video at 1000
+        self.modality_max_values = modality_max_values or {}
+        self.is_dual_training = bool(modality_max_values)
 
         self.total_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
         
@@ -88,6 +94,12 @@ class TrueStreamingDataset(IterableDataset):
                 "image": {},          # image dataset positions
                 "video": {},          # video dataset positions
                 "voice": {},          # voice/audio dataset positions
+            },
+            "modality_counts": {      # Per-modality sample counts for dual training
+                "text": 0,
+                "image": 0,
+                "video": 0,
+                "audio": 0,
             },
             "last_modality": None,    # Which modality was last trained
         }
@@ -1098,6 +1110,11 @@ class TrueStreamingDataset(IterableDataset):
         - Samples are formatted using format_functions before yielding
         - Each dataset is capped at max_per_dataset UNIQUE samples to prevent domination
         - Each unique sample is yielded sample_repeat times for stronger learning signal
+        
+        In DUAL TRAINING mode (modality_max_values set):
+        - Each modality respects its own max (e.g., text: 3300, video: 1000)
+        - Epoch ends when ALL active modalities reach their limits
+        - Modalities wait for each other before moving to next epoch
         """
         # Check if resuming from saved state
         resume_unique = self._streaming_state.get("unique_samples", 0)
@@ -1106,6 +1123,25 @@ class TrueStreamingDataset(IterableDataset):
         
         unique_samples = resume_unique
         total_yields = resume_yields
+        
+        # Per-modality counters for dual training
+        modality_counts = self._streaming_state.get("modality_counts", {}).copy()
+        if not modality_counts:
+            modality_counts = {"text": 0, "image": 0, "video": 0, "audio": 0}
+        
+        # Map dataset types to modalities
+        modality_map = {
+            "text": ["text", "code", "conversation", "tool_use", "agentic"],
+            "image": ["image_caption", "image_vqa", "image_generation", "image_editing", "ui_to_code"],
+            "video": ["video_caption", "video_qa", "video_generation", "image_to_video", "video_preference", "video_likert"],
+            "audio": ["voice_asr", "voice_tts"],
+        }
+        
+        # Reverse map: dtype -> modality
+        dtype_to_modality = {}
+        for modality, dtypes in modality_map.items():
+            for dtype in dtypes:
+                dtype_to_modality[dtype] = modality
         
         # Create iterators for all sources with per-dataset counters
         # IMPORTANT: We track TWO separate things:
@@ -1137,12 +1173,16 @@ class TrueStreamingDataset(IterableDataset):
                         pass
                     print(f" done", flush=True)
             
+            # Get modality for this source
+            source_modality = dtype_to_modality.get(source["dtype"], "text")
+            
             active_sources.append({
                 **source,
                 "iterator": iterator,
                 "exhausted": False,
                 "epoch_count": 0,  # Per-epoch count (resets each epoch)
                 "stream_position": stream_position,  # Cumulative position in data stream
+                "modality": source_modality,  # Which modality this source belongs to
             })
         
         # Track stats by category
@@ -1155,18 +1195,41 @@ class TrueStreamingDataset(IterableDataset):
         if has_resume_state:
             print(f"\n🔄 Resuming streaming iteration from {unique_samples:,} unique samples...", flush=True)
         else:
-            print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
+            if self.is_dual_training:
+                print(f"\n🚀 Starting DUAL TRAINING iteration...", flush=True)
+                for mod, max_val in self.modality_max_values.items():
+                    print(f"   {mod}: 0/{max_val} samples", flush=True)
+            else:
+                print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
         print(f"   📊 Max {self.max_per_dataset} unique per dataset", flush=True)
         
+        def check_modality_limit(modality: str) -> bool:
+            """Check if a modality has reached its limit in dual training mode."""
+            if not self.is_dual_training:
+                return False
+            max_for_modality = self.modality_max_values.get(modality, float('inf'))
+            return modality_counts.get(modality, 0) >= max_for_modality
+        
+        def all_modalities_done() -> bool:
+            """Check if all active modalities have reached their limits."""
+            if not self.is_dual_training:
+                return unique_samples >= self.max_per_epoch
+            # Check if ALL modalities in modality_max_values have reached their limits
+            for modality, max_val in self.modality_max_values.items():
+                if modality_counts.get(modality, 0) < max_val:
+                    return False
+            return True
+        
         # Round-robin through sources - count UNIQUE samples toward max_per_epoch
-        while unique_samples < self.max_per_epoch and active_sources:
+        while not all_modalities_done() and active_sources:
             # Shuffle sources each round for variety
             random.shuffle(active_sources)
             
             sources_to_remove = []
             
             for source_idx, source in enumerate(active_sources):
-                if unique_samples >= self.max_per_epoch:
+                # Check stopping condition
+                if all_modalities_done():
                     break
                 
                 if source["exhausted"]:
@@ -1175,6 +1238,13 @@ class TrueStreamingDataset(IterableDataset):
                 
                 # Check if this dataset has hit its PER-EPOCH limit
                 if source["epoch_count"] >= self.max_per_dataset:
+                    source["exhausted"] = True
+                    sources_to_remove.append(source_idx)
+                    continue
+                
+                # In dual training, check if this source's modality has hit its limit
+                source_modality = source.get("modality", "text")
+                if check_modality_limit(source_modality):
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
                     continue
@@ -1198,6 +1268,9 @@ class TrueStreamingDataset(IterableDataset):
                         source["epoch_count"] += 1  # Per-epoch count (for limit check)
                         source["stream_position"] += 1  # Cumulative position (for resume)
                         
+                        # Update per-modality count for dual training
+                        modality_counts[source_modality] = modality_counts.get(source_modality, 0) + 1
+                        
                         dtype = source["dtype"]
                         type_counts[dtype] = type_counts.get(dtype, 0) + 1
                         dataset_counts[source["name"]] = source["epoch_count"]
@@ -1207,14 +1280,9 @@ class TrueStreamingDataset(IterableDataset):
                         self._streaming_state["unique_samples"] = unique_samples
                         self._streaming_state["total_yields"] = total_yields
                         self._streaming_state["dataset_positions"][source["name"]] = source["stream_position"]
+                        self._streaming_state["modality_counts"] = modality_counts.copy()
                         
                         # Also update per-modality positions for --text, --image, --video, --voice resume
-                        modality_map = {
-                            "text": ["text", "code", "conversation", "tool_use", "agentic"],
-                            "image": ["image_caption", "image_vqa", "image_generation", "image_editing", "ui_to_code"],
-                            "video": ["video_caption", "video_qa", "video_generation", "image_to_video", "video_preference", "video_likert"],
-                            "voice": ["voice_asr", "voice_tts"],
-                        }
                         for modality, dtypes in modality_map.items():
                             if dtype in dtypes:
                                 self._streaming_state["modality_positions"][modality][source["name"]] = source["stream_position"]
@@ -1222,7 +1290,14 @@ class TrueStreamingDataset(IterableDataset):
                         
                         # Log progress and save state every 500 unique samples
                         if unique_samples % 500 == 0:
-                            print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} samples", flush=True)
+                            if self.is_dual_training:
+                                progress_parts = []
+                                for mod, max_val in self.modality_max_values.items():
+                                    current = modality_counts.get(mod, 0)
+                                    progress_parts.append(f"{mod}: {current}/{max_val}")
+                                print(f"   📈 {' | '.join(progress_parts)}", flush=True)
+                            else:
+                                print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} samples", flush=True)
                             # Auto-save state if path is set
                             if self._state_save_path:
                                 self.save_streaming_state(self._state_save_path)
@@ -1241,6 +1316,11 @@ class TrueStreamingDataset(IterableDataset):
         
         # Print final stats
         print(f"\n✅ Epoch complete!", flush=True)
+        if self.is_dual_training:
+            print(f"   🔀 Dual training results:", flush=True)
+            for mod, max_val in self.modality_max_values.items():
+                current = modality_counts.get(mod, 0)
+                print(f"      {mod}: {current}/{max_val} samples", flush=True)
         print(f"   📊 {unique_samples:,} unique samples × {self.sample_repeat} = {total_yields:,} total yields", flush=True)
         print(f"   📂 By category:", flush=True)
         for dtype, count in sorted(type_counts.items()):
