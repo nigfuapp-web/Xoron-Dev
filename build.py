@@ -1075,10 +1075,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         use_raw_waveform=use_raw_waveform,
         modality_max_values=modality_max_values if is_dual_training else None,  # Per-modality limits
     )
-    
-    # Count train datasets
-    train_dataset_count = sum(len(configs) for configs in dataset_configs.values() if configs)
-    print(f"✅ {train_dataset_count} datasets initialized")
+    # Note: TrueStreamingDataset prints "✅ X datasets initialized" in _init_iterators
     
     # Set auto-save path for streaming state (saved alongside checkpoints)
     streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
@@ -1106,7 +1103,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         resume_state_path=None,  # Don't resume eval dataset
         use_raw_waveform=use_raw_waveform,
     )
-    print(f"✅ {num_datasets} datasets initialized")
+    # Note: TrueStreamingDataset prints "✅ X datasets initialized" in _init_iterators
     
     # Set initial skip positions for eval dataset (held-out data)
     train_samples_per_dataset = training_config.max_per_dataset

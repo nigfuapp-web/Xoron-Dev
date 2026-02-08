@@ -328,7 +328,7 @@ class VideoEncoder(nn.Module):
         # Learnable frame position embeddings
         self.frame_pos_embed = nn.Parameter(torch.randn(1, max_frames, self.hidden_size) * 0.02)
 
-        print(f"   🎬 Video encoder: max {max_frames} frames @ {self.image_size}x{self.image_size}")
+        print(f"   🎬 Video encoder: max {max_frames} frames (multi-scale enabled)")
 
     def _extract_frame_features(self, frames: torch.Tensor) -> torch.Tensor:
         """Extract per-frame features using vision encoder."""

@@ -314,7 +314,7 @@ class VisionEncoder(nn.Module):
             
             print(f"   🎯 Using SigLIP 2 (recommended for MoE)")
             print(f"   ✅ Hidden size: {self.hidden_size}")
-            print(f"   📐 Image size: {self.vision_model.config.image_size}")
+            print(f"   📐 Native size: {self.vision_model.config.image_size} (multi-scale: 256-512px)")
             print(f"   🔲 Patch size: {self.vision_model.config.patch_size}")
             
         except ImportError:
