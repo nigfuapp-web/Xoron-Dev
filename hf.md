@@ -101,9 +101,9 @@ datasets:
 
 ![Xoron-Dev Logo](https://img.shields.io/badge/Xoron--Dev-MultiMoE-blue?style=for-the-badge&logo=pytorch)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
-![Params](https://img.shields.io/badge/Parameters-1.5B_MoE-yellow?style=for-the-badge)
+![Params](https://img.shields.io/badge/Parameters-2.8B_MoE-yellow?style=for-the-badge)
 ![Context](https://img.shields.io/badge/Context-128K-red?style=for-the-badge)
-![Version](https://img.shields.io/badge/Version-2.1-purple?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-2.2-purple?style=for-the-badge)
 
 </div>
 
