@@ -13,6 +13,8 @@ Architecture specs (from config/model_config.py):
 - Vision: SigLIP-so400m-patch14-384 + TiTok (256 tokens) + 2D-RoPE
 - Video: 3D-RoPE + Temporal MoE (4 experts) + 3D Causal (4 layers)
 - Audio: Raw Waveform Tokenizer + Conformer + RMLA + MAS
+- Audio Decoder: FastSpeech2/VITS-style with variance adaptor + MAS
+- Waveform Decoder: BigVGAN-style direct audio output (no vocoder needed)
 - Image Gen: MoE-DiT + Flow Matching + Dual-Stream (256-512²)
 - Video Gen: 3D Causal + Flow Matching + 3D-RoPE (8-32 frames)
 - Context: 128K with Ring Attention (4096 chunk)
@@ -105,7 +107,10 @@ def export_to_onnx(
     print("   ✓ LLM Backbone (MoE: 8 experts, top-2, 6 MoE layers)")
     print("   ✓ Vision Encoder (SigLIP-2 + TiTok + 2D-RoPE)")
     print("   ✓ Video Encoder (3D-RoPE + Temporal MoE)")
-    print("   ✓ Audio Encoder/Decoder (Raw Waveform + RMLA + MAS)")
+    print("   ✓ Audio Encoder (Raw Waveform + RMLA)")
+    print("   ✓ Audio Decoder (FastSpeech2 + MAS + Zero-Shot Cloning)")
+    print("   ✓ Waveform Decoder (BigVGAN-style Direct Audio Output)")
+    print("   ✓ Audio Projector (Audio-to-LLM)")
     print("   ✓ Image Diffusion (MoE-DiT + Flow Matching)")
     print("   ✓ Video Diffusion (3D Causal + Flow Matching)")
     print("   ✓ Multimodal Projectors (Perceiver Resampler)")
@@ -212,6 +217,102 @@ def export_to_onnx(
         print("   ✅ Audio encoder exported")
     except Exception as e:
         print(f"   ⚠️ Audio encoder failed: {e}")
+
+    # 4b. Export Audio Decoder (TTS - mel spectrogram generation)
+    print("\n4️⃣b Exporting audio decoder (TTS)...")
+    try:
+        if hasattr(model, 'audio_decoder') and model.audio_decoder is not None:
+            class AudioDecoderWrapper(nn.Module):
+                """Wrapper to handle AudioDecoder's multiple outputs for ONNX export."""
+                def __init__(self, audio_decoder):
+                    super().__init__()
+                    self.audio_decoder = audio_decoder
+                
+                def forward(self, text_embeds, speaker=None):
+                    # AudioDecoder returns (mel, durations, alignment)
+                    mel, durations, _ = self.audio_decoder(
+                        text_embeds, 
+                        target_length=None,
+                        speaker=speaker,
+                        use_mas=False  # Disable MAS for inference export
+                    )
+                    return mel, durations
+            
+            audio_dec_wrapper = AudioDecoderWrapper(model.audio_decoder).to(device).eval()
+            audio_dec_path = os.path.join(onnx_dir, "audio_decoder.onnx")
+            with torch.no_grad():
+                torch.onnx.export(
+                    audio_dec_wrapper,
+                    (
+                        torch.randn(1, 64, config.hidden_size, device=device),  # text_embeds
+                        torch.zeros(1, dtype=torch.long, device=device),  # speaker
+                    ),
+                    audio_dec_path,
+                    input_names=["text_embeds", "speaker"],
+                    output_names=["mel_spectrogram", "durations"],
+                    dynamic_axes={
+                        "text_embeds": {0: "batch", 1: "seq_len"},
+                        "mel_spectrogram": {0: "batch", 2: "mel_len"},
+                        "durations": {0: "batch", 1: "seq_len"}
+                    },
+                    opset_version=17
+                )
+            export_results['audio_decoder'] = audio_dec_path
+            print("   ✅ Audio decoder (TTS) exported")
+        else:
+            print("   ⚠️ Audio decoder not available")
+    except Exception as e:
+        print(f"   ⚠️ Audio decoder failed: {e}")
+
+    # 4c. Export Waveform Decoder (Direct audio output - no vocoder needed)
+    print("\n4️⃣c Exporting waveform decoder (Speech-to-Speech)...")
+    try:
+        if hasattr(model, 'waveform_decoder') and model.waveform_decoder is not None:
+            waveform_dec_path = os.path.join(onnx_dir, "waveform_decoder.onnx")
+            with torch.no_grad():
+                torch.onnx.export(
+                    model.waveform_decoder,
+                    torch.randn(1, 64, config.hidden_size, device=device),  # features
+                    waveform_dec_path,
+                    input_names=["audio_features"],
+                    output_names=["waveform"],
+                    dynamic_axes={
+                        "audio_features": {0: "batch", 1: "seq_len"},
+                        "waveform": {0: "batch", 1: "audio_len"}
+                    },
+                    opset_version=17
+                )
+            export_results['waveform_decoder'] = waveform_dec_path
+            print("   ✅ Waveform decoder (Speech-to-Speech) exported")
+        else:
+            print("   ⚠️ Waveform decoder not available")
+    except Exception as e:
+        print(f"   ⚠️ Waveform decoder failed: {e}")
+
+    # 4d. Export Audio Projector (Audio features to LLM space)
+    print("\n4️⃣d Exporting audio projector...")
+    try:
+        if hasattr(model, 'audio_projector') and model.audio_projector is not None:
+            audio_proj_path = os.path.join(onnx_dir, "audio_projector.onnx")
+            with torch.no_grad():
+                torch.onnx.export(
+                    model.audio_projector,
+                    torch.randn(1, 64, config.hidden_size, device=device),  # audio_embeds
+                    audio_proj_path,
+                    input_names=["audio_embeds"],
+                    output_names=["projected_audio"],
+                    dynamic_axes={
+                        "audio_embeds": {0: "batch", 1: "seq_len"},
+                        "projected_audio": {0: "batch", 1: "seq_len"}
+                    },
+                    opset_version=17
+                )
+            export_results['audio_projector'] = audio_proj_path
+            print("   ✅ Audio projector exported")
+        else:
+            print("   ⚠️ Audio projector not available")
+    except Exception as e:
+        print(f"   ⚠️ Audio projector failed: {e}")
 
     # 5. Export Vision Projector
     print("\n5️⃣ Exporting vision projector...")
@@ -338,6 +439,19 @@ def export_to_onnx(
                 "sample_rate": getattr(config, 'audio_sample_rate', 16000),
                 "use_raw_waveform": getattr(config, 'use_raw_waveform', True),
                 "use_mas": getattr(config, 'use_mas', True),
+                "n_mels": 80,
+                "max_audio_length": 3000,
+            },
+            "audio_decoder": {
+                "type": "FastSpeech2/VITS-style",
+                "features": ["variance_adaptor", "MAS", "zero_shot_speaker_cloning", "in_context_prompting"],
+                "output": "mel_spectrogram",
+            },
+            "waveform_decoder": {
+                "type": "BigVGAN-style",
+                "features": ["snake_activation", "multi_receptive_field_fusion", "weight_normalization"],
+                "upsample_factor": 256,
+                "output": "raw_waveform_16kHz",
             },
             "generation": {
                 "image_base_size": getattr(config, 'image_base_size', 256),
@@ -350,6 +464,8 @@ def export_to_onnx(
             "image_understanding": 'vision_encoder' in export_results,
             "video_understanding": 'video_encoder' in export_results,
             "speech_to_text": 'audio_encoder' in export_results,
+            "text_to_speech": 'audio_decoder' in export_results,
+            "speech_to_speech": 'waveform_decoder' in export_results,
             "image_generation": 'image_diffusion_unet' in export_results,
             "video_generation": 'video_diffusion_unet' in export_results,
         },
