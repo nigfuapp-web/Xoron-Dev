@@ -3,11 +3,12 @@ import random
 
 def run_training():
     # Define the flags and their associated max values
+    # Maps modality flag to (max_flag_name, max_value)
     flag_configs = {
-        "--text": 3300,
-        "--image": 500,
-        "--video": 1000,
-        "--voice": 200
+        "--text": ("--max-text", 3300),
+        "--image": ("--max-image", 500),
+        "--video": ("--max-video", 1000),
+        "--voice": ("--max-voice", 200)
     }
 
     # Pick 2 unique flags randomly
@@ -17,9 +18,11 @@ def run_training():
     # Base command: python build.py --hf
     cmd = ["python", "build.py", "--hf"]
     
+    # Add each modality flag with its per-modality max
     for flag in selected_flags:
-        max_val = flag_configs[flag]
-        cmd.extend([flag, "--max", str(max_val)])
+        max_flag, max_val = flag_configs[flag]
+        cmd.append(flag)
+        cmd.extend([max_flag, str(max_val)])
 
     print(f"🚀 Launching training with: {' '.join(cmd)}")
     

@@ -1597,10 +1597,14 @@ Modality-specific training (can combine multiple flags):
   python build.py --text --image --video  # Train on text + image + video
   python build.py --text --image --video --voice  # Same as no flags (all)
   
-  # With max samples per epoch override:
+  # With max samples per epoch override (global):
   python build.py --image --max 500  # Train image with 500 samples/epoch
   python build.py --text --max 3300  # Train text with 3300 samples/epoch
-  python build.py --text --image --max 1000  # Train text+image with 1000 samples/epoch
+  
+  # Per-modality max samples (for combined training):
+  python build.py --text --max-text 3300 --image --max-image 500
+  python build.py --text --max-text 3300 --video --max-video 1000
+  python build.py --hf --text --max-text 3300 --image --max-image 500 --video --max-video 1000
 
 HuggingFace model training:
   python build.py --hf --text        # Load from HF and train on text
@@ -1663,7 +1667,17 @@ Export options:
     parser.add_argument('--lr', type=float, default=None,
                        help='Override learning rate')
     parser.add_argument('--max', type=int, default=None,
-                       help='Override max samples per epoch (max_per_epoch)')
+                       help='Override max samples per epoch (global, used if per-modality not set)')
+    
+    # Per-modality max samples (for combined training with different limits)
+    parser.add_argument('--max-text', type=int, default=None,
+                       help='Max samples per epoch for text modality')
+    parser.add_argument('--max-image', type=int, default=None,
+                       help='Max samples per epoch for image modality')
+    parser.add_argument('--max-video', type=int, default=None,
+                       help='Max samples per epoch for video modality')
+    parser.add_argument('--max-voice', type=int, default=None,
+                       help='Max samples per epoch for voice/audio modality')
     
     # Export options
     parser.add_argument('--onnx', action='store_true',
@@ -1692,23 +1706,45 @@ def run_cli_mode(args):
         training_config.batch_size = args.batch_size
     if args.lr:
         training_config.learning_rate = args.lr
-    if args.max:
-        training_config.max_per_epoch = args.max
-        print(f"📊 Max per epoch overridden: {args.max}")
     
     # Determine the effective mode(s) from shorthand flags or --mode argument
     # Supports combining multiple flags: --text --image --video
     active_modes = []
+    modality_max_values = {}  # Store per-modality max values
     
-    # Collect all active mode flags
+    # Collect all active mode flags and their max values
     if args.text:
         active_modes.append('text')
+        if args.max_text:
+            modality_max_values['text'] = args.max_text
     if args.image:
         active_modes.append('image')
+        if args.max_image:
+            modality_max_values['image'] = args.max_image
     if args.video:
         active_modes.append('video')
+        if args.max_video:
+            modality_max_values['video'] = args.max_video
     if args.voice:
         active_modes.append('audio')  # --voice maps to 'audio' mode
+        if args.max_voice:
+            modality_max_values['audio'] = args.max_voice
+    
+    # Calculate total max_per_epoch from per-modality values or use global --max
+    if modality_max_values:
+        # Sum up all per-modality max values for total max_per_epoch
+        total_max = sum(modality_max_values.values())
+        training_config.max_per_epoch = total_max
+        # Store per-modality limits for dataset filtering
+        training_config.modality_max_values = modality_max_values
+        print(f"📊 Per-modality max samples:")
+        for mod, val in modality_max_values.items():
+            print(f"   {mod}: {val}")
+        print(f"   Total max_per_epoch: {total_max}")
+    elif args.max:
+        # Use global --max if no per-modality values
+        training_config.max_per_epoch = args.max
+        print(f"📊 Max per epoch overridden: {args.max}")
     
     # If no flags specified, use --mode argument or default to 'all'
     if not active_modes:
