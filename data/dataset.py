@@ -1141,7 +1141,12 @@ class TrueStreamingDataset(IterableDataset):
                 "sample_type": dtype,
             }
         
-        except Exception:
+        except Exception as e:
+            # Log the actual error so we can debug why samples fail
+            import traceback
+            print(f"   🔴 _process_raw_sample FAILED: {type(e).__name__}: {str(e)[:100]}", flush=True)
+            # Uncomment below for full traceback if needed:
+            # traceback.print_exc()
             return None
 
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
