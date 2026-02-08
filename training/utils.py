@@ -142,7 +142,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
     need_audio = active_modalities in ('all', 'audio')
 
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        """Collate function for multimodal batches."""
+        """Collate function for multimodal batches - NO ZERO TENSORS for training."""
         try:
             input_ids = torch.stack([b["input_ids"] for b in batch])
             attention_mask = torch.stack([b["attention_mask"] for b in batch])
@@ -150,154 +150,170 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             batch_size = len(batch)
             sample_types = [b.get("sample_type", "text") for b in batch]
             
-            # Handle pixel_values - use minimal tensor if not needed
-            if need_image:
+            # Identify which samples have REAL data (not None)
+            has_image = [b.get("pixel_values") is not None for b in batch]
+            has_video = [b.get("video_frames") is not None for b in batch]
+            has_audio = [b.get("audio_features") is not None for b in batch]
+            
+            # Handle pixel_values - only use real data
+            if need_image and any(has_image):
                 pixel_values_list = []
-                for b in batch:
-                    pv = b["pixel_values"]
-                    if pv is not None and isinstance(pv, torch.Tensor):
-                        if pv.dim() == 3:
-                            if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
-                                pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
-                            pixel_values_list.append(pv)
-                        else:
-                            pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
+                for i, b in enumerate(batch):
+                    pv = b.get("pixel_values")
+                    if pv is not None and isinstance(pv, torch.Tensor) and pv.dim() == 3:
+                        if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
+                            pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
+                        pixel_values_list.append(pv)
                     else:
-                        pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
+                        # Non-image sample - use first valid image as placeholder (maintains batch structure)
+                        # This won't affect training since loss is masked by sample_type
+                        for j, b2 in enumerate(batch):
+                            pv2 = b2.get("pixel_values")
+                            if pv2 is not None and isinstance(pv2, torch.Tensor) and pv2.dim() == 3:
+                                if pv2.shape[1] != vision_size or pv2.shape[2] != vision_size:
+                                    pv2 = F.interpolate(pv2.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
+                                pixel_values_list.append(pv2.clone())
+                                break
+                        else:
+                            # No valid images in batch at all - shouldn't happen but handle gracefully
+                            pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
                 pixel_values = torch.stack(pixel_values_list)
             else:
-                # Minimal 1x1 tensor to save memory
+                # No image modality active or no images in batch
                 pixel_values = torch.zeros(batch_size, 3, 1, 1)
 
-            # Handle video_frames - use minimal tensor if not needed
-            if need_video:
+            # Handle video_frames - only use real data
+            if need_video and any(has_video):
                 video_frames_list = []
+                first_valid_video = None
                 for b in batch:
-                    vf = b["video_frames"]
+                    vf = b.get("video_frames")
                     if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
-                        # Ensure no inf/nan values that cause training instability
                         vf = torch.nan_to_num(vf, nan=0.0, posinf=10.0, neginf=-10.0)
                         vf = torch.clamp(vf, min=-10.0, max=10.0)
+                        if first_valid_video is None:
+                            first_valid_video = vf
                         video_frames_list.append(vf)
                     else:
-                        video_frames_list.append(torch.zeros(video_frames, 3, video_size, video_size))
+                        video_frames_list.append(None)  # Mark for later
+                
+                # Replace None with first valid video (maintains batch structure)
+                for i, vf in enumerate(video_frames_list):
+                    if vf is None:
+                        if first_valid_video is not None:
+                            video_frames_list[i] = first_valid_video.clone()
+                        else:
+                            video_frames_list[i] = torch.zeros(video_frames, 3, video_size, video_size)
+                
                 video_frames_tensor = torch.stack(video_frames_list)
             else:
-                # Minimal tensor to save memory (~25MB savings per batch)
+                # No video modality active or no videos in batch
                 video_frames_tensor = torch.zeros(batch_size, 1, 3, 1, 1)
 
-            # Handle audio_features - use minimal tensor if not needed
-            if need_audio:
+            # Handle audio_features - only use REAL data, no zeros
+            if need_audio and any(has_audio):
                 audio_features_list = []
-                speaker_ref_list = []  # For voice cloning
-                max_audio_len = 1000  # For mel spectrograms
-                max_waveform_samples = 160000  # 10 seconds at 16kHz for raw waveform
-                max_ref_samples = 112000  # 7 seconds at 16kHz for speaker reference
+                speaker_ref_list = []
+                max_audio_len = 1000
+                max_waveform_samples = 160000
+                max_ref_samples = 112000
                 target_mel_bins = 80
-                ref_mel_frames = 437  # ~7 seconds at 16kHz with hop_length=256 (7 * 16000 / 256)
+                ref_mel_frames = 437
                 
-                # Detect if we're using raw waveform (1D with large T) or mel spectrogram (2D)
-                # Skip minimal placeholders (size 1) when detecting
-                first_valid = None
+                # Find first valid audio to determine mode and use as reference
+                first_valid_audio = None
+                first_valid_ref = None
                 for b in batch:
                     af = b.get("audio_features")
+                    sr = b.get("speaker_ref_audio")
                     if af is not None and isinstance(af, torch.Tensor) and af.numel() > 100:
-                        first_valid = af
-                        break
+                        if first_valid_audio is None:
+                            first_valid_audio = af
+                    if sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100:
+                        if first_valid_ref is None:
+                            first_valid_ref = sr
                 
-                # Determine mode: raw waveform if 1D with many samples, else mel
-                use_raw_waveform = first_valid is not None and first_valid.dim() == 1 and first_valid.shape[0] > 1000
+                use_raw_waveform = first_valid_audio is not None and first_valid_audio.dim() == 1 and first_valid_audio.shape[0] > 1000
                 
                 for b in batch:
                     af = b.get("audio_features")
-                    sr = b.get("speaker_ref_audio")  # Speaker reference for voice cloning
+                    sr = b.get("speaker_ref_audio")
                     
-                    # Check if this is a valid audio tensor (not minimal placeholder)
                     is_valid_audio = af is not None and isinstance(af, torch.Tensor) and af.numel() > 100
                     is_valid_ref = sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100
                     
+                    # Audio features
                     if is_valid_audio:
                         if use_raw_waveform and af.dim() == 1:
-                            # Raw waveform mode: 1D tensor [T]
                             if af.shape[0] > max_waveform_samples:
                                 af = af[:max_waveform_samples]
-                            elif af.shape[0] < max_waveform_samples:
-                                pad = torch.zeros(max_waveform_samples - af.shape[0])
-                                af = torch.cat([af, pad], dim=0)
+                            # Don't pad - use actual length, model handles variable length
                             audio_features_list.append(af)
                         elif not use_raw_waveform and af.dim() == 2:
-                            # Mel spectrogram mode: 2D tensor [mel_bins, time]
                             if af.shape[0] != target_mel_bins:
-                                af = F.interpolate(
-                                    af.unsqueeze(0).unsqueeze(0),
-                                    size=(target_mel_bins, af.shape[1]),
-                                    mode='bilinear',
-                                    align_corners=False
-                                ).squeeze(0).squeeze(0)
-                            
-                            if af.shape[1] != max_audio_len:
-                                if af.shape[1] > max_audio_len:
-                                    af = af[:, :max_audio_len]
-                                else:
-                                    pad = torch.zeros(target_mel_bins, max_audio_len - af.shape[1])
-                                    af = torch.cat([af, pad], dim=1)
+                                af = F.interpolate(af.unsqueeze(0).unsqueeze(0), size=(target_mel_bins, af.shape[1]), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                            if af.shape[1] > max_audio_len:
+                                af = af[:, :max_audio_len]
                             audio_features_list.append(af)
                         else:
-                            # Mismatched dimension - use zeros
-                            if use_raw_waveform:
-                                audio_features_list.append(torch.zeros(max_waveform_samples))
-                            else:
-                                audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                            # Use first valid audio as placeholder (not zeros)
+                            audio_features_list.append(first_valid_audio.clone() if first_valid_audio is not None else None)
                     else:
-                        # Minimal placeholder or no audio - use zeros matching batch mode
-                        if use_raw_waveform:
-                            audio_features_list.append(torch.zeros(max_waveform_samples))
-                        else:
-                            audio_features_list.append(torch.zeros(target_mel_bins, max_audio_len))
+                        # Non-audio sample - use first valid audio as placeholder
+                        audio_features_list.append(first_valid_audio.clone() if first_valid_audio is not None else None)
                     
-                    # Handle speaker reference audio for voice cloning
+                    # Speaker reference
                     if is_valid_ref:
                         if use_raw_waveform and sr.dim() == 1:
-                            # Raw waveform reference
                             if sr.shape[0] > max_ref_samples:
                                 sr = sr[:max_ref_samples]
-                            elif sr.shape[0] < max_ref_samples:
-                                pad = torch.zeros(max_ref_samples - sr.shape[0])
-                                sr = torch.cat([sr, pad], dim=0)
                             speaker_ref_list.append(sr)
                         elif not use_raw_waveform and sr.dim() == 2:
-                            # Mel spectrogram reference
                             if sr.shape[0] != target_mel_bins:
-                                sr = F.interpolate(
-                                    sr.unsqueeze(0).unsqueeze(0),
-                                    size=(target_mel_bins, sr.shape[1]),
-                                    mode='bilinear',
-                                    align_corners=False
-                                ).squeeze(0).squeeze(0)
-                            if sr.shape[1] != ref_mel_frames:
-                                if sr.shape[1] > ref_mel_frames:
-                                    sr = sr[:, :ref_mel_frames]
-                                else:
-                                    pad = torch.zeros(target_mel_bins, ref_mel_frames - sr.shape[1])
-                                    sr = torch.cat([sr, pad], dim=1)
+                                sr = F.interpolate(sr.unsqueeze(0).unsqueeze(0), size=(target_mel_bins, sr.shape[1]), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                            if sr.shape[1] > ref_mel_frames:
+                                sr = sr[:, :ref_mel_frames]
                             speaker_ref_list.append(sr)
                         else:
-                            # Mismatched - use zeros
-                            if use_raw_waveform:
-                                speaker_ref_list.append(torch.zeros(max_ref_samples))
-                            else:
-                                speaker_ref_list.append(torch.zeros(target_mel_bins, ref_mel_frames))
+                            speaker_ref_list.append(first_valid_ref.clone() if first_valid_ref is not None else None)
                     else:
-                        # No speaker reference - use zeros
-                        if use_raw_waveform:
-                            speaker_ref_list.append(torch.zeros(max_ref_samples))
-                        else:
-                            speaker_ref_list.append(torch.zeros(target_mel_bins, ref_mel_frames))
+                        speaker_ref_list.append(first_valid_ref.clone() if first_valid_ref is not None else None)
                 
-                audio_features = torch.stack(audio_features_list)
-                speaker_ref_audio = torch.stack(speaker_ref_list)
+                # Pad all to same length for stacking (use max length in batch, not zeros)
+                if audio_features_list and all(af is not None for af in audio_features_list):
+                    max_len = max(af.shape[-1] for af in audio_features_list)
+                    padded_audio = []
+                    for af in audio_features_list:
+                        if af.shape[-1] < max_len:
+                            if af.dim() == 1:
+                                # Repeat last value instead of zeros
+                                pad_val = af[-1:].expand(max_len - af.shape[0])
+                                af = torch.cat([af, pad_val], dim=0)
+                            else:
+                                pad_val = af[:, -1:].expand(-1, max_len - af.shape[1])
+                                af = torch.cat([af, pad_val], dim=1)
+                        padded_audio.append(af)
+                    audio_features = torch.stack(padded_audio)
+                else:
+                    audio_features = torch.zeros(batch_size, 1)
+                
+                if speaker_ref_list and all(sr is not None for sr in speaker_ref_list):
+                    max_len = max(sr.shape[-1] for sr in speaker_ref_list)
+                    padded_ref = []
+                    for sr in speaker_ref_list:
+                        if sr.shape[-1] < max_len:
+                            if sr.dim() == 1:
+                                pad_val = sr[-1:].expand(max_len - sr.shape[0])
+                                sr = torch.cat([sr, pad_val], dim=0)
+                            else:
+                                pad_val = sr[:, -1:].expand(-1, max_len - sr.shape[1])
+                                sr = torch.cat([sr, pad_val], dim=1)
+                        padded_ref.append(sr)
+                    speaker_ref_audio = torch.stack(padded_ref)
+                else:
+                    speaker_ref_audio = torch.zeros(batch_size, 1)
             else:
-                # Minimal tensor to save memory when audio not needed
+                # No audio modality active or no audio in batch
                 audio_features = torch.zeros(batch_size, 1)
                 speaker_ref_audio = torch.zeros(batch_size, 1)
 
@@ -308,27 +324,21 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 "pixel_values": pixel_values,
                 "video_frames": video_frames_tensor,
                 "audio_features": audio_features,
-                "speaker_ref_audio": speaker_ref_audio,  # For voice cloning
+                "speaker_ref_audio": speaker_ref_audio,
                 "sample_type": sample_types,
             }
-        except Exception:
+        except Exception as e:
+            # Log error and return text-only batch
+            print(f"⚠️ Collate error: {e} - returning text-only batch", flush=True)
             batch_size = len(batch)
-            # Fallback with appropriate tensor sizes based on active modalities
-            vs = vision_size if need_image else 1
-            vf_count = video_frames if need_video else 1
-            vf_size = video_size if need_video else 1
-            af_bins = 80 if need_audio else 1
-            af_len = 1000 if need_audio else 1
-            ref_len = 437 if need_audio else 1  # ~7 seconds of mel frames for voice cloning
-            
             return {
                 "input_ids": torch.stack([b["input_ids"] for b in batch]),
                 "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
                 "labels": torch.stack([b["labels"] for b in batch]),
-                "pixel_values": torch.zeros(batch_size, 3, vs, vs),
-                "video_frames": torch.zeros(batch_size, vf_count, 3, vf_size, vf_size),
-                "audio_features": torch.zeros(batch_size, af_bins, af_len),
-                "speaker_ref_audio": torch.zeros(batch_size, af_bins, ref_len),  # For voice cloning
+                "pixel_values": torch.zeros(batch_size, 3, 1, 1),
+                "video_frames": torch.zeros(batch_size, 1, 3, 1, 1),
+                "audio_features": torch.zeros(batch_size, 1),
+                "speaker_ref_audio": torch.zeros(batch_size, 1),
                 "sample_type": ["text"] * batch_size,
             }
 

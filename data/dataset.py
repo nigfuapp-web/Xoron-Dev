@@ -1009,34 +1009,34 @@ class TrueStreamingDataset(IterableDataset):
                         labels[i] = -100  # Mask non-assistant tokens
             
             # Process media on-demand
-            # SKIP samples with failed media - don't train on zero tensors
+            # NEVER create zero tensors - only train on REAL data or SKIP
             is_image_dtype = dtype in ['image_caption', 'image_vqa', 'image_generation', 'image_editing', 'ui_to_code']
             is_video_dtype = dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']
             is_audio_sample = dtype in ['voice_asr', 'voice_tts']
             
-            # Process image
-            pixel_values = self._process_image(raw_image_data) if raw_image_data else None
+            # === IMAGE PROCESSING ===
+            pixel_values = None
+            if raw_image_data:
+                pixel_values = self._process_image(raw_image_data)
             
-            # Skip image samples with no valid image - only train on real data
+            # Image samples MUST have valid image data
             if is_image_dtype:
-                if pixel_values is None or pixel_values.abs().mean() < 1e-6:
-                    return None  # Skip - don't train on zeros
+                if pixel_values is None:
+                    return None  # SKIP - no zeros
+                if pixel_values.abs().mean() < 1e-6:
+                    return None  # SKIP - basically zeros
             
-            # Use minimal placeholder for non-image samples
-            if pixel_values is None:
-                pixel_values = torch.zeros(3, 1, 1)  # Minimal, collate handles it
-            
-            # Process video
+            # === VIDEO PROCESSING ===
             video_frames = None
-            if raw_video_data and is_video_dtype:
-                video_frames = self._process_video_frames(raw_video_data, sample_metadata)
-                if dtype == 'image_to_video' and video_frames is not None and raw_image_data is None:
-                    pixel_values = video_frames[0]
-            
-            # For image_to_video: if no video data but we have an image, create video frames from image
-            if video_frames is None and dtype == 'image_to_video' and raw_image_data is not None:
-                img_tensor = self._process_image(raw_image_data)
-                if img_tensor is not None:
+            if is_video_dtype:
+                if raw_video_data:
+                    video_frames = self._process_video_frames(raw_video_data, sample_metadata)
+                    if dtype == 'image_to_video' and video_frames is not None and pixel_values is None:
+                        pixel_values = video_frames[0].clone()
+                
+                # For image_to_video: can create frames from source image
+                if video_frames is None and dtype == 'image_to_video' and pixel_values is not None:
+                    img_tensor = pixel_values.clone()
                     if img_tensor.shape[1] != self.video_size or img_tensor.shape[2] != self.video_size:
                         img_tensor = F.interpolate(
                             img_tensor.unsqueeze(0), 
@@ -1045,89 +1045,48 @@ class TrueStreamingDataset(IterableDataset):
                             align_corners=False
                         ).squeeze(0)
                     video_frames = img_tensor.unsqueeze(0).expand(self.max_video_frames, -1, -1, -1).clone()
-            
-            # Skip video samples with no valid frames - only train on real data
-            if is_video_dtype:
-                if video_frames is None or video_frames.abs().mean() < 1e-6:
-                    return None  # Skip - don't train on zeros
-            
-            # Use minimal placeholder for non-video samples
-            if video_frames is None:
-                video_frames = torch.zeros(1, 3, 1, 1)  # Minimal, collate handles it
-            
-            # Process audio
-            audio_features = None
-            speaker_ref_audio = None  # For voice cloning
-            
-            if is_audio_sample and raw_audio_data:
-                audio_features = self._process_audio(raw_audio_data, sample_metadata)
                 
-                # For TTS with voice cloning: use the same audio as speaker reference
-                if dtype == 'voice_tts' and audio_features is not None:
-                    use_self_as_ref = sample_metadata.get('use_self_as_reference', True)
-                    if use_self_as_ref:
-                        speaker_ref_audio = audio_features.clone()
+                # Video samples MUST have valid video frames
+                if video_frames is None:
+                    return None  # SKIP - no zeros
+                if video_frames.abs().mean() < 1e-6:
+                    return None  # SKIP - basically zeros
             
-            # Skip audio samples with no valid audio - only train on real data
+            # === AUDIO PROCESSING ===
+            audio_features = None
+            speaker_ref_audio = None
+            
             if is_audio_sample:
-                if audio_features is None or audio_features.abs().mean() < 1e-6:
-                    return None  # Skip - don't train on zeros
-            
-            # Use minimal placeholder for non-audio samples
-            if audio_features is None:
-                audio_features = torch.zeros(1)  # Minimal, collate handles it
-            else:
-                # Pad/truncate actual audio data
+                if raw_audio_data:
+                    audio_features = self._process_audio(raw_audio_data, sample_metadata)
+                
+                # Audio samples MUST have valid audio data
+                if audio_features is None:
+                    return None  # SKIP - no zeros
+                if audio_features.abs().mean() < 1e-6:
+                    return None  # SKIP - basically zeros
+                
+                # Truncate if too long (but never pad with zeros)
                 if self.use_raw_waveform:
-                    max_waveform_samples = self.audio_sample_rate * 10  # 10 seconds max
-                    if audio_features.dim() == 1:
-                        if audio_features.shape[0] > max_waveform_samples:
-                            audio_features = audio_features[:max_waveform_samples]
-                        elif audio_features.shape[0] < max_waveform_samples:
-                            pad = torch.zeros(max_waveform_samples - audio_features.shape[0])
-                            audio_features = torch.cat([audio_features, pad], dim=0)
+                    max_waveform_samples = self.audio_sample_rate * 10
+                    if audio_features.dim() == 1 and audio_features.shape[0] > max_waveform_samples:
+                        audio_features = audio_features[:max_waveform_samples]
                 else:
-                    if audio_features.dim() == 2:
-                        if audio_features.shape[1] > self.audio_max_length:
-                            audio_features = audio_features[:, :self.audio_max_length]
-                        elif audio_features.shape[1] < self.audio_max_length:
-                            pad = torch.zeros(audio_features.shape[0], self.audio_max_length - audio_features.shape[1])
-                            audio_features = torch.cat([audio_features, pad], dim=1)
-            
-            # Process speaker reference audio for voice cloning
-            # Use 7 seconds as reference to capture voice characteristics (pitch, tone, emotion, speaking style)
-            # 7 seconds provides enough context for the model to learn speaker identity
-            speaker_ref_seconds = 7
-            if speaker_ref_audio is not None:
-                if self.use_raw_waveform:
-                    # Use first 7 seconds as speaker reference
-                    ref_samples = self.audio_sample_rate * speaker_ref_seconds
-                    if speaker_ref_audio.dim() == 1:
-                        if speaker_ref_audio.shape[0] > ref_samples:
-                            speaker_ref_audio = speaker_ref_audio[:ref_samples]
-                        elif speaker_ref_audio.shape[0] < ref_samples:
-                            pad = torch.zeros(ref_samples - speaker_ref_audio.shape[0])
-                            speaker_ref_audio = torch.cat([speaker_ref_audio, pad], dim=0)
-                else:
-                    # For mel spectrogram, use first ~7 seconds worth of frames
-                    ref_frames = int(speaker_ref_seconds * self.audio_sample_rate / 256)  # hop_length=256
-                    if speaker_ref_audio.dim() == 2:
-                        if speaker_ref_audio.shape[1] > ref_frames:
-                            speaker_ref_audio = speaker_ref_audio[:, :ref_frames]
-                        elif speaker_ref_audio.shape[1] < ref_frames:
-                            pad = torch.zeros(speaker_ref_audio.shape[0], ref_frames - speaker_ref_audio.shape[1])
-                            speaker_ref_audio = torch.cat([speaker_ref_audio, pad], dim=1)
-            else:
-                # No speaker reference - use zeros (model will learn generic voice)
-                if is_audio_sample and dtype == 'voice_tts':
+                    if audio_features.dim() == 2 and audio_features.shape[1] > self.audio_max_length:
+                        audio_features = audio_features[:, :self.audio_max_length]
+                
+                # For TTS: speaker reference from the same audio
+                if dtype == 'voice_tts':
+                    speaker_ref_seconds = 7
                     if self.use_raw_waveform:
-                        speaker_ref_audio = torch.zeros(self.audio_sample_rate * speaker_ref_seconds)
+                        ref_samples = self.audio_sample_rate * speaker_ref_seconds
+                        if audio_features.dim() == 1:
+                            # Use first 7 seconds (or less if shorter)
+                            speaker_ref_audio = audio_features[:min(ref_samples, audio_features.shape[0])].clone()
                     else:
                         ref_frames = int(speaker_ref_seconds * self.audio_sample_rate / 256)
-                        speaker_ref_audio = torch.zeros(self.audio_n_mels, ref_frames)
-                else:
-                    # Minimal placeholder for non-TTS samples
-                    speaker_ref_audio = torch.zeros(1)
+                        if audio_features.dim() == 2:
+                            speaker_ref_audio = audio_features[:, :min(ref_frames, audio_features.shape[1])].clone()
             
             # Validate: ensure we have at least some valid labels to train on
             # Samples with ALL -100 labels cause NaN loss and waste compute
