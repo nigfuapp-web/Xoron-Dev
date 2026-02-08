@@ -713,20 +713,28 @@ def load_model_from_huggingface(hf_model_id, training_config):
             model_state_dict = model.state_dict()
             model_keys_set = set(model_state_dict.keys())
             
+            # Debug: show sample model keys for video_encoder
+            video_encoder_model_keys = [k for k in model_keys_set if k.startswith('video_encoder.')]
+            if video_encoder_model_keys:
+                print(f"      Model has {len(video_encoder_model_keys)} video_encoder keys")
+                print(f"      Sample: {video_encoder_model_keys[0]}")
+            
             for comp_name, comp_file in component_files.items():
                 prefix = component_prefix_map.get(comp_name, f'{comp_name}.')
                 print(f"      Loading {comp_name}...")
                 
                 try:
                     with safe_open(comp_file, framework="pt", device="cpu") as f:
+                        loaded_count = 0
                         for key in f.keys():
                             tensor = f.get_tensor(key)
                             
                             # Try multiple key formats to find a match in model
+                            # Order matters - try most specific first
                             possible_keys = [
-                                key,  # As-is (for keys that already have correct prefix)
-                                f"{prefix}{key}" if prefix else key,  # With component prefix
-                                f"{comp_name}.{key}",  # With component name as prefix
+                                key,  # As-is (for keys that already have correct prefix like projector.layers.0)
+                                f"{comp_name}.{key}",  # With component name as prefix (video_encoder.encoder_blocks.0)
+                                f"{prefix}{key}" if prefix else key,  # With component prefix from map
                             ]
                             
                             # Find the first key that exists in the model
@@ -738,9 +746,13 @@ def load_model_from_huggingface(hf_model_id, training_config):
                             
                             if matched_key:
                                 checkpoint_state_dict[matched_key] = tensor
+                                loaded_count += 1
                             else:
-                                # If no match found, use the key with prefix (will be reported as skipped)
-                                checkpoint_state_dict[f"{prefix}{key}" if prefix else key] = tensor
+                                # If no match found, use the key with component name prefix
+                                # This will be reported as skipped later
+                                checkpoint_state_dict[f"{comp_name}.{key}"] = tensor
+                        
+                        print(f"         Matched {loaded_count}/{len(list(f.keys()))} keys")
                                 
                 except Exception as e:
                     print(f"      ⚠️ Error loading {comp_name}: {e}")
