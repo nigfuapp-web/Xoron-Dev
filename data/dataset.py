@@ -1301,6 +1301,9 @@ class TrueStreamingDataset(IterableDataset):
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
                     if processed is not None:
+                        # SUCCESS - reset failure counter
+                        source["_consecutive_fails"] = 0
+                        
                         # Yield the SAME processed sample multiple times
                         # Sample is loaded from stream once, processed once, yielded sample_repeat times
                         # This is memory efficient - same tensors are reused
@@ -1346,13 +1349,37 @@ class TrueStreamingDataset(IterableDataset):
                             # Auto-save state if path is set
                             if self._state_save_path:
                                 self.save_streaming_state(self._state_save_path)
+                    else:
+                        # FAILURE - _process_raw_sample returned None
+                        # Track consecutive failures to detect stuck sources
+                        source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
+                        
+                        # Log every 50 failures so we can see what's happening
+                        if source["_consecutive_fails"] % 50 == 1:
+                            print(f"   ⚠️ {source['name']}: sample processing failed ({source['_consecutive_fails']} consecutive)", flush=True)
+                        
+                        # After 200 consecutive failures, this source is broken - mark exhausted
+                        if source["_consecutive_fails"] >= 200:
+                            print(f"   ❌ {source['name']}: 200 consecutive failures, marking EXHAUSTED", flush=True)
+                            source["exhausted"] = True
+                            sources_to_remove.append(source_idx)
                 
                 except StopIteration:
                     source["exhausted"] = True
                     sources_to_remove.append(source_idx)
                 except Exception as e:
-                    # Skip problematic samples but log for debugging
-                    logger.debug(f"Sample processing skipped in {source.get('name', 'unknown')}: {e}")
+                    # FAILURE - exception during processing
+                    source["_consecutive_fails"] = source.get("_consecutive_fails", 0) + 1
+                    
+                    # Log first 3 errors and then every 50th so we can actually SEE them
+                    if source["_consecutive_fails"] <= 3 or source["_consecutive_fails"] % 50 == 0:
+                        print(f"   ⚠️ {source['name']}: {type(e).__name__}: {str(e)[:80]} (fail #{source['_consecutive_fails']})", flush=True)
+                    
+                    # After 200 consecutive failures, mark exhausted
+                    if source["_consecutive_fails"] >= 200:
+                        print(f"   ❌ {source['name']}: 200 consecutive errors, marking EXHAUSTED", flush=True)
+                        source["exhausted"] = True
+                        sources_to_remove.append(source_idx)
             
             # Remove exhausted sources
             for idx in sorted(sources_to_remove, reverse=True):
