@@ -192,9 +192,9 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 speaker_ref_list = []  # For voice cloning
                 max_audio_len = 1000  # For mel spectrograms
                 max_waveform_samples = 160000  # 10 seconds at 16kHz for raw waveform
-                max_ref_samples = 48000  # 3 seconds at 16kHz for speaker reference
+                max_ref_samples = 112000  # 7 seconds at 16kHz for speaker reference
                 target_mel_bins = 80
-                ref_mel_frames = 187  # ~3 seconds at 16kHz with hop_length=256
+                ref_mel_frames = 437  # ~7 seconds at 16kHz with hop_length=256 (7 * 16000 / 256)
                 
                 # Detect if we're using raw waveform (1D with large T) or mel spectrogram (2D)
                 # Skip minimal placeholders (size 1) when detecting
@@ -319,7 +319,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             vf_size = video_size if need_video else 1
             af_bins = 80 if need_audio else 1
             af_len = 1000 if need_audio else 1
-            ref_len = 187 if need_audio else 1  # ~3 seconds of mel frames
+            ref_len = 437 if need_audio else 1  # ~7 seconds of mel frames for voice cloning
             
             return {
                 "input_ids": torch.stack([b["input_ids"] for b in batch]),

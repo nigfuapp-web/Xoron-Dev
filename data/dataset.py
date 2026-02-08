@@ -1089,11 +1089,13 @@ class TrueStreamingDataset(IterableDataset):
                             audio_features = torch.cat([audio_features, pad], dim=1)
             
             # Process speaker reference audio for voice cloning
-            # Use a shorter segment (3 seconds) as reference to learn speaker characteristics
+            # Use 7 seconds as reference to capture voice characteristics (pitch, tone, emotion, speaking style)
+            # 7 seconds provides enough context for the model to learn speaker identity
+            speaker_ref_seconds = 7
             if speaker_ref_audio is not None:
                 if self.use_raw_waveform:
-                    # Use first 3 seconds as speaker reference (enough to capture voice characteristics)
-                    ref_samples = self.audio_sample_rate * 3  # 3 seconds
+                    # Use first 7 seconds as speaker reference
+                    ref_samples = self.audio_sample_rate * speaker_ref_seconds
                     if speaker_ref_audio.dim() == 1:
                         if speaker_ref_audio.shape[0] > ref_samples:
                             speaker_ref_audio = speaker_ref_audio[:ref_samples]
@@ -1101,8 +1103,8 @@ class TrueStreamingDataset(IterableDataset):
                             pad = torch.zeros(ref_samples - speaker_ref_audio.shape[0])
                             speaker_ref_audio = torch.cat([speaker_ref_audio, pad], dim=0)
                 else:
-                    # For mel spectrogram, use first ~3 seconds worth of frames
-                    ref_frames = int(3 * self.audio_sample_rate / 256)  # hop_length=256
+                    # For mel spectrogram, use first ~7 seconds worth of frames
+                    ref_frames = int(speaker_ref_seconds * self.audio_sample_rate / 256)  # hop_length=256
                     if speaker_ref_audio.dim() == 2:
                         if speaker_ref_audio.shape[1] > ref_frames:
                             speaker_ref_audio = speaker_ref_audio[:, :ref_frames]
@@ -1113,9 +1115,9 @@ class TrueStreamingDataset(IterableDataset):
                 # No speaker reference - use zeros (model will learn generic voice)
                 if is_audio_sample and dtype == 'voice_tts':
                     if self.use_raw_waveform:
-                        speaker_ref_audio = torch.zeros(self.audio_sample_rate * 3)
+                        speaker_ref_audio = torch.zeros(self.audio_sample_rate * speaker_ref_seconds)
                     else:
-                        ref_frames = int(3 * self.audio_sample_rate / 256)
+                        ref_frames = int(speaker_ref_seconds * self.audio_sample_rate / 256)
                         speaker_ref_audio = torch.zeros(self.audio_n_mels, ref_frames)
                 else:
                     # Minimal placeholder for non-TTS samples
