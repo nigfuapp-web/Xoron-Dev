@@ -1015,8 +1015,16 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     # Get audio mode from config (SOTA: raw waveform vs legacy mel spectrogram)
     use_raw_waveform = getattr(xoron_config, 'use_raw_waveform', True)
     
+    # Check if dual/multi training mode is active
+    is_dual_training = getattr(training_config, 'is_dual_training', False)
+    modality_max_values = getattr(training_config, 'modality_max_values', {})
+    
+    if is_dual_training:
+        mode_names = list(modality_max_values.keys())
+        print(f"\n🔀 Using DUAL TRAINING mode: {' + '.join(mode_names)}")
+    
     # Create streaming dataset with per-dataset limits and sample repetition
-    print(f"   📁 Loading train datasets...")
+    print(f"\n📁 Loading train datasets...")
     train_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -1034,6 +1042,10 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         use_raw_waveform=use_raw_waveform,
     )
     
+    # Count train datasets
+    train_dataset_count = sum(len(configs) for configs in dataset_configs.values() if configs)
+    print(f"✅ {train_dataset_count} datasets initialized")
+    
     # Set auto-save path for streaming state (saved alongside checkpoints)
     streaming_state_path = os.path.join(training_config.output_dir, "streaming_state.json")
     train_dataset.set_state_save_path(streaming_state_path)
@@ -1043,7 +1055,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
     num_datasets = sum(len(configs) for configs in dataset_configs.values() if configs)
     eval_total = eval_samples_per_dataset * num_datasets
     
-    print(f"   📁 Loading eval datasets...")
+    print(f"\n📁 Loading eval datasets...")
     eval_dataset = TrueStreamingDataset(
         dataset_configs=dataset_configs,
         format_functions=format_functions,
@@ -1060,6 +1072,7 @@ def setup_training(model, tokenizer, xoron_config, training_config, dataset_conf
         resume_state_path=None,  # Don't resume eval dataset
         use_raw_waveform=use_raw_waveform,
     )
+    print(f"✅ {num_datasets} datasets initialized")
     
     # Set initial skip positions for eval dataset (held-out data)
     train_samples_per_dataset = training_config.max_per_dataset
@@ -1163,13 +1176,24 @@ def run_build_and_train(
     training_config.print_config()
     
     # Print dataset config summary
+    is_dual_training = getattr(training_config, 'is_dual_training', False)
+    modality_max_values = getattr(training_config, 'modality_max_values', {})
+    
     print("\n📊 Dataset Configuration:")
     total = 0
     for cat, datasets in dataset_configs.items():
         if datasets:
-            print(f"   {cat}: {len(datasets)} datasets")
+            # Show per-modality max if in dual training mode
+            max_info = ""
+            if is_dual_training and cat in modality_max_values:
+                max_info = f" (max: {modality_max_values[cat]})"
+            print(f"   {cat}: {len(datasets)} datasets{max_info}")
             total += len(datasets)
     print(f"   Total: {total} datasets")
+    
+    if is_dual_training:
+        print(f"   Mode: Dual Training ({' + '.join(modality_max_values.keys())})")
+        print(f"   Combined max_per_epoch: {training_config.max_per_epoch}")
 
     # Build or load model
     if checkpoint_path:
@@ -1334,13 +1358,24 @@ def run_hf_training(
     training_config.print_config()
     
     # Print dataset config summary
+    is_dual_training = getattr(training_config, 'is_dual_training', False)
+    modality_max_values = getattr(training_config, 'modality_max_values', {})
+    
     print("\n📊 Dataset Configuration:")
     total = 0
     for cat, datasets in dataset_configs.items():
         if datasets:
-            print(f"   {cat}: {len(datasets)} datasets")
+            # Show per-modality max if in dual training mode
+            max_info = ""
+            if is_dual_training and cat in modality_max_values:
+                max_info = f" (max: {modality_max_values[cat]})"
+            print(f"   {cat}: {len(datasets)} datasets{max_info}")
             total += len(datasets)
     print(f"   Total: {total} datasets")
+    
+    if is_dual_training:
+        print(f"   Mode: Dual Training ({' + '.join(modality_max_values.keys())})")
+        print(f"   Combined max_per_epoch: {training_config.max_per_epoch}")
     
     # Apply freezing
     if freeze_components or train_only_components:
@@ -1903,14 +1938,11 @@ def run_cli_mode(args):
         training_config.max_per_epoch = total_max
         # Store per-modality limits for dataset filtering
         training_config.modality_max_values = modality_max_values
-        print(f"📊 Per-modality max samples:")
-        for mod, val in modality_max_values.items():
-            print(f"   {mod}: {val}")
-        print(f"   Total max_per_epoch: {total_max}")
+        # Mark as dual/multi training mode
+        training_config.is_dual_training = len(modality_max_values) >= 2
     elif args.max:
         # Use global --max if no per-modality values
         training_config.max_per_epoch = args.max
-        print(f"📊 Max per epoch overridden: {args.max}")
     
     # If no flags specified, use --mode argument or default to 'all'
     if not active_modes:
