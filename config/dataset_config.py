@@ -500,6 +500,8 @@ def get_format_functions(formatter) -> Dict[str, Callable]:
         # Video preference/quality datasets - use video_generation formatter
         "video_preference": formatter.format_video_generation_sample,
         "video_likert": formatter.format_video_generation_sample,
+        # System admin tasks (apt, docker, ssh, databases, etc.)
+        "system_admin": formatter.format_passthrough_sample,
     }
 
 
