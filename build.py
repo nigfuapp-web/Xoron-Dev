@@ -1596,6 +1596,11 @@ Modality-specific training (can combine multiple flags):
   python build.py --image --video    # Train on image + video datasets
   python build.py --text --image --video  # Train on text + image + video
   python build.py --text --image --video --voice  # Same as no flags (all)
+  
+  # With max samples per epoch override:
+  python build.py --image --max 500  # Train image with 500 samples/epoch
+  python build.py --text --max 3300  # Train text with 3300 samples/epoch
+  python build.py --text --image --max 1000  # Train text+image with 1000 samples/epoch
 
 HuggingFace model training:
   python build.py --hf --text        # Load from HF and train on text
@@ -1657,6 +1662,8 @@ Export options:
                        help='Override batch size')
     parser.add_argument('--lr', type=float, default=None,
                        help='Override learning rate')
+    parser.add_argument('--max', type=int, default=None,
+                       help='Override max samples per epoch (max_per_epoch)')
     
     # Export options
     parser.add_argument('--onnx', action='store_true',
@@ -1685,6 +1692,9 @@ def run_cli_mode(args):
         training_config.batch_size = args.batch_size
     if args.lr:
         training_config.learning_rate = args.lr
+    if args.max:
+        training_config.max_per_epoch = args.max
+        print(f"📊 Max per epoch overridden: {args.max}")
     
     # Determine the effective mode(s) from shorthand flags or --mode argument
     # Supports combining multiple flags: --text --image --video
