@@ -71,6 +71,8 @@ class XoronTrainer:
         resume_from: str = None,
         tokenizer=None,
         eval_dataset=None,
+        hf_token: str = None,
+        hf_repo_id: str = None,
     ):
         self.model = model
         self.train_dataset = train_dataset
@@ -81,6 +83,8 @@ class XoronTrainer:
         self.xoron_config = xoron_config
         self.collate_fn = collate_fn
         self.tokenizer = tokenizer
+        self.hf_token = hf_token
+        self.hf_repo_id = hf_repo_id
 
         # Mixed precision setup (prefer BF16 if available)
         self.use_amp = config.fp16 or getattr(config, 'bf16', False)
@@ -789,6 +793,9 @@ class XoronTrainer:
 
         # Final save
         self._save_final_model()
+        
+        # Upload to HuggingFace if configured
+        self._upload_to_huggingface()
 
         total_time = time.time() - training_start_time
         print(f"\n{'='*60}")
@@ -1754,3 +1761,29 @@ class XoronTrainer:
             print(f"   💾 Streaming state saved")
         
         print(f"✅ Final model saved!")
+
+    def _upload_to_huggingface(self):
+        """Upload the final trained model to HuggingFace Hub, replacing existing weights."""
+        if not self.hf_token or not self.hf_repo_id:
+            print(f"⚠️ Skipping HuggingFace upload (no hf_token or hf_repo_id provided)")
+            return
+        
+        print(f"\n🚀 Uploading model to HuggingFace: {self.hf_repo_id}...")
+        
+        try:
+            from huggingface_hub import HfApi
+            
+            api = HfApi(token=self.hf_token)
+            
+            # Upload the entire final model directory
+            api.upload_folder(
+                folder_path=self.config.final_model_dir,
+                repo_id=self.hf_repo_id,
+                repo_type="model",
+                commit_message=f"Update model weights after training (epoch {self.config.num_epochs}, loss {self.best_loss:.4f})",
+            )
+            
+            print(f"✅ Model uploaded to https://huggingface.co/{self.hf_repo_id}")
+            
+        except Exception as e:
+            print(f"❌ Failed to upload to HuggingFace: {e}")
