@@ -126,7 +126,12 @@ class TrueStreamingDataset(IterableDataset):
             has_audio_feature = False
 
         # Audio dataset types that need decode=False
-        audio_dtypes = {'voice_asr', 'voice_tts'}
+        # Includes all voice/audio dataset categories
+        audio_dtypes = {
+            'voice_asr', 'voice_tts',
+            'voice_emotion', 'voice_singing', 'voice_beatbox',
+            'voice_interaction', 'voice_expressive'
+        }
 
         self._dataset_sources = []
         failed_datasets = []

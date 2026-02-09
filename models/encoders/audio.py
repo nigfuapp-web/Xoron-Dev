@@ -1459,7 +1459,7 @@ class FFTBlock(nn.Module):
 
 class AudioDecoder(nn.Module):
     """
-    SOTA Audio Decoder with MAS and Zero-Shot Speaker Cloning.
+    SOTA Audio Decoder with MAS, Zero-Shot Speaker Cloning, and Voice Enhancement Support.
 
     Features:
     - Monotonic Alignment Search for text-to-audio alignment
@@ -1468,6 +1468,13 @@ class AudioDecoder(nn.Module):
     - Variance adaptor with duration, pitch, energy prediction
     - RMLA-based FFT blocks
     - Gradient checkpointing support for memory efficiency
+    
+    Voice Enhancement Features (matching AudioEncoder):
+    - Emotion conditioning for emotional speech synthesis
+    - Singing/vocal style synthesis support
+    - Sound effect generation and integration
+    - Raw waveform output support (optional)
+    - Speculative decoding integration
     """
 
     def __init__(
@@ -1478,12 +1485,30 @@ class AudioDecoder(nn.Module):
         num_speakers: int = 256,
         num_decoder_layers: int = 4,
         dropout: float = 0.1,
+        # Voice enhancement flags (matching encoder)
+        enable_emotion: bool = True,
+        enable_singing: bool = True,
+        enable_effects: bool = True,
+        enable_raw_waveform: bool = True,
+        enable_speculative: bool = True,
+        # Emotion/singing/effects parameters
+        num_emotions: int = 10,
+        num_vocal_styles: int = 8,
+        num_vocal_modes: int = 6,
+        num_effect_types: int = 20,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.n_mels = n_mels
         self.max_audio_length = max_audio_length
         self.gradient_checkpointing = False  # Memory optimization flag
+        
+        # Voice enhancement flags
+        self.enable_emotion = enable_emotion
+        self.enable_singing = enable_singing
+        self.enable_effects = enable_effects
+        self.enable_raw_waveform = enable_raw_waveform
+        self.enable_speculative = enable_speculative
 
         # Monotonic Alignment Search
         self.mas = MonotonicAlignmentSearch(hidden_size)
@@ -1499,9 +1524,63 @@ class AudioDecoder(nn.Module):
             hidden_size=hidden_size,
             num_prompt_tokens=32,
         )
+        
+        # === VOICE ENHANCEMENT CONDITIONING ===
+        
+        # Emotion conditioning for emotional speech synthesis
+        if enable_emotion:
+            self.emotion_embed = nn.Embedding(num_emotions, hidden_size // 4)
+            # Continuous AVD conditioning
+            self.avd_proj = nn.Sequential(
+                nn.Linear(3, hidden_size // 8),  # arousal, valence, dominance
+                nn.SiLU(),
+                nn.Linear(hidden_size // 8, hidden_size // 4),
+            )
+            self.emotion_cond_size = hidden_size // 4
+        else:
+            self.emotion_embed = None
+            self.avd_proj = None
+            self.emotion_cond_size = 0
+        
+        # Singing/vocal style conditioning
+        if enable_singing:
+            self.vocal_style_embed = nn.Embedding(num_vocal_styles, hidden_size // 4)
+            self.vocal_mode_embed = nn.Embedding(num_vocal_modes, hidden_size // 4)
+            # Tempo conditioning
+            self.tempo_proj = nn.Sequential(
+                nn.Linear(1, hidden_size // 8),
+                nn.SiLU(),
+                nn.Linear(hidden_size // 8, hidden_size // 4),
+            )
+            self.singing_cond_size = hidden_size // 4
+        else:
+            self.vocal_style_embed = None
+            self.vocal_mode_embed = None
+            self.tempo_proj = None
+            self.singing_cond_size = 0
+        
+        # Sound effect conditioning
+        if enable_effects:
+            self.effect_embed = nn.Embedding(num_effect_types, hidden_size // 4)
+            self.effect_intensity_proj = nn.Sequential(
+                nn.Linear(1, hidden_size // 8),
+                nn.SiLU(),
+                nn.Linear(hidden_size // 8, hidden_size // 4),
+            )
+            self.effect_cond_size = hidden_size // 4
+        else:
+            self.effect_embed = None
+            self.effect_intensity_proj = None
+            self.effect_cond_size = 0
 
-        # Input projection
-        self.input_proj = nn.Linear(hidden_size + hidden_size // 4, hidden_size)
+        # Calculate total conditioning size
+        total_cond_size = hidden_size // 4  # speaker
+        total_cond_size += self.emotion_cond_size
+        total_cond_size += self.singing_cond_size
+        total_cond_size += self.effect_cond_size
+
+        # Input projection (text + all conditioning)
+        self.input_proj = nn.Linear(hidden_size + total_cond_size, hidden_size)
 
         # Encoder FFT blocks
         self.encoder_blocks = nn.ModuleList([
@@ -1551,11 +1630,34 @@ class AudioDecoder(nn.Module):
             ),
             nn.Conv1d(256, n_mels, kernel_size=5, padding=2),
         ])
+        
+        # Raw waveform decoder (optional - for direct audio output)
+        if enable_raw_waveform:
+            self.waveform_decoder = RawWaveformDecoder(
+                hidden_size=hidden_size,
+                sample_rate=16000,
+            )
+        else:
+            self.waveform_decoder = None
+        
+        # Speculative decoding support
+        if enable_speculative:
+            self.speculative_decoder = SpeculativeAudioDecoder(
+                hidden_size=hidden_size,
+                draft_length=10,
+            )
+        else:
+            self.speculative_decoder = None
 
         print(f"   🔊 AudioDecoder (MAS + RMLA): {hidden_size}d -> {n_mels} mels")
         print(f"      - Monotonic Alignment Search enabled")
         print(f"      - Zero-Shot Speaker Cloning enabled")
         print(f"      - In-Context Audio Prompting enabled")
+        print(f"      - Emotion Conditioning: {enable_emotion}")
+        print(f"      - Singing/Vocal Styles: {enable_singing}")
+        print(f"      - Sound Effects: {enable_effects}")
+        print(f"      - Raw Waveform Output: {enable_raw_waveform}")
+        print(f"      - Speculative Decoding: {enable_speculative}")
 
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing to save memory during training."""
@@ -1577,9 +1679,19 @@ class AudioDecoder(nn.Module):
         pitch_target: Optional[torch.Tensor] = None,
         energy_target: Optional[torch.Tensor] = None,
         use_mas: bool = True,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        # Voice enhancement inputs
+        emotion_id: Optional[torch.Tensor] = None,
+        avd_values: Optional[torch.Tensor] = None,  # [B, 3] arousal, valence, dominance
+        vocal_style_id: Optional[torch.Tensor] = None,
+        vocal_mode_id: Optional[torch.Tensor] = None,
+        tempo_bpm: Optional[torch.Tensor] = None,
+        effect_id: Optional[torch.Tensor] = None,
+        effect_intensity: Optional[torch.Tensor] = None,
+        output_waveform: bool = False,
+        use_speculative: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[dict]]:
         """
-        Generate mel-spectrogram from text embeddings.
+        Generate mel-spectrogram from text embeddings with voice enhancement support.
 
         Args:
             text_embeds: [B, T, hidden_size] text embeddings
@@ -1592,15 +1704,29 @@ class AudioDecoder(nn.Module):
             pitch_target: [B, T'] ground truth pitch
             energy_target: [B, T'] ground truth energy
             use_mas: Whether to use MAS for alignment
+            
+            Voice enhancement args:
+            emotion_id: [B] discrete emotion category (0-9)
+            avd_values: [B, 3] continuous arousal/valence/dominance values
+            vocal_style_id: [B] singing style (0-7: pop, rock, jazz, etc.)
+            vocal_mode_id: [B] vocal mode (0-5: speak, sing, rap, hum, whistle, chant)
+            tempo_bpm: [B] tempo in BPM for singing/rapping
+            effect_id: [B] sound effect type (0-19)
+            effect_intensity: [B] effect intensity (0-1)
+            output_waveform: Whether to also output raw waveform
+            use_speculative: Whether to use speculative decoding
 
         Returns:
             mel: [B, n_mels, T'] generated mel spectrogram
             durations: [B, T] predicted durations
             alignment: [B, T_text, T_audio] alignment matrix (if use_mas and audio_features provided)
+            extras: dict with optional outputs (waveform, speculative results)
         """
         batch_size, seq_len, _ = text_embeds.shape
         device = text_embeds.device
         dtype = text_embeds.dtype
+        
+        extras = {}
 
         # Get speaker embedding
         if speaker_embedding is not None:
@@ -1615,9 +1741,63 @@ class AudioDecoder(nn.Module):
             spk_emb = self.speaker_embed(speaker)
 
         spk_emb = spk_emb.unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+        
+        # Collect all conditioning embeddings
+        cond_embeds = [spk_emb]
+        
+        # Emotion conditioning
+        if self.enable_emotion:
+            if emotion_id is not None:
+                emo_emb = self.emotion_embed(emotion_id).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            elif avd_values is not None:
+                emo_emb = self.avd_proj(avd_values.to(dtype)).unsqueeze(1).expand(-1, seq_len, -1)
+            else:
+                # Neutral emotion (index 6)
+                neutral = torch.full((batch_size,), 6, dtype=torch.long, device=device)
+                emo_emb = self.emotion_embed(neutral).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            cond_embeds.append(emo_emb)
+        
+        # Singing/vocal style conditioning
+        if self.enable_singing:
+            # Style
+            if vocal_style_id is not None:
+                style_emb = self.vocal_style_embed(vocal_style_id).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            else:
+                default_style = torch.zeros(batch_size, dtype=torch.long, device=device)
+                style_emb = self.vocal_style_embed(default_style).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            
+            # Mode
+            if vocal_mode_id is not None:
+                mode_emb = self.vocal_mode_embed(vocal_mode_id).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            else:
+                default_mode = torch.zeros(batch_size, dtype=torch.long, device=device)  # speak mode
+                mode_emb = self.vocal_mode_embed(default_mode).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+            
+            # Tempo
+            if tempo_bpm is not None:
+                tempo_norm = (tempo_bpm.float() - 60) / 120  # Normalize BPM
+                tempo_emb = self.tempo_proj(tempo_norm.unsqueeze(-1).to(dtype)).unsqueeze(1).expand(-1, seq_len, -1)
+            else:
+                tempo_emb = torch.zeros(batch_size, seq_len, self.hidden_size // 4, device=device, dtype=dtype)
+            
+            # Combine style + mode + tempo
+            singing_emb = style_emb + mode_emb + tempo_emb
+            cond_embeds.append(singing_emb)
+        
+        # Sound effect conditioning
+        if self.enable_effects:
+            if effect_id is not None:
+                eff_emb = self.effect_embed(effect_id).unsqueeze(1).expand(-1, seq_len, -1).to(dtype)
+                if effect_intensity is not None:
+                    intensity_emb = self.effect_intensity_proj(effect_intensity.unsqueeze(-1).to(dtype))
+                    eff_emb = eff_emb * intensity_emb.unsqueeze(1)
+            else:
+                eff_emb = torch.zeros(batch_size, seq_len, self.hidden_size // 4, device=device, dtype=dtype)
+            cond_embeds.append(eff_emb)
 
-        # Combine embeddings
-        x = torch.cat([text_embeds, spk_emb], dim=-1)
+        # Combine all embeddings
+        all_cond = torch.cat(cond_embeds, dim=-1)
+        x = torch.cat([text_embeds, all_cond], dim=-1)
         x = self.input_proj(x)
 
         # Apply in-context audio prompting
@@ -1696,8 +1876,18 @@ class AudioDecoder(nn.Module):
         for layer in self.postnet:
             mel_post = layer(mel_post)
         mel = mel + mel_post
+        
+        # Optional raw waveform output
+        if output_waveform and self.waveform_decoder is not None:
+            waveform = self.waveform_decoder(x)
+            extras["waveform"] = waveform
+        
+        # Optional speculative decoding
+        if use_speculative and self.speculative_decoder is not None:
+            spec_results = self.speculative_decoder(x)
+            extras["speculative"] = spec_results
 
-        return mel, durations, alignment
+        return mel, durations, alignment, extras if extras else None
 
 
 # === SOTA VOICE ENHANCEMENT COMPONENTS ===
