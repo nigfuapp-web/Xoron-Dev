@@ -1214,6 +1214,9 @@ class TrueStreamingDataset(IterableDataset):
                 print(f"\n🚀 Starting streaming iteration ({self.max_per_epoch:,} unique samples{repeat_info})...", flush=True)
         print(f"   📊 Max {self.max_per_dataset} unique per dataset", flush=True)
         
+        # Track which modalities have run out of data (all their sources exhausted)
+        modality_exhausted = {mod: False for mod in self.modality_max_values.keys()} if self.is_dual_training else {}
+        
         def check_modality_limit(modality: str) -> bool:
             """Check if a modality has reached its limit in dual training mode."""
             if not self.is_dual_training:
@@ -1221,13 +1224,37 @@ class TrueStreamingDataset(IterableDataset):
             max_for_modality = self.modality_max_values.get(modality, float('inf'))
             return modality_counts.get(modality, 0) >= max_for_modality
         
+        def update_modality_exhaustion():
+            """Check if any modality has all its sources exhausted."""
+            if not self.is_dual_training:
+                return
+            for modality in self.modality_max_values.keys():
+                # Check if there are any non-exhausted sources for this modality
+                has_active_source = any(
+                    not s["exhausted"] and s.get("modality") == modality 
+                    for s in active_sources
+                )
+                if not has_active_source and not modality_exhausted.get(modality, False):
+                    current = modality_counts.get(modality, 0)
+                    target = self.modality_max_values.get(modality, 0)
+                    modality_exhausted[modality] = True
+                    if current < target:
+                        print(f"   ⚠️ {modality} EXHAUSTED early: {current}/{target} samples (all datasets depleted)", flush=True)
+                    else:
+                        print(f"   ✅ {modality} completed: {current}/{target} samples", flush=True)
+        
         def all_modalities_done() -> bool:
-            """Check if all active modalities have reached their limits."""
+            """Check if all active modalities have reached their limits OR are exhausted."""
             if not self.is_dual_training:
                 return unique_samples >= self.max_per_epoch
-            # Check if ALL modalities in modality_max_values have reached their limits
+            # Check if ALL modalities in modality_max_values have either:
+            # 1. Reached their sample limit, OR
+            # 2. Exhausted all their data sources
             for modality, max_val in self.modality_max_values.items():
-                if modality_counts.get(modality, 0) < max_val:
+                current = modality_counts.get(modality, 0)
+                is_exhausted = modality_exhausted.get(modality, False)
+                # Modality is "done" if it hit its limit OR ran out of data
+                if current < max_val and not is_exhausted:
                     return False
             return True
         
@@ -1343,14 +1370,33 @@ class TrueStreamingDataset(IterableDataset):
             for idx in sorted(sources_to_remove, reverse=True):
                 if idx < len(active_sources):
                     del active_sources[idx]
+            
+            # Check if any modality's sources are all exhausted
+            update_modality_exhaustion()
+        
+        # Final check for modality exhaustion (in case loop exited due to empty active_sources)
+        update_modality_exhaustion()
         
         # Print final stats
         print(f"\n✅ Epoch complete!", flush=True)
         if self.is_dual_training:
             print(f"   🔀 Dual training results:", flush=True)
+            total_expected = sum(self.modality_max_values.values())
+            total_actual = sum(modality_counts.values())
+            any_early_exhaustion = False
             for mod, max_val in self.modality_max_values.items():
                 current = modality_counts.get(mod, 0)
-                print(f"      {mod}: {current}/{max_val} samples", flush=True)
+                is_exhausted = modality_exhausted.get(mod, False)
+                status = "✅" if current >= max_val else ("⚠️ EXHAUSTED" if is_exhausted else "❓")
+                print(f"      {mod}: {current}/{max_val} samples {status}", flush=True)
+                if is_exhausted and current < max_val:
+                    any_early_exhaustion = True
+            
+            # Show warning if epoch ended early due to data exhaustion
+            if any_early_exhaustion:
+                print(f"\n   ⚠️ EPOCH ENDED EARLY: {total_actual}/{total_expected} samples ({(total_actual/total_expected)*100:.1f}%)", flush=True)
+                print(f"   ⚠️ Some modalities ran out of data before reaching their targets.", flush=True)
+                print(f"   💡 Consider: increasing max_per_dataset, adding more datasets, or lowering modality limits.", flush=True)
         print(f"   📊 {unique_samples:,} unique samples × {self.sample_repeat} = {total_yields:,} total yields", flush=True)
         print(f"   📂 By category:", flush=True)
         for dtype, count in sorted(type_counts.items()):
@@ -1365,7 +1411,15 @@ class TrueStreamingDataset(IterableDataset):
         gc.collect()
 
     def __len__(self):
-        """Return total yields (unique samples × repeat) as the effective length."""
+        """Return total yields (unique samples × repeat) as the effective length.
+        
+        In dual training mode, this is sum(modality_max_values) * sample_repeat.
+        In normal mode, this is max_per_epoch * sample_repeat.
+        """
+        if self.is_dual_training and self.modality_max_values:
+            # Dual training: total is sum of all modality limits
+            total_unique = sum(self.modality_max_values.values())
+            return total_unique * self.sample_repeat
         return self.max_per_epoch * self.sample_repeat
 
     def reset(self, clear_state: bool = False):
