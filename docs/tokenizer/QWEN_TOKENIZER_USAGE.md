@@ -2,9 +2,176 @@
 
 ## Overview
 
-Xoron-Dev is a **ground-up multimodal AI model** where nearly everything is built from scratch. The only external component we use as-is is **SigLIP2** for the vision encoder backbone. Even then, we wrap SigLIP2 with our own custom layers (TiTok, Dual-Stream Attention, 2D-RoPE) to better integrate it with our architecture.
+Xoron-Dev is a **ground-up multimodal AI model** where nearly everything is built from scratch. The only external component we use as-is is **SigLIP2** for the vision encoder backbone. Even then, we wrap SigLIP2 with our own custom layers (TiTok, Dual-Stream, 2D-RoPE) to better integrate it with our architecture.
 
 The **Qwen2.5 tokenizer** is used purely as a **vocabulary foundation** - we don't use Qwen's model weights, architecture, or pre-trained capabilities. We leverage only the tokenizer's vocabulary and then heavily customize it for our multimodal needs.
+
+---
+
+## 🚨 The Key Question: Why Isn't This "Garbage In, Garbage Out"?
+
+Since Xoron wasn't trained on Qwen's weights, how does it know what the token IDs mean?
+
+### The Answer: Tokenizer ≠ Knowledge
+
+**The tokenizer is just a text ↔ number converter. It has NO knowledge.**
+
+```
+"Hello world" → [15496, 1917]  ← Just numbers, no meaning yet
+```
+
+The **meaning** of those numbers comes from the **embedding layer**, which Xoron trains FROM SCRATCH.
+
+### How It Actually Works:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ STEP 1: TOKENIZER (Qwen's)                                       │
+│ ─────────────────────────────                                    │
+│ Input:  "The cat sat"                                            │
+│ Output: [464, 3797, 3332]   ← Just arbitrary numbers!            │
+│                                                                   │
+│ The tokenizer doesn't know what "cat" means.                     │
+│ It just knows "cat" should be split into token ID 3797.         │
+│ This is DETERMINISTIC - same text = same numbers every time.     │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ STEP 2: EMBEDDING LAYER (Xoron's - Trained from scratch)         │
+│ ─────────────────────────────────────────────────────────        │
+│ Input:  [464, 3797, 3332]                                        │
+│ Output: [[0.23, -0.15, ...], [0.87, 0.42, ...], [0.11, -0.33...]]│
+│         ↑ 1024-dim vectors                                       │
+│                                                                   │
+│ These vectors ARE the meaning. Xoron LEARNS them during training.│
+│ After training:                                                   │
+│   - Token 3797 ("cat") → vector close to "dog", "pet", "animal" │
+│   - Token 3332 ("sat") → vector close to "stood", "lay", "was"  │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ STEP 3: TRANSFORMER LAYERS (Xoron's - Trained from scratch)      │
+│ ─────────────────────────────────────────────────────────        │
+│ The model processes these vectors through 12 layers of:          │
+│   - MoE attention (8 experts)                                    │
+│   - Ring attention (128K context)                                │
+│   - Cross-attention (multimodal fusion)                          │
+│                                                                   │
+│ All weights are RANDOM at init, then LEARNED during training.    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### The Key Insight:
+
+| Component | Where it comes from | Contains knowledge? |
+|-----------|--------------------|--------------------|
+| Tokenizer (text→IDs) | Qwen | ❌ NO - just a lookup table |
+| Embedding layer | Xoron (random init → trained) | ✅ YES - learned meanings |
+| Transformer weights | Xoron (random init → trained) | ✅ YES - learned reasoning |
+| lm_head (IDs→text) | Xoron (random init → trained) | ✅ YES - learned generation |
+
+**The tokenizer is like a phone book** - it maps names to numbers. The phone book doesn't know anything about the people. Your model learns who those people are during training.
+
+### Why This Works:
+
+1. **Consistency**: The tokenizer ALWAYS maps "cat" → 3797. So during training, every time the model sees "cat", it's the same token ID.
+
+2. **Learning**: Your embedding layer starts random. But after seeing millions of examples where token 3797 appears near "pet", "fur", "meow", it learns that 3797 means something cat-like.
+
+3. **No Qwen knowledge needed**: We don't care what Qwen's embedding for 3797 was. We train our own from scratch.
+
+### Analogy: Learning a New Language
+
+Imagine you're given a Chinese dictionary that maps Chinese characters to numbers:
+- 猫 → 3797
+- 狗 → 2891
+
+You don't speak Chinese, so those numbers mean nothing to you initially. But if someone shows you millions of sentences with translations:
+- "那只猫很可爱" (That cat is cute)
+- "猫喜欢鱼" (Cats like fish)
+
+You'll eventually learn that 3797 means "cat" - not because the dictionary told you, but because you learned from context.
+
+**That's exactly what Xoron does during training.**
+
+---
+
+## What the Tokenizer Actually Does (And Does Well)
+
+The Qwen tokenizer's job is to **efficiently split text into subwords**. This is where quality matters:
+
+### Good Tokenization (Qwen):
+```python
+tokenizer.encode("unhappiness")
+# → [348, 82190, 2136]  (un + happi + ness)
+# Each piece is meaningful and reusable
+```
+
+### Bad Tokenization (hypothetical):
+```python
+bad_tokenizer.encode("unhappiness") 
+# → [117, 110, 104, 97, 112, ...]  (character by character)
+# Wasteful - needs 11 tokens instead of 3
+```
+
+### Why Qwen's Tokenizer is Good:
+
+1. **Efficient BPE**: Learned from massive text corpus to find optimal subword splits
+2. **Multilingual**: Handles English, Chinese, code, etc.
+3. **Code-aware**: Knows to keep `def`, `class`, `import` as single tokens
+4. **151K vocabulary**: Large enough to cover most concepts efficiently
+
+### The Tokenizer's Quality Affects:
+
+| Aspect | Impact |
+|--------|--------|
+| **Sequence length** | Better tokenization = fewer tokens = longer effective context |
+| **Training efficiency** | Meaningful chunks = faster learning |
+| **Rare word handling** | Good fallback to subwords for unknown words |
+
+But remember: **The tokenizer doesn't give meaning - it just gives efficient chunking.**
+
+---
+
+## How Embedding Initialization Works in Xoron
+
+Here's the actual code from `build.py`:
+
+```python
+def setup_tokenizer(model, xoron_config):
+    # Load Qwen tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(xoron_config.tokenizer_name)
+    
+    # Add our 250+ special tokens
+    special_tokens_list = list(SPECIAL_TOKENS.values())
+    tokenizer.add_special_tokens({"additional_special_tokens": special_tokens_list})
+    
+    # Now resize the embedding layer
+    new_vocab_size = len(tokenizer)  # ~151,893
+    
+    # Create NEW embedding layer
+    new_embed = nn.Embedding(new_vocab_size, xoron_config.hidden_size)
+    
+    with torch.no_grad():
+        # Initialize ALL embeddings randomly (not from Qwen!)
+        nn.init.normal_(new_embed.weight, mean=0.0, std=0.02)
+        
+        # Copy over the OLD embeddings (if model was pre-initialized)
+        # This preserves any training that already happened
+        min_vocab = min(old_embed.weight.shape[0], new_vocab_size)
+        new_embed.weight[:min_vocab] = old_embed.weight[:min_vocab]
+    
+    model.llm.model.embed_tokens = new_embed
+```
+
+### What This Means:
+
+1. **All embeddings start as random noise** (Gaussian, std=0.02)
+2. **No Qwen embeddings are used** - we don't load `Qwen2.5-1.5B` model, just tokenizer
+3. **Training teaches meaning** - backpropagation updates embeddings based on loss
+4. **Our special tokens** (`<|think|>`, `<|image|>`, etc.) also start random and learn their meaning
 
 ---
 
