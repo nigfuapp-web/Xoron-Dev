@@ -90,11 +90,11 @@ class TrueStreamingDataset(IterableDataset):
             "unique_samples": 0,
             "total_yields": 0,
             "dataset_positions": {},  # dataset_name -> samples_consumed
-            "modality_positions": {   # Per-modality tracking for --text, --image, --video, --voice flags
+            "modality_positions": {   # Per-modality tracking for --text, --image, --video, --audio flags
                 "text": {},           # text dataset positions
                 "image": {},          # image dataset positions
                 "video": {},          # video dataset positions
-                "voice": {},          # voice/audio dataset positions
+                "audio": {},          # audio dataset positions (voice_asr, voice_tts)
             },
             "modality_counts": {      # Per-modality sample counts for dual training
                 "text": 0,
@@ -214,9 +214,12 @@ class TrueStreamingDataset(IterableDataset):
             
             # Load per-modality positions if available
             if "modality_positions" in state:
-                for modality in ["text", "image", "video", "voice"]:
+                for modality in ["text", "image", "video", "audio"]:
                     if modality in state["modality_positions"]:
                         self._streaming_state["modality_positions"][modality] = state["modality_positions"][modality]
+                # Handle legacy state files that used "voice" instead of "audio"
+                if "voice" in state["modality_positions"] and "audio" not in state["modality_positions"]:
+                    self._streaming_state["modality_positions"]["audio"] = state["modality_positions"]["voice"]
             
             print(f"   📂 Resumed from epoch {state.get('epoch', 0)}, {state.get('unique_samples', 0)} samples seen")
         except Exception as e:
@@ -1449,7 +1452,8 @@ class TrueStreamingDataset(IterableDataset):
                 "unique_samples": 0,
                 "total_yields": 0,
                 "dataset_positions": {},  # Clear positions to restart from beginning
-                "modality_positions": {"text": {}, "image": {}, "video": {}, "voice": {}},
+                "modality_positions": {"text": {}, "image": {}, "video": {}, "audio": {}},
+                "modality_counts": {"text": 0, "image": 0, "video": 0, "audio": 0},
                 "last_modality": None,
             }
         else:
@@ -1460,7 +1464,8 @@ class TrueStreamingDataset(IterableDataset):
                 "unique_samples": 0,  # Reset for this epoch
                 "total_yields": 0,    # Reset for this epoch
                 "dataset_positions": self._streaming_state.get("dataset_positions", {}),  # KEEP positions!
-                "modality_positions": self._streaming_state.get("modality_positions", {"text": {}, "image": {}, "video": {}, "voice": {}}),
+                "modality_positions": self._streaming_state.get("modality_positions", {"text": {}, "image": {}, "video": {}, "audio": {}}),
+                "modality_counts": {"text": 0, "image": 0, "video": 0, "audio": 0},  # Reset counts each epoch
                 "last_modality": self._streaming_state.get("last_modality", None),
             }
         self._init_iterators()
