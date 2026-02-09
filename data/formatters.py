@@ -1365,89 +1365,87 @@ class MultimodalFormatter:
 
     def format_voice_emotion_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format emotion speech samples for AVD (Arousal/Valence/Dominance) training.
+        Format emotion speech samples for training emotional speech understanding.
         
-        Expected sample format from RAVDESS/CREMA-D/etc:
-        {
-            "audio": {"array": [...], "sampling_rate": 16000},
-            "emotion": "happy",  # or emotion_id
-            "text": "transcription",
-            "arousal": 0.7,  # optional continuous value
-            "valence": 0.8,  # optional continuous value
-            "dominance": 0.5,  # optional continuous value
-        }
+        Handles multiple dataset formats:
+        - VoxPopuli: {"audio": ..., "raw_text": "...", "gender": "male/female"}
+        - VCTK: {"audio": ..., "text": "...", "speaker_id": "...", "age": "...", "gender": "..."}
+        - PeoplesSpeech: {"audio": ..., "text": "..."}
+        - Explicit emotion datasets: {"audio": ..., "emotion": "happy", "arousal": 0.7, ...}
         """
         try:
-            # Get emotion label
+            # Get transcription - try multiple fields
+            text = sample.get("text", sample.get("raw_text", sample.get("normalized_text", "")))
+            if not text:
+                text = sample.get("transcript", sample.get("transcription", ""))
+            
+            if not text:
+                return None  # Need text for training
+            
+            # Get speaker metadata (useful for style/emotion inference)
+            speaker_id = sample.get("speaker_id", sample.get("audio_id", ""))
+            gender = sample.get("gender", "")
+            age = sample.get("age", "")
+            language = sample.get("language", "en")
+            
+            # Get emotion label if available
             emotion = sample.get("emotion", sample.get("label", sample.get("emotion_label", "")))
-            if not emotion:
-                emotion_id = sample.get("emotion_id", sample.get("label_id", -1))
-                emotion_map = {
-                    0: "neutral", 1: "calm", 2: "happy", 3: "sad",
-                    4: "angry", 5: "fearful", 6: "disgusted", 7: "surprised"
-                }
-                emotion = emotion_map.get(int(emotion_id), "neutral")
             
             # Get AVD values if available (continuous emotion)
             arousal = sample.get("arousal", sample.get("activation", None))
             valence = sample.get("valence", sample.get("pleasure", None))
             dominance = sample.get("dominance", sample.get("power", None))
             
-            # Get transcription if available
-            text = sample.get("text", sample.get("transcript", sample.get("transcription", "")))
+            # Build emotion annotation if emotion is known
+            emotion_annotation = ""
+            if emotion:
+                emotion_token_map = {
+                    "happy": self.t.get('emotion_happy', '<|happy|>'),
+                    "sad": self.t.get('emotion_sad', '<|sad|>'),
+                    "angry": self.t.get('emotion_angry', '<|angry|>'),
+                    "fearful": self.t.get('emotion_fearful', '<|fearful|>'),
+                    "surprised": self.t.get('emotion_surprised', '<|surprised|>'),
+                    "disgusted": self.t.get('emotion_disgusted', '<|disgusted|>'),
+                    "neutral": self.t.get('emotion_neutral', '<|neutral|>'),
+                    "calm": self.t.get('emotion_neutral', '<|neutral|>'),
+                }
+                emotion_token = emotion_token_map.get(str(emotion).lower(), self.t.get('emotion_neutral', '<|neutral|>'))
+                emotion_annotation = f"{self.t.get('emotion_start', '<|emotion|>')}{emotion_token}"
+                
+                if arousal is not None:
+                    emotion_annotation += f"{self.t.get('arousal_level', '<|arousal|>')}{int(float(arousal) * 100)}{self.t.get('arousal_end', '<|/arousal|>')}"
+                if valence is not None:
+                    emotion_annotation += f"{self.t.get('valence_level', '<|valence|>')}{int(float(valence) * 100)}{self.t.get('valence_end', '<|/valence|>')}"
+                emotion_annotation += f"{self.t.get('emotion_end', '<|/emotion|>')}\n"
             
-            # Map emotion to token
-            emotion_token_map = {
-                "happy": self.t.get('emotion_happy', '<|happy|>'),
-                "sad": self.t.get('emotion_sad', '<|sad|>'),
-                "angry": self.t.get('emotion_angry', '<|angry|>'),
-                "fearful": self.t.get('emotion_fearful', '<|fearful|>'),
-                "surprised": self.t.get('emotion_surprised', '<|surprised|>'),
-                "disgusted": self.t.get('emotion_disgusted', '<|disgusted|>'),
-                "neutral": self.t.get('emotion_neutral', '<|neutral|>'),
-                "calm": self.t.get('emotion_neutral', '<|neutral|>'),
-                "excited": self.t.get('emotion_excited', '<|excited|>'),
-                "frustrated": self.t.get('emotion_frustrated', '<|frustrated|>'),
-            }
-            emotion_token = emotion_token_map.get(emotion.lower(), self.t.get('emotion_neutral', '<|neutral|>'))
+            # Build speaker info if available
+            speaker_info = ""
+            if gender:
+                speaker_info += f"Speaker: {gender}"
+            if age:
+                speaker_info += f", Age: {age}"
+            if speaker_id and len(str(speaker_id)) < 20:
+                speaker_info += f" (ID: {speaker_id})"
             
-            # Build emotion annotation
-            emotion_annotation = f"{self.t.get('emotion_start', '<|emotion|>')}{emotion_token}"
-            
-            # Add AVD values if available
-            if arousal is not None:
-                arousal_int = int(float(arousal) * 100)  # Scale to 0-100
-                emotion_annotation += f"{self.t.get('arousal_level', '<|arousal|>')}{arousal_int}{self.t.get('arousal_end', '<|/arousal|>')}"
-            if valence is not None:
-                valence_int = int(float(valence) * 100)  # Scale to -100 to 100
-                emotion_annotation += f"{self.t.get('valence_level', '<|valence|>')}{valence_int}{self.t.get('valence_end', '<|/valence|>')}"
-            if dominance is not None:
-                dominance_int = int(float(dominance) * 100)  # Scale to 0-100
-                emotion_annotation += f"{self.t.get('dominance_level', '<|dominance|>')}{dominance_int}{self.t.get('dominance_end', '<|/dominance|>')}"
-            
-            emotion_annotation += f"{self.t.get('emotion_end', '<|/emotion|>')}"
-            
-            # Format: Identify emotion from audio
+            # Format: Transcribe audio with emotional understanding
             formatted_text = (
                 f"{self.t['user_start']}\n"
                 f"{self.t['listen_start']}[AUDIO]{self.t['listen_end']}\n"
-                f"What emotion is expressed in this audio?\n"
+                f"Transcribe this audio.\n"
                 f"{self.t['user_end']}\n"
                 f"{self.t['assistant_start']}\n"
                 f"{emotion_annotation}"
+                f"{speaker_info + chr(10) if speaker_info else ''}"
+                f"{text}\n"
+                f"{self.t['assistant_end']}"
             )
-            
-            if text:
-                formatted_text += f"\nTranscript: {text}"
-            
-            formatted_text += f"\n{self.t['assistant_end']}"
             formatted_text = self._wrap_sequence(formatted_text)
             
             return {
                 "text": formatted_text,
                 "type": "voice_emotion",
                 "has_audio": True,
-                "emotion": emotion,
+                "emotion": emotion if emotion else "neutral",
                 "arousal": arousal,
                 "valence": valence,
                 "dominance": dominance,
@@ -1458,61 +1456,58 @@ class MultimodalFormatter:
 
     def format_voice_singing_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format singing voice samples for singing synthesis training.
+        Format singing voice samples for music/singing understanding.
         
-        Expected sample format:
-        {
-            "audio": {"array": [...], "sampling_rate": 16000},
-            "lyrics": "la la la...",
-            "pitch_contour": [...],  # optional
-            "style": "pop",  # optional
-            "tempo": 120,  # optional BPM
-        }
+        Handles multiple dataset formats:
+        - AudioSet: {"audio": ..., "labels": [...], "human_labels": "singing, music, ..."}
+        - MusicCaps: {"caption": "A female voice sings...", "aspect_list": [...]}
+        - Traditional: {"audio": ..., "lyrics": "...", "style": "pop"}
         """
         try:
-            # Get lyrics
+            # Get caption/description (MusicCaps style)
+            caption = sample.get("caption", sample.get("description", ""))
+            
+            # Get labels (AudioSet style)
+            labels = sample.get("human_labels", "")
+            if not labels and "labels" in sample:
+                raw_labels = sample["labels"]
+                if isinstance(raw_labels, list):
+                    labels = ", ".join(str(l) for l in raw_labels[:5])
+            
+            # Get lyrics or text
             lyrics = sample.get("lyrics", sample.get("text", sample.get("transcription", "")))
-            if not lyrics:
+            
+            # Get aspects (MusicCaps)
+            aspects = sample.get("aspect_list", [])
+            if isinstance(aspects, list):
+                aspects = ", ".join(str(a) for a in aspects[:5])
+            
+            # Need at least caption, labels, or lyrics
+            content = caption or labels or lyrics
+            if not content:
                 return None
             
             # Get singing attributes
             style = sample.get("style", sample.get("genre", ""))
             tempo = sample.get("tempo", sample.get("bpm", None))
-            key = sample.get("key", sample.get("key_signature", ""))
             
-            # Build style markers
-            style_tokens = ""
-            if style:
-                style_map = {
-                    "pop": self.t.get('style_pop', '<|style:pop|>'),
-                    "rock": self.t.get('style_rock', '<|style:rock|>'),
-                    "jazz": self.t.get('style_jazz', '<|style:jazz|>'),
-                    "classical": self.t.get('style_classical', '<|style:classical|>'),
-                    "hiphop": self.t.get('style_hiphop', '<|style:hiphop|>'),
-                    "hip-hop": self.t.get('style_hiphop', '<|style:hiphop|>'),
-                    "rnb": self.t.get('style_rnb', '<|style:rnb|>'),
-                    "r&b": self.t.get('style_rnb', '<|style:rnb|>'),
-                    "country": self.t.get('style_country', '<|style:country|>'),
-                    "soul": self.t.get('style_soul', '<|style:soul|>'),
-                }
-                style_tokens = style_map.get(style.lower(), "")
+            # Build description
+            description = ""
+            if caption:
+                description = caption
+            elif labels:
+                description = f"Audio containing: {labels}"
+            if aspects:
+                description += f"\nAspects: {aspects}"
             
-            tempo_tokens = ""
-            if tempo:
-                tempo_tokens = f"{self.t.get('tempo_start', '<|tempo|>')}{tempo}{self.t.get('tempo_end', '<|/tempo|>')}"
-            
-            key_tokens = ""
-            if key:
-                key_tokens = f"{self.t.get('key_signature', '<|key|>')}{key}{self.t.get('key_signature_end', '<|/key|>')}"
-            
-            # Format: Sing these lyrics
+            # Format: Describe/analyze audio
             formatted_text = (
                 f"{self.t['user_start']}\n"
-                f"{style_tokens}{tempo_tokens}{key_tokens}"
-                f"Sing: {self.t.get('lyrics_start', '<|lyrics|>')}{lyrics}{self.t.get('lyrics_end', '<|/lyrics|>')}\n"
+                f"{self.t['listen_start']}[AUDIO]{self.t['listen_end']}\n"
+                f"Describe this audio.\n"
                 f"{self.t['user_end']}\n"
                 f"{self.t['assistant_start']}\n"
-                f"{self.t.get('sing_start', '<|sing|>')}[SINGING]{self.t.get('sing_end', '<|/sing|>')}\n"
+                f"{description}\n"
                 f"{self.t['assistant_end']}"
             )
             
@@ -1532,56 +1527,47 @@ class MultimodalFormatter:
 
     def format_voice_beatbox_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format beatbox/vocal percussion samples for sound effect training.
+        Format beatbox/non-verbal audio samples for sound understanding.
         
-        Expected sample format:
-        {
-            "audio": {"array": [...], "sampling_rate": 16000},
-            "sound_type": "kick",  # kick, snare, hihat, etc.
-            "pattern": "boom-tss-boom-tss",  # optional
-            "label": "beatbox",  # or specific sound
-        }
+        Handles multiple dataset formats:
+        - AudioSet: {"audio": ..., "labels": [...], "human_labels": "beatbox, ..."}
+        - Traditional: {"audio": ..., "sound_type": "kick", "pattern": "boom-tss"}
         """
         try:
+            # Get labels (AudioSet style)
+            labels = sample.get("human_labels", "")
+            if not labels and "labels" in sample:
+                raw_labels = sample["labels"]
+                if isinstance(raw_labels, list):
+                    labels = ", ".join(str(l) for l in raw_labels[:5])
+            
             # Get sound type/label
             sound_type = sample.get("sound_type", sample.get("label", sample.get("class", "")))
             pattern = sample.get("pattern", sample.get("sequence", ""))
             
-            # Map sound types to tokens
-            sound_token_map = {
-                "kick": self.t.get('drum_kick', '<|kick|>'),
-                "snare": self.t.get('drum_snare', '<|snare|>'),
-                "hihat": self.t.get('drum_hihat', '<|hihat|>'),
-                "hi-hat": self.t.get('drum_hihat', '<|hihat|>'),
-                "crash": self.t.get('drum_crash', '<|crash|>'),
-                "fill": self.t.get('drum_fill', '<|fill|>'),
-                "click": self.t.get('click', '<|click|>'),
-                "pop": self.t.get('pop', '<|pop|>'),
-                "beatbox": self.t.get('beatbox_start', '<|beatbox|>'),
-            }
+            # Need at least labels or sound_type
+            content = labels or sound_type
+            if not content:
+                return None
             
-            sound_token = sound_token_map.get(sound_type.lower(), self.t.get('percussion_start', '<|perc|>'))
-            
-            if pattern:
-                # Generate beatbox pattern
-                formatted_text = (
-                    f"{self.t['user_start']}\n"
-                    f"Beatbox this pattern: {pattern}\n"
-                    f"{self.t['user_end']}\n"
-                    f"{self.t['assistant_start']}\n"
-                    f"{self.t.get('beatbox_start', '<|beatbox|>')}[BEATBOX]{self.t.get('beatbox_end', '<|/beatbox|>')}\n"
-                    f"{self.t['assistant_end']}"
-                )
+            # Build description
+            if labels:
+                description = f"Audio containing: {labels}"
+            elif pattern:
+                description = f"Pattern: {pattern}"
             else:
-                # Single sound effect
-                formatted_text = (
-                    f"{self.t['user_start']}\n"
-                    f"Make a {sound_type} sound\n"
-                    f"{self.t['user_end']}\n"
-                    f"{self.t['assistant_start']}\n"
-                    f"{sound_token}[SOUND]{self.t.get('percussion_end', '<|/perc|>')}\n"
-                    f"{self.t['assistant_end']}"
-                )
+                description = f"Sound: {sound_type}"
+            
+            # Format: Classify/describe audio
+            formatted_text = (
+                f"{self.t['user_start']}\n"
+                f"{self.t['listen_start']}[AUDIO]{self.t['listen_end']}\n"
+                f"What sounds are in this audio?\n"
+                f"{self.t['user_end']}\n"
+                f"{self.t['assistant_start']}\n"
+                f"{description}\n"
+                f"{self.t['assistant_end']}"
+            )
             
             formatted_text = self._wrap_sequence(formatted_text)
             
@@ -1589,7 +1575,7 @@ class MultimodalFormatter:
                 "text": formatted_text,
                 "type": "voice_beatbox",
                 "has_audio": True,
-                "sound_type": sound_type,
+                "sound_type": sound_type or labels,
                 "pattern": pattern,
             }
         except:
@@ -1598,63 +1584,55 @@ class MultimodalFormatter:
 
     def format_voice_interaction_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format conversational interaction samples for interruption/turn-taking training.
+        Format conversational speech samples for interaction/dialogue training.
         
-        Expected sample format:
-        {
-            "audio": {"array": [...], "sampling_rate": 16000},
-            "event": "backchannel",  # or "interruption", "laugh", "cough", etc.
-            "speaker": "listener",
-            "timestamp": 1.5,  # when event occurs
-            "text": "uh-huh",  # transcription of event
-        }
+        Handles multiple dataset formats:
+        - VoxPopuli: {"audio": ..., "raw_text": "...", "gender": "..."}
+        - VCTK: {"audio": ..., "text": "...", "speaker_id": "..."}
+        - Traditional: {"audio": ..., "event": "backchannel", "text": "uh-huh"}
         """
         try:
-            # Get interaction event
+            # Get transcription
+            text = sample.get("text", sample.get("raw_text", sample.get("normalized_text", "")))
+            if not text:
+                text = sample.get("transcript", sample.get("transcription", ""))
+            
+            if not text:
+                return None
+            
+            # Get speaker metadata
+            speaker_id = sample.get("speaker_id", sample.get("audio_id", ""))
+            gender = sample.get("gender", "")
+            
+            # Get interaction event if available
             event = sample.get("event", sample.get("type", sample.get("label", "")))
-            text = sample.get("text", sample.get("transcript", ""))
-            speaker = sample.get("speaker", "user")
             
-            # Map events to tokens
-            event_token_map = {
-                "backchannel": self.t.get('user_backchannel', '<|backchannel|>'),
-                "laugh": self.t.get('user_laugh', '<|laugh|>'),
-                "cough": self.t.get('user_cough', '<|cough|>'),
-                "sigh": self.t.get('user_sigh', '<|sigh|>'),
-                "hesitation": self.t.get('user_hesitation', '<|hesitation|>'),
-                "interruption": self.t.get('eot_interrupt', '<|interrupt|>'),
-                "confusion": self.t.get('user_confusion', '<|confused|>'),
-                "agreement": self.t.get('user_agreement', '<|agree|>'),
-                "disagreement": self.t.get('user_disagreement', '<|disagree|>'),
-                "hmm": self.t.get('hmm', '<|hmm|>'),
-                "uh-huh": self.t.get('user_backchannel', '<|backchannel|>'),
-                "yeah": self.t.get('user_agreement', '<|agree|>'),
-            }
+            # Build speaker info
+            speaker_info = ""
+            if gender:
+                speaker_info = f"[{gender}"
+                if speaker_id and len(str(speaker_id)) < 20:
+                    speaker_info += f", Speaker {speaker_id}"
+                speaker_info += "] "
             
-            event_token = event_token_map.get(event.lower(), self.t.get('user_backchannel', '<|backchannel|>'))
-            
-            # Format for detecting interaction events
+            # Format: Transcribe conversational audio
             formatted_text = (
                 f"{self.t['user_start']}\n"
                 f"{self.t['listen_start']}[AUDIO]{self.t['listen_end']}\n"
-                f"What conversational event occurred?\n"
+                f"Transcribe this conversation.\n"
                 f"{self.t['user_end']}\n"
                 f"{self.t['assistant_start']}\n"
-                f"{self.t.get('user_interrupt_start', '<|user_int|>')}{event_token}"
+                f"{speaker_info}{text}\n"
+                f"{self.t['assistant_end']}"
             )
-            
-            if text:
-                formatted_text += f" [{text}]"
-            
-            formatted_text += f"{self.t.get('user_interrupt_end', '<|/user_int|>')}\n{self.t['assistant_end']}"
             formatted_text = self._wrap_sequence(formatted_text)
             
             return {
                 "text": formatted_text,
                 "type": "voice_interaction",
                 "has_audio": True,
-                "event": event,
-                "speaker": speaker,
+                "event": event if event else "speech",
+                "speaker": speaker_id,
             }
         except:
             pass
@@ -1662,49 +1640,63 @@ class MultimodalFormatter:
 
     def format_voice_expressive_sample(self, sample: Dict) -> Optional[Dict]:
         """
-        Format expressive speech samples for prosody/breathing/expression training.
+        Format expressive speech samples for TTS/prosody training.
         
-        Expected sample format:
-        {
-            "audio": {"array": [...], "sampling_rate": 16000},
-            "text": "transcription",
-            "expression": "whisper",  # whisper, shout, breathe, etc.
-            "style": "dramatic",  # optional
-        }
+        Handles multiple dataset formats:
+        - JennyTTS: {"audio": ..., "transcription": "...", "transcription_normalised": "..."}
+        - VCTK: {"audio": ..., "text": "...", "speaker_id": "...", "age": "...", "gender": "..."}
+        - MLS-SpeakerDescriptions: {"original_text": "...", "speaker_id": "...", "audio_duration": ...}
+        - Traditional: {"audio": ..., "text": "...", "expression": "whisper"}
         """
         try:
-            text = sample.get("text", sample.get("transcript", sample.get("transcription", "")))
-            expression = sample.get("expression", sample.get("style", sample.get("mode", "normal")))
+            # Get transcription - try multiple fields
+            text = sample.get("text", sample.get("transcription", ""))
+            if not text:
+                text = sample.get("transcription_normalised", sample.get("original_text", ""))
+            if not text:
+                text = sample.get("transcript", sample.get("normalized_text", ""))
             
             if not text:
                 return None
             
-            # Map expressions to tokens
-            expression_map = {
-                "whisper": (self.t.get('whisper_start', '<|whisper|>'), self.t.get('whisper_end', '<|/whisper|>')),
-                "shout": (self.t.get('shout_start', '<|shout|>'), self.t.get('shout_end', '<|/shout|>')),
-                "growl": (self.t.get('growl_start', '<|growl|>'), self.t.get('growl_end', '<|/growl|>')),
-                "falsetto": (self.t.get('falsetto_start', '<|falsetto|>'), self.t.get('falsetto_end', '<|/falsetto|>')),
-                "breath": (self.t.get('breath_in', '<|breath_in|>'), self.t.get('breath_out', '<|breath_out|>')),
-                "sigh": (self.t.get('sigh_express', '<|sigh_x|>'), ''),
-                "gasp": (self.t.get('gasp', '<|gasp|>'), ''),
-                "yawn": (self.t.get('yawn', '<|yawn|>'), ''),
-                "normal": (self.t.get('speak_start', '<|speak|>'), self.t.get('speak_end', '<|/speak|>')),
-            }
+            # Get speaker/style description
+            speaker_id = sample.get("speaker_id", "")
+            gender = sample.get("gender", "")
+            age = sample.get("age", "")
+            style_description = sample.get("speaker_description", sample.get("text_description", ""))
+            expression = sample.get("expression", sample.get("style", ""))
             
-            start_token, end_token = expression_map.get(expression.lower(), 
-                                                        (self.t.get('speak_start', '<|speak|>'), 
-                                                         self.t.get('speak_end', '<|/speak|>')))
+            # Build speaker info
+            speaker_info = ""
+            if gender:
+                speaker_info = f"Speaker: {gender}"
+            if age:
+                speaker_info += f", age {age}"
+            if style_description:
+                speaker_info += f". Style: {style_description}"
+            elif expression:
+                speaker_info += f". Expression: {expression}"
             
-            # Format: Speak with specific expression
-            formatted_text = (
-                f"{self.t['user_start']}\n"
-                f"Say in a {expression} voice: {text}\n"
-                f"{self.t['user_end']}\n"
-                f"{self.t['assistant_start']}\n"
-                f"{start_token}[SPEECH]{end_token}\n"
-                f"{self.t['assistant_end']}"
-            )
+            # Format: TTS training
+            if speaker_info:
+                formatted_text = (
+                    f"{self.t['user_start']}\n"
+                    f"[TTS] {speaker_info}\n"
+                    f"Read: {text}\n"
+                    f"{self.t['user_end']}\n"
+                    f"{self.t['assistant_start']}\n"
+                    f"{self.t.get('speak_start', '<|speak|>')}[AUDIO]{self.t.get('speak_end', '<|/speak|>')}\n"
+                    f"{self.t['assistant_end']}"
+                )
+            else:
+                formatted_text = (
+                    f"{self.t['user_start']}\n"
+                    f"Read aloud: {text}\n"
+                    f"{self.t['user_end']}\n"
+                    f"{self.t['assistant_start']}\n"
+                    f"{self.t.get('speak_start', '<|speak|>')}[AUDIO]{self.t.get('speak_end', '<|/speak|>')}\n"
+                    f"{self.t['assistant_end']}"
+                )
             
             formatted_text = self._wrap_sequence(formatted_text)
             
@@ -1712,7 +1704,7 @@ class MultimodalFormatter:
                 "text": formatted_text,
                 "type": "voice_expressive",
                 "has_audio": True,
-                "expression": expression,
+                "expression": expression if expression else "normal",
                 "transcript": text,
             }
         except:

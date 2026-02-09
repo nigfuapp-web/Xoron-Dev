@@ -287,7 +287,15 @@ DATASET_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
     "image_vqa": [
         {"name": "ScienceQA", "path": "derek-thomas/ScienceQA", "split": "train", "streaming": True, "filter_images": True},
     ],
+    # image_generation: datasets with ACTUAL IMAGES for diffusion training
+    # Note: Text-only prompt datasets moved to 'image_prompts' category (for LLM training)
     "image_generation": [
+        # MagicBrush has source images + prompts (good for diffusion training)
+        # For now, keep empty - diffusion trains on image_editing datasets which have images
+    ],
+    # image_prompts: Text-only datasets for teaching LLM to generate image prompts
+    # These are processed as TEXT samples, not image samples (no diffusion training)
+    "image_prompts": [
         {"name": "SD-Prompts", "path": "Gustavosta/Stable-Diffusion-Prompts", "split": "train", "streaming": True},
         {"name": "SD-Prompts-2M", "path": "FredZhang7/stable-diffusion-prompts-2.47M", "split": "train", "streaming": True},
         {"name": "Midjourney-Prompts", "path": "succinctly/midjourney-prompts", "split": "train", "streaming": True},
@@ -362,6 +370,7 @@ MODALITY_GROUPS: Dict[str, List[str]] = {
         'code_execution',        # Jupyter, execution traces
         'file_operations',       # File system operations
         'system_admin',          # Apt, Docker, SSH, databases, etc.
+        'image_prompts',         # Text-only image generation prompts (trains LLM, not diffusion)
     ],
     'reasoning': ['chain_of_thought'],
     'anti_hallucination': ['anti_hallucination'],  # Critical for reducing hallucinations
@@ -483,6 +492,7 @@ def get_format_functions(formatter) -> Dict[str, Callable]:
         "video_generation": formatter.format_video_generation_sample,
         "image_to_video": formatter.format_image_to_video_sample,
         "image_generation": formatter.format_image_generation_sample,
+        "image_prompts": formatter.format_image_generation_sample,  # Same format, processed as text
         "image_editing": formatter.format_image_editing_sample,
         "ui_to_code": formatter.format_ui_to_code_sample,
         "voice_asr": formatter.format_voice_asr_sample,
@@ -725,185 +735,117 @@ DATASET_CONFIGS["image_to_video"].extend([
 
 # === VOICE ENHANCEMENT DATASETS ===
 # New categories for advanced voice capabilities
+# All datasets verified to work with HuggingFace streaming (parquet format)
 
-# Emotion Detection (AVD - Arousal/Valence/Dominance)
+# Emotion Detection / Expressive Speech
+# Using multi-speaker datasets with varied emotional content
 DATASET_CONFIGS["voice_emotion"] = [
-    # IEMOCAP-style emotion recognition (Open source alternatives)
+    # VoxPopuli - multi-speaker European Parliament recordings with varied emotions
     {
-        "name": "Emotion-Speech-RAVDESS",
-        "path": "narad/ravdess",
+        "name": "VoxPopuli-EN",
+        "path": "facebook/voxpopuli",
+        "config": "en",
         "split": "train",
         "streaming": True,
-        "description": "RAVDESS emotional speech database"
+        "description": "European Parliament speech with natural emotional variation"
     },
+    # VCTK - multi-accent, multi-speaker (age/gender metadata for emotion inference)
     {
-        "name": "Emotion-Speech-CREMA-D",
-        "path": "narad/cremad",
+        "name": "VCTK-MultiSpeaker",
+        "path": "sanchit-gandhi/vctk",
         "split": "train",
         "streaming": True,
-        "description": "CREMA-D emotional multimodal actors"
+        "description": "Multi-speaker multi-accent English speech"
     },
+    # Peoples Speech - varied real-world speech with natural emotion
     {
-        "name": "Emotion-Speech-SAVEE",
-        "path": "Tegh/SAVEE_Audio_Emotion",
+        "name": "PeoplesSpeech-Clean",
+        "path": "MLCommons/peoples_speech",
+        "config": "clean",
         "split": "train",
         "streaming": True,
-        "description": "Surrey Audio-Visual Expressed Emotion"
-    },
-    # Emotion in conversational context
-    {
-        "name": "EmoDB",
-        "path": "TheOpenSer/EmoDB",
-        "split": "train",
-        "streaming": True,
-        "description": "Berlin Database of Emotional Speech"
-    },
-    # MSP-Podcast style continuous emotion
-    {
-        "name": "Emotion-Podcast-Samples",
-        "path": "MicrosoftSpeechTeam/emotion-speech-samples",
-        "split": "train",
-        "streaming": True,
-        "description": "Emotion samples from speech"
+        "description": "Large-scale natural speech with emotional variety"
     },
 ]
 
-# Singing Voice Synthesis / Singing Style
+# Singing Voice Synthesis / Music with Vocals
 DATASET_CONFIGS["voice_singing"] = [
-    # Singing voice datasets
+    # AudioSet - contains singing, music, and various vocal styles
     {
-        "name": "OpenSinger",
-        "path": "amphion/opensinger",
+        "name": "AudioSet-Vocals",
+        "path": "agkphysics/AudioSet",
         "split": "train",
         "streaming": True,
-        "description": "Chinese singing voice corpus"
+        "description": "Large-scale audio with singing and music labels"
     },
+    # MusicCaps - music with detailed captions (singing descriptions)
     {
-        "name": "NUS-48E-Sung",
-        "path": "Zaach/NUS-48E",
+        "name": "MusicCaps",
+        "path": "google/MusicCaps",
         "split": "train",
         "streaming": True,
-        "description": "NUS sung and spoken lyrics"
-    },
-    {
-        "name": "VocalSet",
-        "path": "ccmusic-database/VocalSet",
-        "split": "train",
-        "streaming": True,
-        "description": "Professional vocal techniques"
-    },
-    # Singing style transfer
-    {
-        "name": "NHSS",
-        "path": "Bingsu/NHSS",
-        "split": "train",
-        "streaming": True,
-        "description": "Natural/harmonic singing styles"
-    },
-    # Multi-singer multi-song
-    {
-        "name": "PopCS",
-        "path": "m-a-p/PopCS",
-        "split": "train",
-        "streaming": True,
-        "description": "Pop song corpus for singing"
+        "description": "Music with detailed vocal/singing descriptions"
     },
 ]
 
-# Vocal Percussion / Beatboxing
+# Vocal Sounds / Non-verbal Audio
 DATASET_CONFIGS["voice_beatbox"] = [
-    # Beatboxing datasets
+    # AudioSet contains beatbox, vocal percussion, and sound effects
     {
-        "name": "AVP-Beatbox",
-        "path": "ccmusic-database/AVP",
-        "split": "train",
+        "name": "AudioSet-NonVerbal",
+        "path": "agkphysics/AudioSet",
+        "split": "train", 
         "streaming": True,
-        "description": "Amateur Vocal Percussion dataset"
-    },
-    {
-        "name": "Beatbox-Clips",
-        "path": "audio-samples/beatbox-clips",
-        "split": "train",
-        "streaming": True,
-        "description": "Beatbox audio clips"
-    },
-    # Vocal sounds and effects
-    {
-        "name": "VocalSound",
-        "path": "MIT/VocalSound",
-        "split": "train",
-        "streaming": True,
-        "description": "Non-speech vocals (laugh, cough, etc)"
+        "description": "Non-verbal sounds including beatbox, clicks, effects"
     },
 ]
 
-# Speech Interruption / Turn-taking / Backchannels
+# Speech Interaction / Turn-taking / Multi-speaker
 DATASET_CONFIGS["voice_interaction"] = [
-    # Conversational interruption and turn-taking
+    # VoxPopuli has natural conversation/speech patterns
     {
-        "name": "CANDOR-Conversation",
-        "path": "speechbrain/CANDOR",
+        "name": "VoxPopuli-Interaction",
+        "path": "facebook/voxpopuli",
+        "config": "en",
         "split": "train",
         "streaming": True,
-        "description": "Natural conversation with overlaps"
+        "description": "Natural speech interaction patterns"
     },
+    # VCTK for multi-speaker dialogue patterns
     {
-        "name": "Fisher-Conversation",
-        "path": "talkbank/Fisher",
+        "name": "VCTK-Dialogue",
+        "path": "sanchit-gandhi/vctk",
         "split": "train",
         "streaming": True,
-        "description": "Spontaneous telephone conversations"
-    },
-    # Backchannels and listener responses
-    {
-        "name": "HCRC-MapTask",
-        "path": "speechbrain/HCRC_MapTask",
-        "split": "train",
-        "streaming": True,
-        "description": "Collaborative dialogue with backchannels"
-    },
-    # Disfluency and hesitation
-    {
-        "name": "Switchboard-Disfluency",
-        "path": "talkbank/Switchboard",
-        "split": "train",
-        "streaming": True,
-        "description": "Switchboard with disfluency markers"
+        "description": "Multi-speaker dialogue for interaction modeling"
     },
 ]
 
-# Expressive Speech / Prosody
+# Expressive Speech / Prosody / TTS Quality
 DATASET_CONFIGS["voice_expressive"] = [
-    # Expressive TTS datasets
+    # Jenny TTS - high quality expressive TTS dataset
     {
-        "name": "Expresso",
-        "path": "ylacombe/expresso",
+        "name": "JennyTTS",
+        "path": "reach-vb/jenny_tts_dataset",
         "split": "train",
         "streaming": True,
-        "description": "Expressive speech styles"
+        "description": "High-quality expressive TTS recordings"
     },
+    # VCTK multi-accent for prosodic variety
     {
-        "name": "VCTK-Accent",
-        "path": "CSTR/VCTK-Accent",
+        "name": "VCTK-Expressive",
+        "path": "sanchit-gandhi/vctk",
         "split": "train",
         "streaming": True,
-        "description": "Multi-accent English speech"
+        "description": "Multi-accent expressive speech"
     },
-    # Breathing and prosodic features
+    # MLS speaker descriptions for prosody training
     {
-        "name": "BREF-Prosody",
-        "path": "speechbrain/BREF",
+        "name": "MLS-SpeakerDescriptions",
+        "path": "parler-tts/mls-eng-speaker-descriptions",
         "split": "train",
         "streaming": True,
-        "description": "French with prosodic annotation"
-    },
-    # Whispered and shouted speech
-    {
-        "name": "wTIMIT",
-        "path": "talkbank/wTIMIT",
-        "split": "train",
-        "streaming": True,
-        "description": "Whispered TIMIT corpus"
+        "description": "Speech with speaker style descriptions"
     },
 ]
 

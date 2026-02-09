@@ -905,7 +905,13 @@ class TrueStreamingDataset(IterableDataset):
 
     def _extract_audio_data(self, sample: Dict, dtype: str) -> Any:
         """Extract raw audio data from sample."""
-        if dtype not in ['voice_asr', 'voice_tts']:
+        # All audio dataset types
+        audio_dtypes = {
+            'voice_asr', 'voice_tts',
+            'voice_emotion', 'voice_singing', 'voice_beatbox',
+            'voice_interaction', 'voice_expressive'
+        }
+        if dtype not in audio_dtypes:
             return None
         
         audio_fields = ["audio", "speech", "waveform", "audio_path", "file"]
@@ -1020,7 +1026,9 @@ class TrueStreamingDataset(IterableDataset):
             # NEVER create zero tensors - only train on REAL data or SKIP
             is_image_dtype = dtype in ['image_caption', 'image_vqa', 'image_generation', 'image_editing', 'ui_to_code']
             is_video_dtype = dtype in ['video_caption', 'video_qa', 'video_generation', 'image_to_video', 'video_preference', 'video_likert']
-            is_audio_sample = dtype in ['voice_asr', 'voice_tts']
+            is_audio_sample = dtype in ['voice_asr', 'voice_tts', 
+                                        'voice_emotion', 'voice_singing', 'voice_beatbox',
+                                        'voice_interaction', 'voice_expressive']
             
             # === IMAGE PROCESSING ===
             pixel_values = None
@@ -1149,10 +1157,11 @@ class TrueStreamingDataset(IterableDataset):
         
         # Map dataset types to modalities
         modality_map = {
-            "text": ["text", "code", "conversation", "tool_use", "agentic"],
+            "text": ["text", "code", "conversation", "tool_use", "agentic", "image_prompts"],
             "image": ["image_caption", "image_vqa", "image_generation", "image_editing", "ui_to_code"],
             "video": ["video_caption", "video_qa", "video_generation", "image_to_video", "video_preference", "video_likert"],
-            "audio": ["voice_asr", "voice_tts"],
+            "audio": ["voice_asr", "voice_tts", "voice_emotion", "voice_singing", "voice_beatbox",
+                      "voice_interaction", "voice_expressive"],
         }
         
         # Reverse map: dtype -> modality
