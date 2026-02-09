@@ -1295,55 +1295,63 @@ class TrueStreamingDataset(IterableDataset):
                     # Process and format the sample ONCE from streaming
                     processed = self._process_raw_sample(raw_sample, source["dtype"], source["config"])
                     
-                    if processed is not None:
-                        # SUCCESS - reset failure counter
-                        source["consecutive_failures"] = 0
-                        
-                        # Yield the SAME processed sample multiple times
-                        # Sample is loaded from stream once, processed once, yielded sample_repeat times
-                        # This is memory efficient - same tensors are reused
-                        for repeat_idx in range(self.sample_repeat):
-                            yield processed
-                            total_yields += 1
-                        
-                        # Count as one unique sample
-                        unique_samples += 1
-                        source["epoch_count"] += 1  # Per-epoch count (for limit check)
-                        source["stream_position"] += 1  # Cumulative position (for resume)
-                        
-                        # Update per-modality count for dual training
-                        modality_counts[source_modality] = modality_counts.get(source_modality, 0) + 1
-                        
-                        dtype = source["dtype"]
-                        type_counts[dtype] = type_counts.get(dtype, 0) + 1
-                        dataset_counts[source["name"]] = source["epoch_count"]
-                        
-                        # Update streaming state for resume support
-                        # Save the STREAM POSITION (cumulative) so next epoch continues from here
-                        self._streaming_state["unique_samples"] = unique_samples
-                        self._streaming_state["total_yields"] = total_yields
-                        self._streaming_state["dataset_positions"][source["name"]] = source["stream_position"]
-                        self._streaming_state["modality_counts"] = modality_counts.copy()
-                        
-                        # Also update per-modality positions for --text, --image, --video, --voice resume
-                        for modality, dtypes in modality_map.items():
-                            if dtype in dtypes:
-                                self._streaming_state["modality_positions"][modality][source["name"]] = source["stream_position"]
-                                break
-                        
-                        # Log progress and save state every 500 unique samples
-                        if unique_samples % 500 == 0:
-                            if self.is_dual_training:
-                                progress_parts = []
-                                for mod, max_val in self.modality_max_values.items():
-                                    current = modality_counts.get(mod, 0)
-                                    progress_parts.append(f"{mod}: {current}/{max_val}")
-                                print(f"   📈 {' | '.join(progress_parts)}", flush=True)
-                            else:
-                                print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} samples", flush=True)
-                            # Auto-save state if path is set
-                            if self._state_save_path:
-                                self.save_streaming_state(self._state_save_path)
+                    if processed is None:
+                        # Processing returned None - count as failure
+                        source["consecutive_failures"] = source.get("consecutive_failures", 0) + 1
+                        if source["consecutive_failures"] >= 100:  # More lenient for None returns
+                            source["exhausted"] = True
+                            sources_to_remove.append(source_idx)
+                            print(f"   ⚠️ {source.get('name', 'unknown')}: exhausted (100 consecutive processing failures)", flush=True)
+                        continue  # Skip to next source
+                    
+                    # SUCCESS - reset failure counter
+                    source["consecutive_failures"] = 0
+                    
+                    # Yield the SAME processed sample multiple times
+                    # Sample is loaded from stream once, processed once, yielded sample_repeat times
+                    # This is memory efficient - same tensors are reused
+                    for repeat_idx in range(self.sample_repeat):
+                        yield processed
+                        total_yields += 1
+                    
+                    # Count as one unique sample
+                    unique_samples += 1
+                    source["epoch_count"] += 1  # Per-epoch count (for limit check)
+                    source["stream_position"] += 1  # Cumulative position (for resume)
+                    
+                    # Update per-modality count for dual training
+                    modality_counts[source_modality] = modality_counts.get(source_modality, 0) + 1
+                    
+                    dtype = source["dtype"]
+                    type_counts[dtype] = type_counts.get(dtype, 0) + 1
+                    dataset_counts[source["name"]] = source["epoch_count"]
+                    
+                    # Update streaming state for resume support
+                    # Save the STREAM POSITION (cumulative) so next epoch continues from here
+                    self._streaming_state["unique_samples"] = unique_samples
+                    self._streaming_state["total_yields"] = total_yields
+                    self._streaming_state["dataset_positions"][source["name"]] = source["stream_position"]
+                    self._streaming_state["modality_counts"] = modality_counts.copy()
+                    
+                    # Also update per-modality positions for --text, --image, --video, --voice resume
+                    for modality, dtypes in modality_map.items():
+                        if dtype in dtypes:
+                            self._streaming_state["modality_positions"][modality][source["name"]] = source["stream_position"]
+                            break
+                    
+                    # Log progress and save state every 500 unique samples
+                    if unique_samples % 500 == 0:
+                        if self.is_dual_training:
+                            progress_parts = []
+                            for mod, max_val in self.modality_max_values.items():
+                                current = modality_counts.get(mod, 0)
+                                progress_parts.append(f"{mod}: {current}/{max_val}")
+                            print(f"   📈 {' | '.join(progress_parts)}", flush=True)
+                        else:
+                            print(f"   📈 {unique_samples:,}/{self.max_per_epoch:,} samples", flush=True)
+                        # Auto-save state if path is set
+                        if self._state_save_path:
+                            self.save_streaming_state(self._state_save_path)
                 
                 except StopIteration:
                     source["exhausted"] = True
