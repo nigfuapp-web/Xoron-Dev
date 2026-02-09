@@ -1520,3 +1520,843 @@ class AudioDecoder(nn.Module):
         mel = mel + mel_post
 
         return mel, durations, alignment
+
+
+# === SOTA VOICE ENHANCEMENT COMPONENTS ===
+
+
+class ProsodyAwareEoTPredictor(nn.Module):
+    """
+    Prosody-aware End-of-Turn (EoT) Prediction for real-time interruption detection.
+    
+    Detects when a speaker is about to finish their turn, allowing the model to:
+    - Detect user interruptions (coughs, laughs, "uh-huh", etc.)
+    - Yield the floor when appropriate
+    - Adjust response mid-stream
+    
+    Uses prosodic features (pitch, energy, rhythm) combined with semantic features.
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_eot_classes: int = 5,  # continue, yield, interrupt, backoff, end
+        prosody_dim: int = 128,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_eot_classes = num_eot_classes
+        
+        # Prosody feature extractor (pitch, energy, duration)
+        self.pitch_conv = nn.Sequential(
+            nn.Conv1d(1, prosody_dim // 2, kernel_size=5, padding=2),
+            nn.SiLU(),
+            nn.Conv1d(prosody_dim // 2, prosody_dim, kernel_size=3, padding=1),
+        )
+        self.energy_conv = nn.Sequential(
+            nn.Conv1d(1, prosody_dim // 2, kernel_size=5, padding=2),
+            nn.SiLU(),
+            nn.Conv1d(prosody_dim // 2, prosody_dim, kernel_size=3, padding=1),
+        )
+        
+        # Voice Activity Detection (VAD) head
+        self.vad_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 2, 2),  # speech / non-speech
+        )
+        
+        # Interruption event classifier
+        self.event_classifier = nn.Sequential(
+            nn.Linear(hidden_size + prosody_dim * 2, hidden_size),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 2, 8),  # laugh, cough, sigh, hesitation, backchannel, agreement, disagreement, confusion
+        )
+        
+        # Temporal attention for turn-taking context
+        self.temporal_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        
+        # EoT prediction head with prosody context
+        self.eot_head = nn.Sequential(
+            nn.Linear(hidden_size + prosody_dim * 2, hidden_size),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, num_eot_classes),
+        )
+        
+        # Backoff probability (should model pause and wait?)
+        self.backoff_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Sigmoid(),
+        )
+        
+        print(f"   🎙️ ProsodyAwareEoTPredictor: {num_eot_classes} turn states, {prosody_dim}d prosody")
+    
+    def extract_prosody(self, audio_features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Extract pitch and energy prosodic features."""
+        # Simple proxy: use first and last channels as pitch/energy
+        # In practice, would use actual pitch/energy extraction
+        batch_size, seq_len, hidden = audio_features.shape
+        
+        # Transpose for conv1d: [B, T, H] -> [B, H, T]
+        x = audio_features.transpose(1, 2)
+        
+        # Use subset of features as proxy for pitch/energy
+        pitch_proxy = x[:, :1, :]  # [B, 1, T]
+        energy_proxy = x.pow(2).mean(dim=1, keepdim=True)  # [B, 1, T]
+        
+        pitch_features = self.pitch_conv(pitch_proxy).transpose(1, 2)  # [B, T, prosody_dim]
+        energy_features = self.energy_conv(energy_proxy).transpose(1, 2)  # [B, T, prosody_dim]
+        
+        return pitch_features, energy_features
+    
+    def forward(
+        self,
+        audio_features: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Predict end-of-turn and interruption events.
+        
+        Args:
+            audio_features: [B, T, hidden_size] encoded audio
+            attention_mask: [B, T] optional mask
+            
+        Returns:
+            dict with:
+                - eot_logits: [B, T, num_eot_classes] turn state predictions
+                - event_logits: [B, T, 8] interruption event predictions
+                - vad_logits: [B, T, 2] voice activity predictions
+                - backoff_prob: [B, T, 1] backoff probability
+        """
+        batch_size, seq_len, _ = audio_features.shape
+        
+        # Extract prosodic features
+        pitch_features, energy_features = self.extract_prosody(audio_features)
+        
+        # Temporal attention for context
+        if attention_mask is not None:
+            key_padding_mask = ~attention_mask.bool()
+        else:
+            key_padding_mask = None
+        
+        contextualized, _ = self.temporal_attn(
+            audio_features, audio_features, audio_features,
+            key_padding_mask=key_padding_mask,
+        )
+        
+        # Concatenate with prosody
+        combined = torch.cat([contextualized, pitch_features, energy_features], dim=-1)
+        
+        # Predictions
+        eot_logits = self.eot_head(combined)
+        event_logits = self.event_classifier(combined)
+        vad_logits = self.vad_head(contextualized)
+        backoff_prob = self.backoff_head(contextualized)
+        
+        return {
+            "eot_logits": eot_logits,
+            "event_logits": event_logits,
+            "vad_logits": vad_logits,
+            "backoff_prob": backoff_prob,
+        }
+
+
+class AVDEmotionRecognizer(nn.Module):
+    """
+    Continuous AVD (Arousal/Valence/Dominance) Emotion Recognition.
+    
+    Predicts both discrete emotion categories and continuous AVD values
+    for nuanced emotion understanding and response adaptation.
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_emotions: int = 10,  # happy, sad, angry, fearful, surprised, disgusted, neutral, excited, frustrated, bored
+        num_layers: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_emotions = num_emotions
+        
+        # Emotion-specific attention
+        self.emotion_query = nn.Parameter(torch.randn(1, 1, hidden_size))
+        self.emotion_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=8,
+            dropout=dropout,
+            batch_first=True,
+        )
+        
+        # Temporal modeling for emotion dynamics
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2, groups=8),
+            nn.SiLU(),
+            nn.Conv1d(hidden_size, hidden_size, kernel_size=3, padding=1),
+        )
+        
+        # Discrete emotion classifier
+        self.emotion_classifier = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, num_emotions),
+        )
+        
+        # Continuous AVD regression heads
+        self.arousal_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Sigmoid(),  # 0-1 range
+        )
+        
+        self.valence_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Tanh(),  # -1 to 1 range
+        )
+        
+        self.dominance_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Sigmoid(),  # 0-1 range
+        )
+        
+        # Response adaptation head (how should model respond?)
+        self.response_adaptation = nn.Sequential(
+            nn.Linear(hidden_size + 3, hidden_size // 2),  # +3 for AVD values
+            nn.SiLU(),
+            nn.Linear(hidden_size // 2, 4),  # match, contrast, calm, energetic
+        )
+        
+        print(f"   😊 AVDEmotionRecognizer: {num_emotions} emotions + continuous AVD")
+    
+    def forward(
+        self,
+        audio_features: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Recognize emotion from audio features.
+        
+        Args:
+            audio_features: [B, T, hidden_size] encoded audio
+            attention_mask: [B, T] optional mask
+            
+        Returns:
+            dict with:
+                - emotion_logits: [B, num_emotions] discrete emotion
+                - arousal: [B, 1] arousal value (0-1)
+                - valence: [B, 1] valence value (-1 to 1)
+                - dominance: [B, 1] dominance value (0-1)
+                - response_mode: [B, 4] response adaptation logits
+        """
+        batch_size, seq_len, _ = audio_features.shape
+        
+        # Temporal convolution for dynamics
+        x_conv = self.temporal_conv(audio_features.transpose(1, 2)).transpose(1, 2)
+        x = audio_features + x_conv
+        
+        # Emotion-specific attention (pool to single vector)
+        query = self.emotion_query.expand(batch_size, -1, -1)
+        if attention_mask is not None:
+            key_padding_mask = ~attention_mask.bool()
+        else:
+            key_padding_mask = None
+        
+        emotion_context, _ = self.emotion_attn(
+            query, x, x,
+            key_padding_mask=key_padding_mask,
+        )
+        emotion_vec = emotion_context.squeeze(1)  # [B, hidden_size]
+        
+        # Predictions
+        emotion_logits = self.emotion_classifier(emotion_vec)
+        arousal = self.arousal_head(emotion_vec)
+        valence = self.valence_head(emotion_vec)
+        dominance = self.dominance_head(emotion_vec)
+        
+        # Response adaptation based on detected emotion
+        avd_concat = torch.cat([emotion_vec, arousal, valence, dominance], dim=-1)
+        response_mode = self.response_adaptation(avd_concat)
+        
+        return {
+            "emotion_logits": emotion_logits,
+            "arousal": arousal,
+            "valence": valence,
+            "dominance": dominance,
+            "response_mode": response_mode,
+        }
+
+
+class DynamicLatentVocalizer(nn.Module):
+    """
+    Dynamic Latent Vocalizations for singing, rapping, humming, etc.
+    
+    Extends speech synthesis to include:
+    - Singing with pitch control
+    - Rapping with rhythm control
+    - Humming, whistling, chanting
+    - Musical style transfer
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_styles: int = 8,  # pop, rock, jazz, classical, hiphop, rnb, country, soul
+        num_vocal_modes: int = 6,  # speak, sing, rap, hum, whistle, chant
+        pitch_bins: int = 256,
+        tempo_range: Tuple[int, int] = (60, 180),  # BPM range
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_styles = num_styles
+        self.num_vocal_modes = num_vocal_modes
+        self.pitch_bins = pitch_bins
+        self.tempo_range = tempo_range
+        
+        # Style embedding
+        self.style_embed = nn.Embedding(num_styles, hidden_size // 4)
+        
+        # Vocal mode embedding
+        self.mode_embed = nn.Embedding(num_vocal_modes, hidden_size // 4)
+        
+        # Pitch encoder (for singing/melody control)
+        self.pitch_embed = nn.Embedding(pitch_bins, hidden_size // 4)
+        self.pitch_predictor = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 2, pitch_bins),
+        )
+        
+        # Tempo/rhythm encoder
+        self.tempo_encoder = nn.Sequential(
+            nn.Linear(1, hidden_size // 8),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 8, hidden_size // 4),
+        )
+        
+        # Rhythm pattern attention
+        self.rhythm_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=4,
+            dropout=0.1,
+            batch_first=True,
+        )
+        
+        # Style transfer network
+        self.style_transfer = nn.Sequential(
+            nn.Linear(hidden_size + hidden_size // 2, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        
+        # Lyrics-to-melody alignment
+        self.lyrics_aligner = MonotonicAlignmentSearch(hidden_size)
+        
+        # Output projection for vocal features
+        self.output_proj = nn.Linear(hidden_size, hidden_size)
+        
+        print(f"   🎵 DynamicLatentVocalizer: {num_styles} styles, {num_vocal_modes} modes")
+    
+    def forward(
+        self,
+        text_features: torch.Tensor,
+        style_id: Optional[torch.Tensor] = None,
+        mode_id: Optional[torch.Tensor] = None,
+        target_pitch: Optional[torch.Tensor] = None,
+        tempo_bpm: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Generate vocalization features for singing/rapping/etc.
+        
+        Args:
+            text_features: [B, T, hidden_size] text/lyrics embeddings
+            style_id: [B] style indices (0-7)
+            mode_id: [B] vocal mode indices (0-5)
+            target_pitch: [B, T] optional pitch targets
+            tempo_bpm: [B] optional tempo in BPM
+            
+        Returns:
+            dict with:
+                - vocal_features: [B, T', hidden_size] vocalization features
+                - pitch_logits: [B, T, pitch_bins] predicted pitch
+                - alignment: [B, T, T'] text-to-audio alignment
+        """
+        batch_size, seq_len, _ = text_features.shape
+        device = text_features.device
+        
+        # Default style and mode
+        if style_id is None:
+            style_id = torch.zeros(batch_size, dtype=torch.long, device=device)
+        if mode_id is None:
+            mode_id = torch.zeros(batch_size, dtype=torch.long, device=device)
+        
+        # Get embeddings
+        style_emb = self.style_embed(style_id).unsqueeze(1).expand(-1, seq_len, -1)
+        mode_emb = self.mode_embed(mode_id).unsqueeze(1).expand(-1, seq_len, -1)
+        
+        # Tempo encoding
+        if tempo_bpm is not None:
+            tempo_norm = (tempo_bpm.float() - self.tempo_range[0]) / (self.tempo_range[1] - self.tempo_range[0])
+            tempo_emb = self.tempo_encoder(tempo_norm.unsqueeze(-1)).unsqueeze(1).expand(-1, seq_len, -1)
+        else:
+            tempo_emb = torch.zeros(batch_size, seq_len, self.hidden_size // 4, device=device)
+        
+        # Pitch prediction
+        pitch_logits = self.pitch_predictor(text_features)
+        
+        if target_pitch is not None:
+            pitch_emb = self.pitch_embed(target_pitch)
+        else:
+            pitch_idx = pitch_logits.argmax(dim=-1)
+            pitch_emb = self.pitch_embed(pitch_idx)
+        
+        # Combine all conditions
+        conditions = torch.cat([style_emb, mode_emb, tempo_emb, pitch_emb], dim=-1)
+        
+        # Style transfer
+        combined = torch.cat([text_features, conditions], dim=-1)
+        vocal_features = self.style_transfer(combined)
+        
+        # Rhythm attention
+        vocal_features, _ = self.rhythm_attn(vocal_features, vocal_features, vocal_features)
+        
+        # Get alignment
+        alignment, durations = self.lyrics_aligner(text_features)
+        
+        # Final projection
+        vocal_features = self.output_proj(vocal_features)
+        
+        return {
+            "vocal_features": vocal_features,
+            "pitch_logits": pitch_logits,
+            "alignment": alignment,
+            "durations": durations,
+        }
+
+
+class NeuralSoundEffectGenerator(nn.Module):
+    """
+    Neural Style Transfer for Sound Effects and Non-verbal Vocalizations.
+    
+    Generates:
+    - Beatboxing (kicks, snares, hi-hats)
+    - Vocal clicks, pops, tongue sounds
+    - Breathing, sighing, gasping
+    - Non-verbal expressions (hmm, aha, wow, etc.)
+    - Polyphonic ad-libs and harmonies
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        num_effect_types: int = 20,  # Various sound effects
+        num_layers: int = 3,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_effect_types = num_effect_types
+        
+        # Sound effect type embedding
+        self.effect_embed = nn.Embedding(num_effect_types, hidden_size)
+        
+        # Effect categories:
+        # 0-4: Percussion (kick, snare, hihat, crash, fill)
+        # 5-8: Mouth sounds (click, pop, whistle, tongue)
+        # 9-13: Breathing (in, out, heavy, sigh, gasp)
+        # 14-19: Expressions (hmm, aha, wow, ugh, phew, tsk)
+        
+        # Waveform generator (1D transposed convolutions)
+        self.generator = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 4),
+            nn.SiLU(),
+            nn.Unflatten(1, (hidden_size, 4)),
+            nn.ConvTranspose1d(hidden_size, hidden_size // 2, 4, 2, 1),
+            nn.SiLU(),
+            nn.ConvTranspose1d(hidden_size // 2, hidden_size // 4, 4, 2, 1),
+            nn.SiLU(),
+            nn.ConvTranspose1d(hidden_size // 4, hidden_size // 8, 4, 2, 1),
+            nn.SiLU(),
+            nn.ConvTranspose1d(hidden_size // 8, 1, 4, 2, 1),
+            nn.Tanh(),  # Waveform range [-1, 1]
+        )
+        
+        # Duration predictor for each effect
+        self.duration_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Softplus(),  # Positive duration
+        )
+        
+        # Intensity control
+        self.intensity_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Sigmoid(),  # 0-1 intensity
+        )
+        
+        # Polyphonic blending for multiple simultaneous effects
+        self.blend_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=4,
+            batch_first=True,
+        )
+        
+        print(f"   🥁 NeuralSoundEffectGenerator: {num_effect_types} effect types")
+    
+    def forward(
+        self,
+        effect_ids: torch.Tensor,
+        context: Optional[torch.Tensor] = None,
+        intensity: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Generate sound effect features.
+        
+        Args:
+            effect_ids: [B] or [B, N] effect type indices
+            context: [B, T, hidden_size] optional context features
+            intensity: [B] or [B, N] optional intensity values
+            
+        Returns:
+            dict with:
+                - effect_features: [B, T', hidden_size] generated features
+                - waveform: [B, 1, samples] raw waveform (if generating directly)
+                - duration: [B, 1] predicted duration
+        """
+        # Handle single or multiple effects
+        if effect_ids.dim() == 1:
+            effect_ids = effect_ids.unsqueeze(1)
+        
+        batch_size, num_effects = effect_ids.shape
+        device = effect_ids.device
+        
+        # Get effect embeddings
+        effect_emb = self.effect_embed(effect_ids)  # [B, N, hidden_size]
+        
+        # Blend multiple effects if present
+        if num_effects > 1:
+            effect_emb, _ = self.blend_attn(effect_emb, effect_emb, effect_emb)
+        
+        effect_vec = effect_emb.mean(dim=1)  # [B, hidden_size]
+        
+        # Context integration
+        if context is not None:
+            context_vec = context.mean(dim=1)
+            effect_vec = effect_vec + context_vec
+        
+        # Predict duration and intensity
+        duration = self.duration_head(effect_vec)
+        pred_intensity = self.intensity_head(effect_vec)
+        
+        if intensity is not None:
+            pred_intensity = intensity.unsqueeze(-1) if intensity.dim() == 1 else intensity
+        
+        # Scale by intensity
+        effect_vec = effect_vec * pred_intensity
+        
+        # Generate waveform-like features
+        waveform = self.generator(effect_vec)  # [B, 1, samples]
+        
+        return {
+            "effect_features": effect_emb,
+            "waveform": waveform,
+            "duration": duration,
+            "intensity": pred_intensity,
+        }
+
+
+class SpeculativeAudioDecoder(nn.Module):
+    """
+    Mid-stream Token Rewriting support for Speculative Decoding in audio.
+    
+    Allows the model to:
+    - Generate draft audio tokens speculatively
+    - Accept/reject based on user feedback or context change
+    - Rollback and regenerate from checkpoints
+    - Smooth transitions during rewrites
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        draft_length: int = 10,  # Number of tokens to speculate
+        num_heads: int = 8,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.draft_length = draft_length
+        
+        # Draft generator (fast, approximate)
+        self.draft_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        
+        # Verification head (checks if draft is acceptable)
+        self.verify_head = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, 1),
+            nn.Sigmoid(),
+        )
+        
+        # Checkpoint encoder (saves state for rollback)
+        self.checkpoint_encoder = nn.GRU(
+            input_size=hidden_size,
+            hidden_size=hidden_size,
+            num_layers=1,
+            batch_first=True,
+        )
+        
+        # Transition smoother (for seamless rewrites)
+        self.smoother = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        
+        # Confidence estimator per token
+        self.confidence_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 4),
+            nn.SiLU(),
+            nn.Linear(hidden_size // 4, 1),
+            nn.Sigmoid(),
+        )
+        
+        print(f"   ⚡ SpeculativeAudioDecoder: draft_length={draft_length}")
+    
+    def generate_draft(
+        self,
+        context: torch.Tensor,
+        num_tokens: int = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generate draft tokens speculatively.
+        
+        Args:
+            context: [B, T, hidden_size] context features
+            num_tokens: number of draft tokens (default: self.draft_length)
+            
+        Returns:
+            draft_tokens: [B, N, hidden_size] draft features
+            confidence: [B, N, 1] confidence per token
+        """
+        if num_tokens is None:
+            num_tokens = self.draft_length
+        
+        batch_size = context.shape[0]
+        device = context.device
+        
+        # Use last context as seed
+        seed = context[:, -1:, :]  # [B, 1, hidden_size]
+        
+        draft_tokens = []
+        confidences = []
+        
+        current = seed
+        for _ in range(num_tokens):
+            draft = self.draft_head(current)
+            conf = self.confidence_head(draft)
+            draft_tokens.append(draft)
+            confidences.append(conf)
+            current = draft
+        
+        draft_tokens = torch.cat(draft_tokens, dim=1)
+        confidences = torch.cat(confidences, dim=1)
+        
+        return draft_tokens, confidences
+    
+    def verify_draft(
+        self,
+        draft_tokens: torch.Tensor,
+        new_context: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Verify if draft tokens should be accepted given new context.
+        
+        Args:
+            draft_tokens: [B, N, hidden_size] draft features
+            new_context: [B, T, hidden_size] updated context
+            
+        Returns:
+            accept_prob: [B, N, 1] probability to accept each token
+        """
+        # Compare draft with new context
+        context_summary = new_context.mean(dim=1, keepdim=True).expand(-1, draft_tokens.shape[1], -1)
+        combined = torch.cat([draft_tokens, context_summary], dim=-1)
+        accept_prob = self.verify_head(combined)
+        
+        return accept_prob
+    
+    def create_checkpoint(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        """Save hidden state for potential rollback."""
+        _, checkpoint = self.checkpoint_encoder(hidden_state)
+        return checkpoint.squeeze(0)  # [B, hidden_size]
+    
+    def smooth_transition(
+        self,
+        old_features: torch.Tensor,
+        new_features: torch.Tensor,
+    ) -> torch.Tensor:
+        """Create smooth transition between old and new features."""
+        combined = torch.cat([old_features, new_features], dim=-1)
+        return self.smoother(combined)
+    
+    def forward(
+        self,
+        context: torch.Tensor,
+        generate_draft: bool = True,
+        verify_with: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Full speculative decoding step.
+        
+        Args:
+            context: [B, T, hidden_size] current context
+            generate_draft: whether to generate new draft
+            verify_with: [B, T', hidden_size] new context to verify against
+            
+        Returns:
+            dict with draft tokens, confidence, verification results
+        """
+        results = {}
+        
+        # Create checkpoint
+        results["checkpoint"] = self.create_checkpoint(context)
+        
+        if generate_draft:
+            draft, confidence = self.generate_draft(context)
+            results["draft_tokens"] = draft
+            results["confidence"] = confidence
+        
+        if verify_with is not None and "draft_tokens" in results:
+            accept_prob = self.verify_draft(results["draft_tokens"], verify_with)
+            results["accept_prob"] = accept_prob
+        
+        return results
+
+
+class EnhancedAudioEncoder(AudioEncoder):
+    """
+    Enhanced Audio Encoder with all SOTA voice features.
+    
+    Extends AudioEncoder with:
+    - Prosody-aware EoT prediction
+    - AVD emotion recognition
+    - Dynamic latent vocalizations
+    - Neural sound effects
+    - Speculative decoding support
+    """
+    
+    def __init__(
+        self,
+        hidden_size: int = 1024,
+        n_mels: int = 80,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        ff_expansion: int = 4,
+        dropout: float = 0.1,
+        use_raw_waveform: bool = True,
+        max_audio_length: int = 3000,
+        enable_eot: bool = True,
+        enable_emotion: bool = True,
+        enable_singing: bool = True,
+        enable_effects: bool = True,
+        enable_speculative: bool = True,
+    ):
+        super().__init__(
+            hidden_size=hidden_size,
+            n_mels=n_mels,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_expansion=ff_expansion,
+            dropout=dropout,
+            use_raw_waveform=use_raw_waveform,
+            max_audio_length=max_audio_length,
+        )
+        
+        # Initialize enhancement modules
+        self.enable_eot = enable_eot
+        self.enable_emotion = enable_emotion
+        self.enable_singing = enable_singing
+        self.enable_effects = enable_effects
+        self.enable_speculative = enable_speculative
+        
+        if enable_eot:
+            self.eot_predictor = ProsodyAwareEoTPredictor(hidden_size)
+        
+        if enable_emotion:
+            self.emotion_recognizer = AVDEmotionRecognizer(hidden_size)
+        
+        if enable_singing:
+            self.vocalizer = DynamicLatentVocalizer(hidden_size)
+        
+        if enable_effects:
+            self.effects_generator = NeuralSoundEffectGenerator(hidden_size)
+        
+        if enable_speculative:
+            self.speculative_decoder = SpeculativeAudioDecoder(hidden_size)
+        
+        print(f"   🎧 EnhancedAudioEncoder initialized with SOTA features")
+        print(f"      EoT: {enable_eot}, Emotion: {enable_emotion}, Singing: {enable_singing}")
+        print(f"      Effects: {enable_effects}, Speculative: {enable_speculative}")
+    
+    def forward(
+        self,
+        audio_input: torch.Tensor,
+        speaker_ref: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_eot: bool = False,
+        return_emotion: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[dict]]:
+        """
+        Enhanced forward pass with optional SOTA features.
+        
+        Args:
+            audio_input: raw waveform or mel spectrogram
+            speaker_ref: optional speaker reference for cloning
+            attention_mask: optional attention mask
+            return_eot: whether to return EoT predictions
+            return_emotion: whether to return emotion predictions
+            
+        Returns:
+            audio_features: [B, T, hidden_size] encoded features
+            speaker_embedding: [B, speaker_dim] if speaker_ref provided
+            extras: dict with EoT/emotion predictions if requested
+        """
+        # Base encoding
+        audio_features, speaker_embedding = super().forward(
+            audio_input, speaker_ref
+        )
+        
+        extras = {}
+        
+        if return_eot and self.enable_eot:
+            extras["eot"] = self.eot_predictor(audio_features, attention_mask)
+        
+        if return_emotion and self.enable_emotion:
+            extras["emotion"] = self.emotion_recognizer(audio_features, attention_mask)
+        
+        return audio_features, speaker_embedding, extras if extras else None

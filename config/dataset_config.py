@@ -502,6 +502,12 @@ def get_format_functions(formatter) -> Dict[str, Callable]:
         "video_likert": formatter.format_video_generation_sample,
         # System admin tasks (apt, docker, ssh, databases, etc.)
         "system_admin": formatter.format_passthrough_sample,
+        # Voice enhancement datasets
+        "voice_emotion": formatter.format_voice_emotion_sample,
+        "voice_singing": formatter.format_voice_singing_sample,
+        "voice_beatbox": formatter.format_voice_beatbox_sample,
+        "voice_interaction": formatter.format_voice_interaction_sample,
+        "voice_expressive": formatter.format_voice_expressive_sample,
     }
 
 
@@ -716,3 +722,198 @@ DATASET_CONFIGS["image_to_video"].extend([
         "streaming": True
     },
 ])
+
+# === VOICE ENHANCEMENT DATASETS ===
+# New categories for advanced voice capabilities
+
+# Emotion Detection (AVD - Arousal/Valence/Dominance)
+DATASET_CONFIGS["voice_emotion"] = [
+    # IEMOCAP-style emotion recognition (Open source alternatives)
+    {
+        "name": "Emotion-Speech-RAVDESS",
+        "path": "narad/ravdess",
+        "split": "train",
+        "streaming": True,
+        "description": "RAVDESS emotional speech database"
+    },
+    {
+        "name": "Emotion-Speech-CREMA-D",
+        "path": "narad/cremad",
+        "split": "train",
+        "streaming": True,
+        "description": "CREMA-D emotional multimodal actors"
+    },
+    {
+        "name": "Emotion-Speech-SAVEE",
+        "path": "Tegh/SAVEE_Audio_Emotion",
+        "split": "train",
+        "streaming": True,
+        "description": "Surrey Audio-Visual Expressed Emotion"
+    },
+    # Emotion in conversational context
+    {
+        "name": "EmoDB",
+        "path": "TheOpenSer/EmoDB",
+        "split": "train",
+        "streaming": True,
+        "description": "Berlin Database of Emotional Speech"
+    },
+    # MSP-Podcast style continuous emotion
+    {
+        "name": "Emotion-Podcast-Samples",
+        "path": "MicrosoftSpeechTeam/emotion-speech-samples",
+        "split": "train",
+        "streaming": True,
+        "description": "Emotion samples from speech"
+    },
+]
+
+# Singing Voice Synthesis / Singing Style
+DATASET_CONFIGS["voice_singing"] = [
+    # Singing voice datasets
+    {
+        "name": "OpenSinger",
+        "path": "amphion/opensinger",
+        "split": "train",
+        "streaming": True,
+        "description": "Chinese singing voice corpus"
+    },
+    {
+        "name": "NUS-48E-Sung",
+        "path": "Zaach/NUS-48E",
+        "split": "train",
+        "streaming": True,
+        "description": "NUS sung and spoken lyrics"
+    },
+    {
+        "name": "VocalSet",
+        "path": "ccmusic-database/VocalSet",
+        "split": "train",
+        "streaming": True,
+        "description": "Professional vocal techniques"
+    },
+    # Singing style transfer
+    {
+        "name": "NHSS",
+        "path": "Bingsu/NHSS",
+        "split": "train",
+        "streaming": True,
+        "description": "Natural/harmonic singing styles"
+    },
+    # Multi-singer multi-song
+    {
+        "name": "PopCS",
+        "path": "m-a-p/PopCS",
+        "split": "train",
+        "streaming": True,
+        "description": "Pop song corpus for singing"
+    },
+]
+
+# Vocal Percussion / Beatboxing
+DATASET_CONFIGS["voice_beatbox"] = [
+    # Beatboxing datasets
+    {
+        "name": "AVP-Beatbox",
+        "path": "ccmusic-database/AVP",
+        "split": "train",
+        "streaming": True,
+        "description": "Amateur Vocal Percussion dataset"
+    },
+    {
+        "name": "Beatbox-Clips",
+        "path": "audio-samples/beatbox-clips",
+        "split": "train",
+        "streaming": True,
+        "description": "Beatbox audio clips"
+    },
+    # Vocal sounds and effects
+    {
+        "name": "VocalSound",
+        "path": "MIT/VocalSound",
+        "split": "train",
+        "streaming": True,
+        "description": "Non-speech vocals (laugh, cough, etc)"
+    },
+]
+
+# Speech Interruption / Turn-taking / Backchannels
+DATASET_CONFIGS["voice_interaction"] = [
+    # Conversational interruption and turn-taking
+    {
+        "name": "CANDOR-Conversation",
+        "path": "speechbrain/CANDOR",
+        "split": "train",
+        "streaming": True,
+        "description": "Natural conversation with overlaps"
+    },
+    {
+        "name": "Fisher-Conversation",
+        "path": "talkbank/Fisher",
+        "split": "train",
+        "streaming": True,
+        "description": "Spontaneous telephone conversations"
+    },
+    # Backchannels and listener responses
+    {
+        "name": "HCRC-MapTask",
+        "path": "speechbrain/HCRC_MapTask",
+        "split": "train",
+        "streaming": True,
+        "description": "Collaborative dialogue with backchannels"
+    },
+    # Disfluency and hesitation
+    {
+        "name": "Switchboard-Disfluency",
+        "path": "talkbank/Switchboard",
+        "split": "train",
+        "streaming": True,
+        "description": "Switchboard with disfluency markers"
+    },
+]
+
+# Expressive Speech / Prosody
+DATASET_CONFIGS["voice_expressive"] = [
+    # Expressive TTS datasets
+    {
+        "name": "Expresso",
+        "path": "ylacombe/expresso",
+        "split": "train",
+        "streaming": True,
+        "description": "Expressive speech styles"
+    },
+    {
+        "name": "VCTK-Accent",
+        "path": "CSTR/VCTK-Accent",
+        "split": "train",
+        "streaming": True,
+        "description": "Multi-accent English speech"
+    },
+    # Breathing and prosodic features
+    {
+        "name": "BREF-Prosody",
+        "path": "speechbrain/BREF",
+        "split": "train",
+        "streaming": True,
+        "description": "French with prosodic annotation"
+    },
+    # Whispered and shouted speech
+    {
+        "name": "wTIMIT",
+        "path": "talkbank/wTIMIT",
+        "split": "train",
+        "streaming": True,
+        "description": "Whispered TIMIT corpus"
+    },
+]
+
+# Update MODALITY_GROUPS to include new voice categories
+MODALITY_GROUPS['audio'].extend([
+    'voice_emotion', 'voice_singing', 'voice_beatbox',
+    'voice_interaction', 'voice_expressive'
+])
+
+# Update CATEGORY_TO_MODALITY for new categories
+for cat in ['voice_emotion', 'voice_singing', 'voice_beatbox', 
+            'voice_interaction', 'voice_expressive']:
+    CATEGORY_TO_MODALITY[cat] = 'audio'

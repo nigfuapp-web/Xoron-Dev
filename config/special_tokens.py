@@ -459,6 +459,179 @@ SPECIAL_TOKENS = {
     "speaker_ref_start": "<|speaker_ref|>",
     "speaker_ref_end": "<|/speaker_ref|>",
     
+    # === REAL-TIME INTERRUPTION DETECTION (Prosody-aware EoT) ===
+    # End-of-Turn prediction markers
+    "eot_predict": "<|eot|>",              # End of turn detected
+    "eot_continue": "<|continue|>",         # Continue speaking
+    "eot_yield": "<|yield|>",               # Yield to speaker
+    "eot_interrupt": "<|interrupt|>",       # Interruption detected
+    "eot_backoff": "<|backoff|>",           # Back off and listen
+    
+    # User interruption events
+    "user_interrupt_start": "<|user_int|>",
+    "user_interrupt_end": "<|/user_int|>",
+    "user_cough": "<|cough|>",              # User cough detected
+    "user_laugh": "<|laugh|>",              # User laugh detected
+    "user_sigh": "<|sigh|>",                # User sigh detected
+    "user_hesitation": "<|hesitation|>",    # Uh, um, etc.
+    "user_backchannel": "<|backchannel|>",  # Mhm, yeah, uh-huh
+    "user_confusion": "<|confused|>",       # Confusion detected
+    "user_agreement": "<|agree|>",          # Agreement sound
+    "user_disagreement": "<|disagree|>",    # Disagreement sound
+    
+    # Model response to interruptions
+    "response_pause": "<|pause|>",          # Pause response
+    "response_resume": "<|resume|>",        # Resume response
+    "response_rewind": "<|rewind|>",        # Go back in response
+    "response_adjust": "<|adjust|>",        # Adjust response mid-stream
+    
+    # === EMOTION DETECTION (AVD - Arousal/Valence/Dominance) ===
+    # Continuous emotion markers
+    "emotion_start": "<|emotion|>",
+    "emotion_end": "<|/emotion|>",
+    "arousal_level": "<|arousal|>",         # 0-100 arousal level
+    "arousal_end": "<|/arousal|>",
+    "valence_level": "<|valence|>",         # -100 to 100 valence (neg/pos)
+    "valence_end": "<|/valence|>",
+    "dominance_level": "<|dominance|>",     # 0-100 dominance level
+    "dominance_end": "<|/dominance|>",
+    
+    # Discrete emotion categories
+    "emotion_happy": "<|happy|>",
+    "emotion_sad": "<|sad|>",
+    "emotion_angry": "<|angry|>",
+    "emotion_fearful": "<|fearful|>",
+    "emotion_surprised": "<|surprised|>",
+    "emotion_disgusted": "<|disgusted|>",
+    "emotion_neutral": "<|neutral|>",
+    "emotion_excited": "<|excited|>",
+    "emotion_frustrated": "<|frustrated|>",
+    "emotion_bored": "<|bored|>",
+    
+    # Emotion-aware response adaptation
+    "match_emotion": "<|match_emo|>",       # Match speaker's emotion
+    "contrast_emotion": "<|contrast_emo|>", # Respond with contrasting emotion
+    "calm_response": "<|calm|>",            # Calming response tone
+    "energetic_response": "<|energetic|>",  # Energetic response tone
+    
+    # === SINGING/RAPPING GENERATION (Dynamic Latent Vocalizations) ===
+    # Vocal mode switches
+    "sing_start": "<|sing|>",
+    "sing_end": "<|/sing|>",
+    "rap_start": "<|rap|>",
+    "rap_end": "<|/rap|>",
+    "chant_start": "<|chant|>",
+    "chant_end": "<|/chant|>",
+    "hum_start": "<|hum|>",
+    "hum_end": "<|/hum|>",
+    "whistle_start": "<|whistle|>",
+    "whistle_end": "<|/whistle|>",
+    
+    # Musical attributes
+    "pitch_start": "<|pitch|>",             # Musical pitch control
+    "pitch_end": "<|/pitch|>",
+    "tempo_start": "<|tempo|>",             # BPM control
+    "tempo_end": "<|/tempo|>",
+    "rhythm_start": "<|rhythm|>",           # Rhythm pattern
+    "rhythm_end": "<|/rhythm|>",
+    "melody_start": "<|melody|>",           # Melody line
+    "melody_end": "<|/melody|>",
+    "key_signature": "<|key|>",             # Musical key
+    "key_signature_end": "<|/key|>",
+    
+    # Singing style markers
+    "style_pop": "<|style:pop|>",
+    "style_rock": "<|style:rock|>",
+    "style_jazz": "<|style:jazz|>",
+    "style_classical": "<|style:classical|>",
+    "style_hiphop": "<|style:hiphop|>",
+    "style_rnb": "<|style:rnb|>",
+    "style_country": "<|style:country|>",
+    "style_soul": "<|style:soul|>",
+    
+    # Lyrics markers
+    "lyrics_start": "<|lyrics|>",
+    "lyrics_end": "<|/lyrics|>",
+    "verse_start": "<|verse|>",
+    "verse_end": "<|/verse|>",
+    "chorus_start": "<|chorus|>",
+    "chorus_end": "<|/chorus|>",
+    "bridge_start": "<|bridge|>",
+    "bridge_end": "<|/bridge|>",
+    
+    # === SOUND EFFECTS & VOCALIZATIONS (Neural Style Transfer) ===
+    # Beatboxing/Percussion
+    "beatbox_start": "<|beatbox|>",
+    "beatbox_end": "<|/beatbox|>",
+    "percussion_start": "<|perc|>",
+    "percussion_end": "<|/perc|>",
+    "drum_kick": "<|kick|>",
+    "drum_snare": "<|snare|>",
+    "drum_hihat": "<|hihat|>",
+    "drum_crash": "<|crash|>",
+    "drum_fill": "<|fill|>",
+    
+    # Vocal effects
+    "click": "<|click|>",                   # Tongue click
+    "pop": "<|pop|>",                       # Lip pop
+    "whisper_start": "<|whisper|>",
+    "whisper_end": "<|/whisper|>",
+    "shout_start": "<|shout|>",
+    "shout_end": "<|/shout|>",
+    "growl_start": "<|growl|>",
+    "growl_end": "<|/growl|>",
+    "falsetto_start": "<|falsetto|>",
+    "falsetto_end": "<|/falsetto|>",
+    
+    # Breathing and prosody
+    "breath_in": "<|breath_in|>",           # Inhale
+    "breath_out": "<|breath_out|>",         # Exhale
+    "breath_heavy": "<|breath_heavy|>",     # Heavy breathing
+    "sigh_express": "<|sigh_x|>",           # Expressive sigh
+    "gasp": "<|gasp|>",                     # Gasp sound
+    "yawn": "<|yawn|>",                     # Yawn sound
+    "clear_throat": "<|ahem|>",             # Throat clearing
+    
+    # Non-verbal expressions
+    "hmm": "<|hmm|>",                       # Thinking sound
+    "aha": "<|aha|>",                       # Realization
+    "ooh": "<|ooh|>",                       # Interest/excitement
+    "wow": "<|wow|>",                       # Amazement
+    "ugh": "<|ugh|>",                       # Disgust/frustration
+    "phew": "<|phew|>",                     # Relief
+    "tsk": "<|tsk|>",                       # Disapproval click
+    "shh": "<|shh|>",                       # Shushing sound
+    
+    # Ad-libs and style markers
+    "adlib_start": "<|adlib|>",
+    "adlib_end": "<|/adlib|>",
+    "harmony_start": "<|harmony|>",
+    "harmony_end": "<|/harmony|>",
+    "polyphonic_start": "<|poly|>",         # Multiple voice parts
+    "polyphonic_end": "<|/poly|>",
+    "vibrato": "<|vibrato|>",
+    "tremolo": "<|tremolo|>",
+    "glissando": "<|gliss|>",               # Pitch slide
+    
+    # === MID-STREAM TOKEN REWRITING (Speculative Decoding) ===
+    # Rewriting control
+    "speculate_start": "<|spec|>",          # Start speculative generation
+    "speculate_end": "<|/spec|>",
+    "speculate_accept": "<|spec_ok|>",      # Accept speculation
+    "speculate_reject": "<|spec_no|>",      # Reject and rewrite
+    "rewrite_start": "<|rewrite|>",         # Start rewriting
+    "rewrite_end": "<|/rewrite|>",
+    "rollback": "<|rollback|>",             # Rollback tokens
+    "checkpoint": "<|checkpoint|>",         # Save checkpoint for rollback
+    
+    # Token confidence markers
+    "token_confident": "<|conf_tok|>",      # High confidence token
+    "token_uncertain": "<|unc_tok|>",       # Low confidence, may rewrite
+    "draft_start": "<|draft|>",             # Draft response
+    "draft_end": "<|/draft|>",
+    "final_start": "<|final|>",             # Finalized response
+    "final_end": "<|/final|>",
+    
     # === STRUCTURED DATA TOKENS ===
     # Tables (markdown/CSV)
     "table_start": "<|table|>",
@@ -1103,6 +1276,92 @@ def get_citation_tokens():
     return {k: SPECIAL_TOKENS[k] for k in cite_keys if k in SPECIAL_TOKENS}
 
 
+def get_interruption_tokens():
+    """Get real-time interruption detection tokens (Prosody-aware EoT)."""
+    int_keys = [
+        'eot_predict', 'eot_continue', 'eot_yield', 'eot_interrupt', 'eot_backoff',
+        'user_interrupt_start', 'user_interrupt_end',
+        'user_cough', 'user_laugh', 'user_sigh', 'user_hesitation',
+        'user_backchannel', 'user_confusion', 'user_agreement', 'user_disagreement',
+        'response_pause', 'response_resume', 'response_rewind', 'response_adjust',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in int_keys if k in SPECIAL_TOKENS}
+
+
+def get_emotion_tokens():
+    """Get emotion detection tokens (AVD - Arousal/Valence/Dominance)."""
+    emo_keys = [
+        'emotion_start', 'emotion_end',
+        'arousal_level', 'arousal_end', 'valence_level', 'valence_end',
+        'dominance_level', 'dominance_end',
+        'emotion_happy', 'emotion_sad', 'emotion_angry', 'emotion_fearful',
+        'emotion_surprised', 'emotion_disgusted', 'emotion_neutral',
+        'emotion_excited', 'emotion_frustrated', 'emotion_bored',
+        'match_emotion', 'contrast_emotion', 'calm_response', 'energetic_response',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in emo_keys if k in SPECIAL_TOKENS}
+
+
+def get_singing_tokens():
+    """Get singing/rapping generation tokens (Dynamic Latent Vocalizations)."""
+    sing_keys = [
+        'sing_start', 'sing_end', 'rap_start', 'rap_end',
+        'chant_start', 'chant_end', 'hum_start', 'hum_end',
+        'whistle_start', 'whistle_end',
+        'pitch_start', 'pitch_end', 'tempo_start', 'tempo_end',
+        'rhythm_start', 'rhythm_end', 'melody_start', 'melody_end',
+        'key_signature', 'key_signature_end',
+        'style_pop', 'style_rock', 'style_jazz', 'style_classical',
+        'style_hiphop', 'style_rnb', 'style_country', 'style_soul',
+        'lyrics_start', 'lyrics_end', 'verse_start', 'verse_end',
+        'chorus_start', 'chorus_end', 'bridge_start', 'bridge_end',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in sing_keys if k in SPECIAL_TOKENS}
+
+
+def get_sound_effect_tokens():
+    """Get sound effects and vocalization tokens (Neural Style Transfer)."""
+    sfx_keys = [
+        'beatbox_start', 'beatbox_end', 'percussion_start', 'percussion_end',
+        'drum_kick', 'drum_snare', 'drum_hihat', 'drum_crash', 'drum_fill',
+        'click', 'pop', 'whisper_start', 'whisper_end',
+        'shout_start', 'shout_end', 'growl_start', 'growl_end',
+        'falsetto_start', 'falsetto_end',
+        'breath_in', 'breath_out', 'breath_heavy', 'sigh_express',
+        'gasp', 'yawn', 'clear_throat',
+        'hmm', 'aha', 'ooh', 'wow', 'ugh', 'phew', 'tsk', 'shh',
+        'adlib_start', 'adlib_end', 'harmony_start', 'harmony_end',
+        'polyphonic_start', 'polyphonic_end',
+        'vibrato', 'tremolo', 'glissando',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in sfx_keys if k in SPECIAL_TOKENS}
+
+
+def get_speculative_decoding_tokens():
+    """Get mid-stream token rewriting tokens (Speculative Decoding)."""
+    spec_keys = [
+        'speculate_start', 'speculate_end',
+        'speculate_accept', 'speculate_reject',
+        'rewrite_start', 'rewrite_end',
+        'rollback', 'checkpoint',
+        'token_confident', 'token_uncertain',
+        'draft_start', 'draft_end',
+        'final_start', 'final_end',
+    ]
+    return {k: SPECIAL_TOKENS[k] for k in spec_keys if k in SPECIAL_TOKENS}
+
+
+def get_all_voice_enhancement_tokens():
+    """Get all voice enhancement tokens (interruption, emotion, singing, sfx, speculative)."""
+    tokens = {}
+    tokens.update(get_interruption_tokens())
+    tokens.update(get_emotion_tokens())
+    tokens.update(get_singing_tokens())
+    tokens.update(get_sound_effect_tokens())
+    tokens.update(get_speculative_decoding_tokens())
+    return tokens
+
+
 def print_special_tokens():
     """Print all special tokens."""
     print(f"✅ {len(SPECIAL_TOKENS)} special tokens defined:")
@@ -1146,6 +1405,21 @@ def print_special_tokens():
         'Voice/Audio': ['listen_start', 'listen_end', 'speak_start', 'speak_end', 
                        'audio_start', 'audio_end', 'audio_prompt_start', 'audio_prompt_end',
                        'speaker_ref_start', 'speaker_ref_end'],
+        'Interruption/EoT': ['eot_predict', 'eot_continue', 'eot_yield', 'eot_interrupt',
+                            'user_cough', 'user_laugh', 'user_sigh', 'user_confusion',
+                            'response_pause', 'response_resume', 'response_adjust'],
+        'Emotion/AVD': ['emotion_start', 'emotion_end', 'arousal_level', 'valence_level',
+                       'emotion_happy', 'emotion_sad', 'emotion_angry', 'emotion_neutral',
+                       'match_emotion', 'calm_response', 'energetic_response'],
+        'Singing/Rapping': ['sing_start', 'sing_end', 'rap_start', 'rap_end',
+                          'pitch_start', 'tempo_start', 'melody_start',
+                          'lyrics_start', 'verse_start', 'chorus_start'],
+        'Sound Effects': ['beatbox_start', 'click', 'pop', 'whisper_start',
+                        'breath_in', 'breath_out', 'gasp', 'hmm', 'aha',
+                        'vibrato', 'glissando', 'adlib_start'],
+        'Speculative Decoding': ['speculate_start', 'speculate_accept', 'speculate_reject',
+                                'rewrite_start', 'rollback', 'checkpoint',
+                                'draft_start', 'final_start'],
     }
     for cat, keys in categories.items():
         tokens = [SPECIAL_TOKENS[k] for k in keys if k in SPECIAL_TOKENS]

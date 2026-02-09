@@ -594,5 +594,335 @@ class TestAudioDecoder(unittest.TestCase):
         self.assertEqual(alignment.shape, (2, 20, 100))
 
 
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestProsodyAwareEoTPredictor(unittest.TestCase):
+    """Test cases for ProsodyAwareEoTPredictor (interruption detection)."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import ProsodyAwareEoTPredictor
+        self.ProsodyAwareEoTPredictor = ProsodyAwareEoTPredictor
+        
+    def test_initialization(self):
+        """Test ProsodyAwareEoTPredictor initialization."""
+        predictor = self.ProsodyAwareEoTPredictor(hidden_size=256, num_eot_classes=5)
+        
+        self.assertEqual(predictor.hidden_size, 256)
+        self.assertEqual(predictor.num_eot_classes, 5)
+        self.assertIsNotNone(predictor.pitch_conv)
+        self.assertIsNotNone(predictor.energy_conv)
+        self.assertIsNotNone(predictor.vad_head)
+        self.assertIsNotNone(predictor.event_classifier)
+        
+    def test_forward_output_shape(self):
+        """Test forward pass output shapes."""
+        predictor = self.ProsodyAwareEoTPredictor(hidden_size=256, num_eot_classes=5)
+        audio_features = torch.randn(2, 100, 256)
+        
+        output = predictor(audio_features)
+        
+        self.assertEqual(output['eot_logits'].shape, (2, 100, 5))
+        self.assertEqual(output['event_logits'].shape, (2, 100, 8))
+        self.assertEqual(output['vad_logits'].shape, (2, 100, 2))
+        self.assertEqual(output['backoff_prob'].shape, (2, 100, 1))
+        
+    def test_extract_prosody(self):
+        """Test prosody feature extraction."""
+        predictor = self.ProsodyAwareEoTPredictor(hidden_size=256, prosody_dim=64)
+        audio_features = torch.randn(2, 100, 256)
+        
+        pitch, energy = predictor.extract_prosody(audio_features)
+        
+        self.assertEqual(pitch.shape, (2, 100, 64))
+        self.assertEqual(energy.shape, (2, 100, 64))
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestAVDEmotionRecognizer(unittest.TestCase):
+    """Test cases for AVDEmotionRecognizer (emotion detection)."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import AVDEmotionRecognizer
+        self.AVDEmotionRecognizer = AVDEmotionRecognizer
+        
+    def test_initialization(self):
+        """Test AVDEmotionRecognizer initialization."""
+        recognizer = self.AVDEmotionRecognizer(hidden_size=256, num_emotions=10)
+        
+        self.assertEqual(recognizer.hidden_size, 256)
+        self.assertEqual(recognizer.num_emotions, 10)
+        self.assertIsNotNone(recognizer.emotion_classifier)
+        self.assertIsNotNone(recognizer.arousal_head)
+        self.assertIsNotNone(recognizer.valence_head)
+        self.assertIsNotNone(recognizer.dominance_head)
+        
+    def test_forward_output_shape(self):
+        """Test forward pass output shapes."""
+        recognizer = self.AVDEmotionRecognizer(hidden_size=256, num_emotions=10)
+        audio_features = torch.randn(2, 100, 256)
+        
+        output = recognizer(audio_features)
+        
+        self.assertEqual(output['emotion_logits'].shape, (2, 10))
+        self.assertEqual(output['arousal'].shape, (2, 1))
+        self.assertEqual(output['valence'].shape, (2, 1))
+        self.assertEqual(output['dominance'].shape, (2, 1))
+        self.assertEqual(output['response_mode'].shape, (2, 4))
+        
+    def test_avd_value_ranges(self):
+        """Test that AVD values are in expected ranges."""
+        recognizer = self.AVDEmotionRecognizer(hidden_size=256)
+        audio_features = torch.randn(2, 100, 256)
+        
+        output = recognizer(audio_features)
+        
+        # Arousal should be 0-1 (Sigmoid)
+        self.assertTrue((output['arousal'] >= 0).all())
+        self.assertTrue((output['arousal'] <= 1).all())
+        
+        # Valence should be -1 to 1 (Tanh)
+        self.assertTrue((output['valence'] >= -1).all())
+        self.assertTrue((output['valence'] <= 1).all())
+        
+        # Dominance should be 0-1 (Sigmoid)
+        self.assertTrue((output['dominance'] >= 0).all())
+        self.assertTrue((output['dominance'] <= 1).all())
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestDynamicLatentVocalizer(unittest.TestCase):
+    """Test cases for DynamicLatentVocalizer (singing/rapping)."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import DynamicLatentVocalizer
+        self.DynamicLatentVocalizer = DynamicLatentVocalizer
+        
+    def test_initialization(self):
+        """Test DynamicLatentVocalizer initialization."""
+        vocalizer = self.DynamicLatentVocalizer(hidden_size=256, num_styles=8)
+        
+        self.assertEqual(vocalizer.hidden_size, 256)
+        self.assertEqual(vocalizer.num_styles, 8)
+        self.assertIsNotNone(vocalizer.style_embed)
+        self.assertIsNotNone(vocalizer.mode_embed)
+        self.assertIsNotNone(vocalizer.pitch_predictor)
+        
+    def test_forward_output_shape(self):
+        """Test forward pass output shapes."""
+        vocalizer = self.DynamicLatentVocalizer(hidden_size=256, pitch_bins=128)
+        text_features = torch.randn(2, 50, 256)
+        
+        output = vocalizer(text_features)
+        
+        self.assertEqual(output['vocal_features'].shape, (2, 50, 256))
+        self.assertEqual(output['pitch_logits'].shape, (2, 50, 128))
+        
+    def test_forward_with_style(self):
+        """Test forward pass with style and mode."""
+        vocalizer = self.DynamicLatentVocalizer(hidden_size=256, num_styles=8, num_vocal_modes=6)
+        text_features = torch.randn(2, 50, 256)
+        style_id = torch.tensor([3, 5])  # e.g., classical, rnb
+        mode_id = torch.tensor([1, 2])  # e.g., sing, rap
+        
+        output = vocalizer(text_features, style_id=style_id, mode_id=mode_id)
+        
+        self.assertEqual(output['vocal_features'].shape[0], 2)
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestNeuralSoundEffectGenerator(unittest.TestCase):
+    """Test cases for NeuralSoundEffectGenerator (beatbox, sounds)."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import NeuralSoundEffectGenerator
+        self.NeuralSoundEffectGenerator = NeuralSoundEffectGenerator
+        
+    def test_initialization(self):
+        """Test NeuralSoundEffectGenerator initialization."""
+        generator = self.NeuralSoundEffectGenerator(hidden_size=256, num_effect_types=20)
+        
+        self.assertEqual(generator.hidden_size, 256)
+        self.assertEqual(generator.num_effect_types, 20)
+        self.assertIsNotNone(generator.effect_embed)
+        self.assertIsNotNone(generator.generator)
+        
+    def test_forward_single_effect(self):
+        """Test forward pass with single effect."""
+        generator = self.NeuralSoundEffectGenerator(hidden_size=256)
+        effect_ids = torch.tensor([0, 5])  # kick, mouth sound
+        
+        output = generator(effect_ids)
+        
+        self.assertEqual(output['waveform'].shape[0], 2)
+        self.assertEqual(output['waveform'].shape[1], 1)  # Mono
+        self.assertIsNotNone(output['duration'])
+        self.assertIsNotNone(output['intensity'])
+        
+    def test_forward_multiple_effects(self):
+        """Test forward pass with multiple simultaneous effects."""
+        generator = self.NeuralSoundEffectGenerator(hidden_size=256)
+        effect_ids = torch.tensor([[0, 1], [2, 3]])  # 2 batches, 2 effects each
+        
+        output = generator(effect_ids)
+        
+        self.assertEqual(output['effect_features'].shape[0], 2)
+        self.assertEqual(output['effect_features'].shape[1], 2)
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestSpeculativeAudioDecoder(unittest.TestCase):
+    """Test cases for SpeculativeAudioDecoder (mid-stream rewriting)."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import SpeculativeAudioDecoder
+        self.SpeculativeAudioDecoder = SpeculativeAudioDecoder
+        
+    def test_initialization(self):
+        """Test SpeculativeAudioDecoder initialization."""
+        decoder = self.SpeculativeAudioDecoder(hidden_size=256, draft_length=10)
+        
+        self.assertEqual(decoder.hidden_size, 256)
+        self.assertEqual(decoder.draft_length, 10)
+        self.assertIsNotNone(decoder.draft_head)
+        self.assertIsNotNone(decoder.verify_head)
+        
+    def test_generate_draft(self):
+        """Test draft token generation."""
+        decoder = self.SpeculativeAudioDecoder(hidden_size=256, draft_length=5)
+        context = torch.randn(2, 20, 256)
+        
+        draft_tokens, confidence = decoder.generate_draft(context)
+        
+        self.assertEqual(draft_tokens.shape, (2, 5, 256))
+        self.assertEqual(confidence.shape, (2, 5, 1))
+        
+    def test_verify_draft(self):
+        """Test draft verification."""
+        decoder = self.SpeculativeAudioDecoder(hidden_size=256)
+        draft_tokens = torch.randn(2, 5, 256)
+        new_context = torch.randn(2, 25, 256)
+        
+        accept_prob = decoder.verify_draft(draft_tokens, new_context)
+        
+        self.assertEqual(accept_prob.shape, (2, 5, 1))
+        self.assertTrue((accept_prob >= 0).all())
+        self.assertTrue((accept_prob <= 1).all())
+        
+    def test_create_checkpoint(self):
+        """Test checkpoint creation for rollback."""
+        decoder = self.SpeculativeAudioDecoder(hidden_size=256)
+        hidden_state = torch.randn(2, 20, 256)
+        
+        checkpoint = decoder.create_checkpoint(hidden_state)
+        
+        self.assertEqual(checkpoint.shape, (2, 256))
+        
+    def test_smooth_transition(self):
+        """Test smooth transition between old and new features."""
+        decoder = self.SpeculativeAudioDecoder(hidden_size=256)
+        old_features = torch.randn(2, 256)
+        new_features = torch.randn(2, 256)
+        
+        smoothed = decoder.smooth_transition(old_features, new_features)
+        
+        self.assertEqual(smoothed.shape, (2, 256))
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
+class TestEnhancedAudioEncoder(unittest.TestCase):
+    """Test cases for EnhancedAudioEncoder with all SOTA features."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from models.encoders.audio import EnhancedAudioEncoder
+        self.EnhancedAudioEncoder = EnhancedAudioEncoder
+        
+    def test_initialization(self):
+        """Test EnhancedAudioEncoder initialization with all features."""
+        encoder = self.EnhancedAudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            use_raw_waveform=True,
+            enable_eot=True,
+            enable_emotion=True,
+            enable_singing=True,
+            enable_effects=True,
+            enable_speculative=True,
+        )
+        
+        self.assertTrue(encoder.enable_eot)
+        self.assertTrue(encoder.enable_emotion)
+        self.assertTrue(encoder.enable_singing)
+        self.assertTrue(encoder.enable_effects)
+        self.assertTrue(encoder.enable_speculative)
+        self.assertIsNotNone(encoder.eot_predictor)
+        self.assertIsNotNone(encoder.emotion_recognizer)
+        self.assertIsNotNone(encoder.vocalizer)
+        self.assertIsNotNone(encoder.effects_generator)
+        self.assertIsNotNone(encoder.speculative_decoder)
+        
+    def test_forward_basic(self):
+        """Test basic forward pass."""
+        encoder = self.EnhancedAudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            use_raw_waveform=True,
+            enable_eot=False,
+            enable_emotion=False,
+            enable_singing=False,
+            enable_effects=False,
+            enable_speculative=False,
+        )
+        waveform = torch.randn(2, 16000)
+        
+        audio_features, speaker_embedding, extras = encoder(waveform)
+        
+        self.assertEqual(audio_features.shape[0], 2)
+        self.assertEqual(audio_features.shape[2], 256)
+        self.assertIsNone(extras)
+        
+    def test_forward_with_eot(self):
+        """Test forward pass with EoT prediction."""
+        encoder = self.EnhancedAudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_eot=True,
+            enable_emotion=False,
+        )
+        waveform = torch.randn(2, 16000)
+        
+        audio_features, speaker_embedding, extras = encoder(
+            waveform, return_eot=True
+        )
+        
+        self.assertIsNotNone(extras)
+        self.assertIn('eot', extras)
+        self.assertIn('eot_logits', extras['eot'])
+        
+    def test_forward_with_emotion(self):
+        """Test forward pass with emotion recognition."""
+        encoder = self.EnhancedAudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_eot=False,
+            enable_emotion=True,
+        )
+        waveform = torch.randn(2, 16000)
+        
+        audio_features, speaker_embedding, extras = encoder(
+            waveform, return_emotion=True
+        )
+        
+        self.assertIsNotNone(extras)
+        self.assertIn('emotion', extras)
+        self.assertIn('emotion_logits', extras['emotion'])
+        self.assertIn('arousal', extras['emotion'])
+        self.assertIn('valence', extras['emotion'])
+
+
 if __name__ == '__main__':
     unittest.main()

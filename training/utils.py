@@ -1565,3 +1565,437 @@ def eval_voice_tts_step(audio_decoder, text_embeds, target_audio, sample_types=N
 
     except Exception as e:
         return None
+
+
+# === VOICE ENHANCEMENT TRAINING UTILITIES ===
+
+
+def train_voice_emotion_step(
+    audio_encoder,
+    audio_features: torch.Tensor,
+    emotion_labels: Optional[torch.Tensor] = None,
+    arousal_targets: Optional[torch.Tensor] = None,
+    valence_targets: Optional[torch.Tensor] = None,
+    dominance_targets: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """
+    Training step for emotion recognition (AVD).
+    
+    Args:
+        audio_encoder: EnhancedAudioEncoder with emotion recognizer
+        audio_features: [B, T, hidden_size] encoded audio features
+        emotion_labels: [B] discrete emotion labels (0-9)
+        arousal_targets: [B] arousal values (0-1)
+        valence_targets: [B] valence values (-1 to 1)
+        dominance_targets: [B] dominance values (0-1)
+        sample_types: list of sample type strings
+        
+    Returns:
+        dict with emotion_loss, avd_loss, and total_loss
+    """
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        audio_features = audio_features.to(enc_device)
+        
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_emotion', 'voice_expressive') for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            if emotion_labels is not None:
+                emotion_labels = gpu_safe_index(emotion_labels.to(enc_device), type_mask)
+            if arousal_targets is not None:
+                arousal_targets = gpu_safe_index(arousal_targets.to(enc_device), type_mask)
+            if valence_targets is not None:
+                valence_targets = gpu_safe_index(valence_targets.to(enc_device), type_mask)
+            if dominance_targets is not None:
+                dominance_targets = gpu_safe_index(dominance_targets.to(enc_device), type_mask)
+        
+        # Check for emotion recognizer
+        if not hasattr(audio_encoder, 'emotion_recognizer'):
+            return None
+        
+        # Forward pass through emotion recognizer
+        emotion_output = audio_encoder.emotion_recognizer(audio_features)
+        
+        total_loss = torch.tensor(0.0, device=enc_device)
+        losses = {}
+        
+        # Discrete emotion classification loss
+        if emotion_labels is not None:
+            emotion_loss = F.cross_entropy(emotion_output['emotion_logits'], emotion_labels)
+            total_loss = total_loss + emotion_loss
+            losses['emotion_loss'] = emotion_loss
+        
+        # Continuous AVD regression losses
+        if arousal_targets is not None:
+            arousal_loss = F.mse_loss(emotion_output['arousal'].squeeze(-1), arousal_targets)
+            total_loss = total_loss + arousal_loss * 0.5
+            losses['arousal_loss'] = arousal_loss
+        
+        if valence_targets is not None:
+            valence_loss = F.mse_loss(emotion_output['valence'].squeeze(-1), valence_targets)
+            total_loss = total_loss + valence_loss * 0.5
+            losses['valence_loss'] = valence_loss
+        
+        if dominance_targets is not None:
+            dominance_loss = F.mse_loss(emotion_output['dominance'].squeeze(-1), dominance_targets)
+            total_loss = total_loss + dominance_loss * 0.5
+            losses['dominance_loss'] = dominance_loss
+        
+        losses['total_loss'] = total_loss
+        return losses
+        
+    except Exception as e:
+        return None
+
+
+def train_voice_eot_step(
+    audio_encoder,
+    audio_features: torch.Tensor,
+    eot_labels: Optional[torch.Tensor] = None,
+    event_labels: Optional[torch.Tensor] = None,
+    vad_labels: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """
+    Training step for End-of-Turn prediction and interruption detection.
+    
+    Args:
+        audio_encoder: EnhancedAudioEncoder with EoT predictor
+        audio_features: [B, T, hidden_size] encoded audio features
+        eot_labels: [B, T] turn state labels (0-4)
+        event_labels: [B, T] interruption event labels (0-7)
+        vad_labels: [B, T] voice activity labels (0-1)
+        attention_mask: [B, T] attention mask
+        sample_types: list of sample type strings
+        
+    Returns:
+        dict with eot_loss, event_loss, vad_loss, and total_loss
+    """
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        audio_features = audio_features.to(enc_device)
+        
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_interaction', 'voice_asr') for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            if eot_labels is not None:
+                eot_labels = gpu_safe_index(eot_labels.to(enc_device), type_mask)
+            if event_labels is not None:
+                event_labels = gpu_safe_index(event_labels.to(enc_device), type_mask)
+            if vad_labels is not None:
+                vad_labels = gpu_safe_index(vad_labels.to(enc_device), type_mask)
+            if attention_mask is not None:
+                attention_mask = gpu_safe_index(attention_mask.to(enc_device), type_mask)
+        
+        # Check for EoT predictor
+        if not hasattr(audio_encoder, 'eot_predictor'):
+            return None
+        
+        # Forward pass through EoT predictor
+        eot_output = audio_encoder.eot_predictor(audio_features, attention_mask)
+        
+        total_loss = torch.tensor(0.0, device=enc_device)
+        losses = {}
+        
+        # EoT classification loss
+        if eot_labels is not None:
+            # Reshape for cross entropy: [B, T, C] -> [B*T, C], [B, T] -> [B*T]
+            eot_logits = eot_output['eot_logits'].reshape(-1, eot_output['eot_logits'].shape[-1])
+            eot_targets = eot_labels.reshape(-1)
+            eot_loss = F.cross_entropy(eot_logits, eot_targets, ignore_index=-100)
+            total_loss = total_loss + eot_loss
+            losses['eot_loss'] = eot_loss
+        
+        # Event classification loss
+        if event_labels is not None:
+            event_logits = eot_output['event_logits'].reshape(-1, eot_output['event_logits'].shape[-1])
+            event_targets = event_labels.reshape(-1)
+            event_loss = F.cross_entropy(event_logits, event_targets, ignore_index=-100)
+            total_loss = total_loss + event_loss
+            losses['event_loss'] = event_loss
+        
+        # VAD binary classification loss
+        if vad_labels is not None:
+            vad_logits = eot_output['vad_logits'].reshape(-1, 2)
+            vad_targets = vad_labels.reshape(-1)
+            vad_loss = F.cross_entropy(vad_logits, vad_targets, ignore_index=-100)
+            total_loss = total_loss + vad_loss * 0.5
+            losses['vad_loss'] = vad_loss
+        
+        losses['total_loss'] = total_loss
+        return losses
+        
+    except Exception as e:
+        return None
+
+
+def train_voice_singing_step(
+    audio_encoder,
+    text_features: torch.Tensor,
+    target_audio: Optional[torch.Tensor] = None,
+    style_ids: Optional[torch.Tensor] = None,
+    mode_ids: Optional[torch.Tensor] = None,
+    pitch_targets: Optional[torch.Tensor] = None,
+    tempo_targets: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """
+    Training step for singing/rapping voice synthesis.
+    
+    Args:
+        audio_encoder: EnhancedAudioEncoder with vocalizer
+        text_features: [B, T, hidden_size] text/lyrics embeddings
+        target_audio: [B, n_mels, T'] target mel spectrogram
+        style_ids: [B] singing style indices
+        mode_ids: [B] vocal mode indices (speak, sing, rap, etc.)
+        pitch_targets: [B, T] target pitch contour
+        tempo_targets: [B] target tempo in BPM
+        sample_types: list of sample type strings
+        
+    Returns:
+        dict with vocal_loss, pitch_loss, and total_loss
+    """
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        text_features = text_features.to(enc_device)
+        
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_singing', 'voice_tts') for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            text_features = gpu_safe_index(text_features, type_mask)
+            if target_audio is not None:
+                target_audio = gpu_safe_index(target_audio.to(enc_device), type_mask)
+            if style_ids is not None:
+                style_ids = gpu_safe_index(style_ids.to(enc_device), type_mask)
+            if mode_ids is not None:
+                mode_ids = gpu_safe_index(mode_ids.to(enc_device), type_mask)
+            if pitch_targets is not None:
+                pitch_targets = gpu_safe_index(pitch_targets.to(enc_device), type_mask)
+            if tempo_targets is not None:
+                tempo_targets = gpu_safe_index(tempo_targets.to(enc_device), type_mask)
+        
+        # Check for vocalizer
+        if not hasattr(audio_encoder, 'vocalizer'):
+            return None
+        
+        # Forward pass through vocalizer
+        vocal_output = audio_encoder.vocalizer(
+            text_features,
+            style_id=style_ids,
+            mode_id=mode_ids,
+            target_pitch=pitch_targets,
+            tempo_bpm=tempo_targets,
+        )
+        
+        total_loss = torch.tensor(0.0, device=enc_device)
+        losses = {}
+        
+        # Pitch prediction loss
+        if pitch_targets is not None:
+            pitch_loss = F.cross_entropy(
+                vocal_output['pitch_logits'].reshape(-1, vocal_output['pitch_logits'].shape[-1]),
+                pitch_targets.reshape(-1),
+                ignore_index=-100
+            )
+            total_loss = total_loss + pitch_loss
+            losses['pitch_loss'] = pitch_loss
+        
+        # Vocal feature reconstruction loss (if target audio provided)
+        if target_audio is not None:
+            # Simplified: compare vocal features magnitude
+            vocal_feat_norm = vocal_output['vocal_features'].norm(dim=-1).mean()
+            target_norm = target_audio.norm(dim=1).mean()
+            vocal_loss = F.mse_loss(vocal_feat_norm, target_norm)
+            total_loss = total_loss + vocal_loss
+            losses['vocal_loss'] = vocal_loss
+        
+        losses['total_loss'] = total_loss
+        return losses
+        
+    except Exception as e:
+        return None
+
+
+def train_voice_effects_step(
+    audio_encoder,
+    effect_ids: torch.Tensor,
+    target_waveform: Optional[torch.Tensor] = None,
+    context_features: Optional[torch.Tensor] = None,
+    intensity_targets: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """
+    Training step for sound effect generation (beatbox, clicks, breathing, etc.).
+    
+    Args:
+        audio_encoder: EnhancedAudioEncoder with effects generator
+        effect_ids: [B] or [B, N] effect type indices
+        target_waveform: [B, 1, samples] target waveform
+        context_features: [B, T, hidden_size] optional context
+        intensity_targets: [B] target intensity values
+        sample_types: list of sample type strings
+        
+    Returns:
+        dict with waveform_loss, intensity_loss, and total_loss
+    """
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        effect_ids = effect_ids.to(enc_device)
+        
+        # Filter by sample type
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_beatbox', 'voice_expressive') for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            effect_ids = gpu_safe_index(effect_ids, type_mask)
+            if target_waveform is not None:
+                target_waveform = gpu_safe_index(target_waveform.to(enc_device), type_mask)
+            if context_features is not None:
+                context_features = gpu_safe_index(context_features.to(enc_device), type_mask)
+            if intensity_targets is not None:
+                intensity_targets = gpu_safe_index(intensity_targets.to(enc_device), type_mask)
+        
+        # Check for effects generator
+        if not hasattr(audio_encoder, 'effects_generator'):
+            return None
+        
+        # Forward pass through effects generator
+        effects_output = audio_encoder.effects_generator(
+            effect_ids,
+            context=context_features,
+            intensity=intensity_targets,
+        )
+        
+        total_loss = torch.tensor(0.0, device=enc_device)
+        losses = {}
+        
+        # Waveform reconstruction loss
+        if target_waveform is not None:
+            # Match sizes if needed
+            pred_wave = effects_output['waveform']
+            if pred_wave.shape[-1] != target_waveform.shape[-1]:
+                min_len = min(pred_wave.shape[-1], target_waveform.shape[-1])
+                pred_wave = pred_wave[..., :min_len]
+                target_waveform = target_waveform[..., :min_len]
+            
+            waveform_loss = F.mse_loss(pred_wave, target_waveform)
+            total_loss = total_loss + waveform_loss
+            losses['waveform_loss'] = waveform_loss
+        
+        # Intensity prediction loss
+        if intensity_targets is not None:
+            intensity_loss = F.mse_loss(
+                effects_output['intensity'].squeeze(-1),
+                intensity_targets
+            )
+            total_loss = total_loss + intensity_loss * 0.5
+            losses['intensity_loss'] = intensity_loss
+        
+        losses['total_loss'] = total_loss
+        return losses
+        
+    except Exception as e:
+        return None
+
+
+def eval_voice_emotion_step(
+    audio_encoder,
+    audio_features: torch.Tensor,
+    emotion_labels: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """Evaluation step for emotion recognition."""
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        audio_features = audio_features.to(enc_device)
+        
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_emotion', 'voice_expressive') for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            if emotion_labels is not None:
+                emotion_labels = gpu_safe_index(emotion_labels.to(enc_device), type_mask)
+        
+        if not hasattr(audio_encoder, 'emotion_recognizer'):
+            return None
+        
+        with torch.no_grad():
+            emotion_output = audio_encoder.emotion_recognizer(audio_features)
+            
+            if emotion_labels is not None:
+                # Calculate accuracy
+                preds = emotion_output['emotion_logits'].argmax(dim=-1)
+                accuracy = (preds == emotion_labels).float().mean()
+                return {'accuracy': accuracy}
+            else:
+                return {'emotion_logits': emotion_output['emotion_logits']}
+    
+    except Exception as e:
+        return None
+
+
+def eval_voice_eot_step(
+    audio_encoder,
+    audio_features: torch.Tensor,
+    eot_labels: Optional[torch.Tensor] = None,
+    sample_types: Optional[List[str]] = None,
+):
+    """Evaluation step for End-of-Turn prediction."""
+    try:
+        enc_device = next(audio_encoder.parameters()).device
+        audio_features = audio_features.to(enc_device)
+        
+        if sample_types is not None:
+            type_mask = torch.tensor(
+                [t in ('voice_interaction',) for t in sample_types],
+                dtype=torch.bool, device=enc_device
+            )
+            if not type_mask.any():
+                return None
+            audio_features = gpu_safe_index(audio_features, type_mask)
+            if eot_labels is not None:
+                eot_labels = gpu_safe_index(eot_labels.to(enc_device), type_mask)
+        
+        if not hasattr(audio_encoder, 'eot_predictor'):
+            return None
+        
+        with torch.no_grad():
+            eot_output = audio_encoder.eot_predictor(audio_features)
+            
+            if eot_labels is not None:
+                # Calculate accuracy
+                preds = eot_output['eot_logits'].argmax(dim=-1)
+                mask = eot_labels != -100
+                accuracy = ((preds == eot_labels) & mask).float().sum() / mask.float().sum()
+                return {'accuracy': accuracy}
+            else:
+                return {'eot_logits': eot_output['eot_logits']}
+    
+    except Exception as e:
+        return None
