@@ -833,17 +833,17 @@ class TestSpeculativeAudioDecoder(unittest.TestCase):
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch not available")
-class TestEnhancedAudioEncoder(unittest.TestCase):
-    """Test cases for EnhancedAudioEncoder with all SOTA features."""
+class TestAudioEncoderVoiceEnhancement(unittest.TestCase):
+    """Test cases for AudioEncoder with all SOTA voice enhancement features."""
     
     def setUp(self):
         """Set up test fixtures."""
-        from models.encoders.audio import EnhancedAudioEncoder
-        self.EnhancedAudioEncoder = EnhancedAudioEncoder
+        from models.encoders.audio import AudioEncoder
+        self.AudioEncoder = AudioEncoder
         
-    def test_initialization(self):
-        """Test EnhancedAudioEncoder initialization with all features."""
-        encoder = self.EnhancedAudioEncoder(
+    def test_initialization_with_all_features(self):
+        """Test AudioEncoder initialization with all voice enhancement features."""
+        encoder = self.AudioEncoder(
             hidden_size=256,
             num_layers=2,
             use_raw_waveform=True,
@@ -865,9 +865,9 @@ class TestEnhancedAudioEncoder(unittest.TestCase):
         self.assertIsNotNone(encoder.effects_generator)
         self.assertIsNotNone(encoder.speculative_decoder)
         
-    def test_forward_basic(self):
-        """Test basic forward pass."""
-        encoder = self.EnhancedAudioEncoder(
+    def test_forward_without_enhancements(self):
+        """Test basic forward pass without voice enhancements."""
+        encoder = self.AudioEncoder(
             hidden_size=256,
             num_layers=2,
             use_raw_waveform=True,
@@ -886,12 +886,15 @@ class TestEnhancedAudioEncoder(unittest.TestCase):
         self.assertIsNone(extras)
         
     def test_forward_with_eot(self):
-        """Test forward pass with EoT prediction."""
-        encoder = self.EnhancedAudioEncoder(
+        """Test forward pass with EoT/interruption detection."""
+        encoder = self.AudioEncoder(
             hidden_size=256,
             num_layers=2,
             enable_eot=True,
             enable_emotion=False,
+            enable_singing=False,
+            enable_effects=False,
+            enable_speculative=False,
         )
         waveform = torch.randn(2, 16000)
         
@@ -905,11 +908,14 @@ class TestEnhancedAudioEncoder(unittest.TestCase):
         
     def test_forward_with_emotion(self):
         """Test forward pass with emotion recognition."""
-        encoder = self.EnhancedAudioEncoder(
+        encoder = self.AudioEncoder(
             hidden_size=256,
             num_layers=2,
             enable_eot=False,
             enable_emotion=True,
+            enable_singing=False,
+            enable_effects=False,
+            enable_speculative=False,
         )
         waveform = torch.randn(2, 16000)
         
@@ -922,6 +928,66 @@ class TestEnhancedAudioEncoder(unittest.TestCase):
         self.assertIn('emotion_logits', extras['emotion'])
         self.assertIn('arousal', extras['emotion'])
         self.assertIn('valence', extras['emotion'])
+    
+    def test_detect_interruption_method(self):
+        """Test detect_interruption method."""
+        encoder = self.AudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_eot=True,
+        )
+        audio_features = torch.randn(2, 100, 256)
+        
+        result = encoder.detect_interruption(audio_features)
+        
+        self.assertIsNotNone(result)
+        self.assertIn('eot_logits', result)
+        self.assertIn('event_logits', result)
+        
+    def test_recognize_emotion_method(self):
+        """Test recognize_emotion method."""
+        encoder = self.AudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_emotion=True,
+        )
+        audio_features = torch.randn(2, 100, 256)
+        
+        result = encoder.recognize_emotion(audio_features)
+        
+        self.assertIsNotNone(result)
+        self.assertIn('emotion_logits', result)
+        self.assertIn('arousal', result)
+        
+    def test_generate_vocals_method(self):
+        """Test generate_vocals method for singing."""
+        encoder = self.AudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_singing=True,
+        )
+        text_features = torch.randn(2, 50, 256)
+        
+        result = encoder.generate_vocals(text_features)
+        
+        self.assertIsNotNone(result)
+        self.assertIn('vocal_features', result)
+        self.assertIn('pitch_logits', result)
+        
+    def test_generate_effects_method(self):
+        """Test generate_effects method for sound effects."""
+        encoder = self.AudioEncoder(
+            hidden_size=256,
+            num_layers=2,
+            enable_effects=True,
+        )
+        effect_ids = torch.tensor([0, 5])
+        
+        result = encoder.generate_effects(effect_ids)
+        
+        self.assertIsNotNone(result)
+        self.assertIn('waveform', result)
+        self.assertIn('intensity', result)
 
 
 if __name__ == '__main__':

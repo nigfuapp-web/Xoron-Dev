@@ -1032,7 +1032,7 @@ class ConformerBlock(nn.Module):
 
 class AudioEncoder(nn.Module):
     """
-    SOTA Audio Encoder with Raw Waveform Tokenization and RMLA.
+    SOTA Audio Encoder with Raw Waveform Tokenization, RMLA, and Voice Enhancement.
 
     Features:
     - Raw waveform tokenization (no mel spectrogram)
@@ -1040,6 +1040,13 @@ class AudioEncoder(nn.Module):
     - Zero-shot speaker encoding
     - In-context audio prompting
     - Gradient checkpointing support for memory efficiency
+    
+    Voice Enhancement Features (SOTA):
+    - Prosody-aware EoT Prediction (interruption detection)
+    - AVD Emotion Recognition (arousal/valence/dominance)
+    - Dynamic Latent Vocalizations (singing/rapping)
+    - Neural Sound Effects (beatboxing, breathing, expressions)
+    - Speculative Decoding (mid-stream token rewriting)
     """
 
     def __init__(
@@ -1051,12 +1058,25 @@ class AudioEncoder(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         use_raw_waveform: bool = True,
+        # Voice enhancement flags
+        enable_eot: bool = True,
+        enable_emotion: bool = True,
+        enable_singing: bool = True,
+        enable_effects: bool = True,
+        enable_speculative: bool = True,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.max_audio_length = max_audio_length
         self.use_raw_waveform = use_raw_waveform
         self.gradient_checkpointing = False  # Memory optimization flag
+        
+        # Voice enhancement flags
+        self.enable_eot = enable_eot
+        self.enable_emotion = enable_emotion
+        self.enable_singing = enable_singing
+        self.enable_effects = enable_effects
+        self.enable_speculative = enable_speculative
 
         # Raw waveform tokenizer
         if use_raw_waveform:
@@ -1101,12 +1121,49 @@ class AudioEncoder(nn.Module):
 
         # Output projection
         self.output_proj = nn.Linear(hidden_size, hidden_size)
+        
+        # === VOICE ENHANCEMENT MODULES ===
+        
+        # Prosody-aware EoT Prediction (interruption detection)
+        if enable_eot:
+            self.eot_predictor = ProsodyAwareEoTPredictor(hidden_size, dropout=dropout)
+        else:
+            self.eot_predictor = None
+        
+        # AVD Emotion Recognition
+        if enable_emotion:
+            self.emotion_recognizer = AVDEmotionRecognizer(hidden_size, dropout=dropout)
+        else:
+            self.emotion_recognizer = None
+        
+        # Dynamic Latent Vocalizations (singing/rapping)
+        if enable_singing:
+            self.vocalizer = DynamicLatentVocalizer(hidden_size)
+        else:
+            self.vocalizer = None
+        
+        # Neural Sound Effects
+        if enable_effects:
+            self.effects_generator = NeuralSoundEffectGenerator(hidden_size)
+        else:
+            self.effects_generator = None
+        
+        # Speculative Decoding (mid-stream rewriting)
+        if enable_speculative:
+            self.speculative_decoder = SpeculativeAudioDecoder(hidden_size)
+        else:
+            self.speculative_decoder = None
 
         print(f"   🎤 AudioEncoder (RMLA Conformer): {hidden_size}d, {num_layers} layers")
         if use_raw_waveform:
             print(f"      - Raw Waveform Tokenizer enabled")
         print(f"      - Zero-Shot Speaker Encoder enabled")
         print(f"      - In-Context Audio Prompting enabled")
+        print(f"      - EoT/Interruption Detection: {enable_eot}")
+        print(f"      - Emotion Recognition (AVD): {enable_emotion}")
+        print(f"      - Singing/Rapping (Vocalizer): {enable_singing}")
+        print(f"      - Sound Effects Generator: {enable_effects}")
+        print(f"      - Speculative Decoding: {enable_speculative}")
 
     def gradient_checkpointing_enable(self):
         """Enable gradient checkpointing to save memory during training."""
@@ -1129,19 +1186,24 @@ class AudioEncoder(nn.Module):
         speaker_ref: Optional[torch.Tensor] = None,
         audio_prompt: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        return_eot: bool = False,
+        return_emotion: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[dict]]:
         """
-        Process audio to features.
+        Process audio to features with optional voice enhancement outputs.
         
         Args:
             audio_input: [B, T] raw waveform or [B, n_mels, T] mel spectrogram
             speaker_ref: [B, n_mels, T_ref] reference audio for speaker cloning
             audio_prompt: [B, T_prompt, hidden_size] audio prompt features
             mask: Optional attention mask
+            return_eot: Whether to return EoT/interruption predictions
+            return_emotion: Whether to return emotion/AVD predictions
             
         Returns:
             features: [B, T', hidden_size] audio features
             speaker_embedding: [B, hidden_size//4] speaker embedding (if speaker_ref provided)
+            extras: dict with EoT/emotion predictions (if requested)
         """
         # Encode audio based on input format
         # SOTA mode (use_raw_waveform=True): expects [B, T] raw waveform from dataset
@@ -1198,8 +1260,124 @@ class AudioEncoder(nn.Module):
 
         # Output projection
         x = self.output_proj(x)
+        
+        # === VOICE ENHANCEMENT OUTPUTS ===
+        extras = {}
+        
+        if return_eot and self.eot_predictor is not None:
+            extras["eot"] = self.eot_predictor(x, mask)
+        
+        if return_emotion and self.emotion_recognizer is not None:
+            extras["emotion"] = self.emotion_recognizer(x, mask)
 
-        return x, speaker_embedding
+        return x, speaker_embedding, extras if extras else None
+    
+    # === VOICE ENHANCEMENT METHODS ===
+    
+    def detect_interruption(
+        self,
+        audio_features: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Optional[dict]:
+        """
+        Detect interruptions, backchannels, and turn-taking events.
+        
+        Args:
+            audio_features: [B, T, hidden_size] encoded audio
+            attention_mask: [B, T] optional mask
+            
+        Returns:
+            dict with eot_logits, event_logits, vad_logits, backoff_prob
+        """
+        if self.eot_predictor is None:
+            return None
+        return self.eot_predictor(audio_features, attention_mask)
+    
+    def recognize_emotion(
+        self,
+        audio_features: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Optional[dict]:
+        """
+        Recognize emotion with AVD (arousal/valence/dominance) values.
+        
+        Args:
+            audio_features: [B, T, hidden_size] encoded audio
+            attention_mask: [B, T] optional mask
+            
+        Returns:
+            dict with emotion_logits, arousal, valence, dominance, response_mode
+        """
+        if self.emotion_recognizer is None:
+            return None
+        return self.emotion_recognizer(audio_features, attention_mask)
+    
+    def generate_vocals(
+        self,
+        text_features: torch.Tensor,
+        style_id: Optional[torch.Tensor] = None,
+        mode_id: Optional[torch.Tensor] = None,
+        target_pitch: Optional[torch.Tensor] = None,
+        tempo_bpm: Optional[torch.Tensor] = None,
+    ) -> Optional[dict]:
+        """
+        Generate singing/rapping vocals from text/lyrics.
+        
+        Args:
+            text_features: [B, T, hidden_size] text embeddings
+            style_id: [B] style indices (pop, rock, jazz, etc.)
+            mode_id: [B] mode indices (speak, sing, rap, hum, etc.)
+            target_pitch: [B, T] pitch targets
+            tempo_bpm: [B] tempo in BPM
+            
+        Returns:
+            dict with vocal_features, pitch_logits, alignment, durations
+        """
+        if self.vocalizer is None:
+            return None
+        return self.vocalizer(text_features, style_id, mode_id, target_pitch, tempo_bpm)
+    
+    def generate_effects(
+        self,
+        effect_ids: torch.Tensor,
+        context: Optional[torch.Tensor] = None,
+        intensity: Optional[torch.Tensor] = None,
+    ) -> Optional[dict]:
+        """
+        Generate sound effects (beatbox, clicks, breathing, etc.).
+        
+        Args:
+            effect_ids: [B] or [B, N] effect type indices
+            context: [B, T, hidden_size] optional context
+            intensity: [B] intensity values
+            
+        Returns:
+            dict with effect_features, waveform, duration, intensity
+        """
+        if self.effects_generator is None:
+            return None
+        return self.effects_generator(effect_ids, context, intensity)
+    
+    def speculative_generate(
+        self,
+        context: torch.Tensor,
+        generate_draft: bool = True,
+        verify_with: Optional[torch.Tensor] = None,
+    ) -> Optional[dict]:
+        """
+        Generate speculative draft tokens for mid-stream rewriting.
+        
+        Args:
+            context: [B, T, hidden_size] current context
+            generate_draft: whether to generate new draft
+            verify_with: [B, T', hidden_size] new context to verify against
+            
+        Returns:
+            dict with checkpoint, draft_tokens, confidence, accept_prob
+        """
+        if self.speculative_decoder is None:
+            return None
+        return self.speculative_decoder(context, generate_draft, verify_with)
 
 
 class VariancePredictor(nn.Module):
@@ -2258,105 +2436,4 @@ class SpeculativeAudioDecoder(nn.Module):
         return results
 
 
-class EnhancedAudioEncoder(AudioEncoder):
-    """
-    Enhanced Audio Encoder with all SOTA voice features.
-    
-    Extends AudioEncoder with:
-    - Prosody-aware EoT prediction
-    - AVD emotion recognition
-    - Dynamic latent vocalizations
-    - Neural sound effects
-    - Speculative decoding support
-    """
-    
-    def __init__(
-        self,
-        hidden_size: int = 1024,
-        n_mels: int = 80,
-        num_layers: int = 6,
-        num_heads: int = 8,
-        ff_expansion: int = 4,
-        dropout: float = 0.1,
-        use_raw_waveform: bool = True,
-        max_audio_length: int = 3000,
-        enable_eot: bool = True,
-        enable_emotion: bool = True,
-        enable_singing: bool = True,
-        enable_effects: bool = True,
-        enable_speculative: bool = True,
-    ):
-        super().__init__(
-            hidden_size=hidden_size,
-            n_mels=n_mels,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            ff_expansion=ff_expansion,
-            dropout=dropout,
-            use_raw_waveform=use_raw_waveform,
-            max_audio_length=max_audio_length,
-        )
-        
-        # Initialize enhancement modules
-        self.enable_eot = enable_eot
-        self.enable_emotion = enable_emotion
-        self.enable_singing = enable_singing
-        self.enable_effects = enable_effects
-        self.enable_speculative = enable_speculative
-        
-        if enable_eot:
-            self.eot_predictor = ProsodyAwareEoTPredictor(hidden_size)
-        
-        if enable_emotion:
-            self.emotion_recognizer = AVDEmotionRecognizer(hidden_size)
-        
-        if enable_singing:
-            self.vocalizer = DynamicLatentVocalizer(hidden_size)
-        
-        if enable_effects:
-            self.effects_generator = NeuralSoundEffectGenerator(hidden_size)
-        
-        if enable_speculative:
-            self.speculative_decoder = SpeculativeAudioDecoder(hidden_size)
-        
-        print(f"   🎧 EnhancedAudioEncoder initialized with SOTA features")
-        print(f"      EoT: {enable_eot}, Emotion: {enable_emotion}, Singing: {enable_singing}")
-        print(f"      Effects: {enable_effects}, Speculative: {enable_speculative}")
-    
-    def forward(
-        self,
-        audio_input: torch.Tensor,
-        speaker_ref: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        return_eot: bool = False,
-        return_emotion: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[dict]]:
-        """
-        Enhanced forward pass with optional SOTA features.
-        
-        Args:
-            audio_input: raw waveform or mel spectrogram
-            speaker_ref: optional speaker reference for cloning
-            attention_mask: optional attention mask
-            return_eot: whether to return EoT predictions
-            return_emotion: whether to return emotion predictions
-            
-        Returns:
-            audio_features: [B, T, hidden_size] encoded features
-            speaker_embedding: [B, speaker_dim] if speaker_ref provided
-            extras: dict with EoT/emotion predictions if requested
-        """
-        # Base encoding
-        audio_features, speaker_embedding = super().forward(
-            audio_input, speaker_ref
-        )
-        
-        extras = {}
-        
-        if return_eot and self.enable_eot:
-            extras["eot"] = self.eot_predictor(audio_features, attention_mask)
-        
-        if return_emotion and self.enable_emotion:
-            extras["emotion"] = self.emotion_recognizer(audio_features, attention_mask)
-        
-        return audio_features, speaker_embedding, extras if extras else None
+# EnhancedAudioEncoder removed - all features merged into AudioEncoder
