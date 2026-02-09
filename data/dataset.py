@@ -1281,10 +1281,12 @@ class TrueStreamingDataset(IterableDataset):
                     continue
                 
                 # In dual training, check if this source's modality has hit its limit
+                # IMPORTANT: Just SKIP this source, don't mark it exhausted!
+                # Other modalities may still need their sources to continue.
                 source_modality = source.get("modality", "text")
                 if check_modality_limit(source_modality):
-                    source["exhausted"] = True
-                    sources_to_remove.append(source_idx)
+                    # This modality is done - skip but DON'T remove the source
+                    # It might be needed if we add modality cycling later
                     continue
                 
                 try:
