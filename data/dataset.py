@@ -791,10 +791,30 @@ class TrueStreamingDataset(IterableDataset):
             return None
 
     def _extract_image_data(self, sample: Dict, dtype: str) -> Any:
-        """Extract raw image data from sample."""
+        """Extract raw image data from sample.
+        
+        For image_editing samples, we extract the TARGET/OUTPUT image (what we want to generate).
+        For other image samples, we extract the INPUT image (what we're understanding).
+        """
+        # For image_editing: Extract TARGET image (the edited result) for diffusion training
+        # MagicBrush: target_img, InstructPix2Pix: edited_image
+        if dtype == 'image_editing':
+            target_fields = ["target_img", "edited_image", "output_image", "result_image"]
+            for field in target_fields:
+                if field in sample and sample[field] is not None:
+                    return sample[field]
+            # Fallback to source if no target (shouldn't happen for proper editing datasets)
+        
+        # For image_generation: Extract the generated image if available
+        if dtype == 'image_generation':
+            gen_fields = ["image", "generated_image", "output_image", "result"]
+            for field in gen_fields:
+                if field in sample and sample[field] is not None:
+                    return sample[field]
+        
         # Common image fields across different datasets
         # Image_Prompt: TIP-I2V dataset
-        # source_img: image editing datasets
+        # source_img: image editing datasets (input image for understanding)
         # prompt_asset: UI/design datasets
         # column0: Pexels dataset (thumbnail URL)
         image_fields = ["image", "Image_Prompt", "jpg", "source_img", "original_image", "input_image", "prompt_asset", "column0"]
@@ -960,7 +980,8 @@ class TrueStreamingDataset(IterableDataset):
             }
             for k, v in raw_sample.items():
                 if k in ["image", "video", "frames", "jpg", "jpeg", "png",
-                        "source_img", "target_img", "audio", "speech", "waveform"]:
+                        "source_img", "target_img", "edited_image", "original_image",
+                        "audio", "speech", "waveform"]:
                     continue
                 if isinstance(v, (str, int, float, bool, type(None))):
                     sample_metadata[k] = v
@@ -999,28 +1020,37 @@ class TrueStreamingDataset(IterableDataset):
             labels = input_ids.clone()
             labels[attention_mask == 0] = -100  # Mask padding
             
-            # Mask everything EXCEPT assistant responses
-            # Use get_vocab() for reliable token ID lookup (encode() can return multiple tokens)
-            assistant_start_token = self.tokens.get('assistant_start', '<|assistant|>')
-            assistant_end_token = self.tokens.get('assistant_end', '<|/assistant|>')
+            # Passthrough datasets (pre-formatted synth data) train on ENTIRE sequence
+            # These datasets use special tokens like <|jupyter|>, <|fim_*|>, <|commit_*|>
+            # instead of <|assistant|> tokens, so we train on everything except padding
+            passthrough_dtypes = {
+                'code_execution', 'fim', 'git_operations', 'anti_hallucination', 
+                'system_admin', 'file_operations'
+            }
             
-            vocab = self.tokenizer.get_vocab()
-            assistant_start_id = vocab.get(assistant_start_token)
-            assistant_end_id = vocab.get(assistant_end_token)
-            
-            if assistant_start_id is not None and assistant_end_id is not None:
-                in_assistant = False
-                for i in range(len(input_ids)):
-                    token_id = input_ids[i].item()
-                    
-                    if token_id == assistant_start_id:
-                        in_assistant = True
-                        labels[i] = -100  # Don't predict the start token itself
-                    elif token_id == assistant_end_id:
-                        in_assistant = False
-                        # Keep the end token in labels (model should learn to end)
-                    elif not in_assistant:
-                        labels[i] = -100  # Mask non-assistant tokens
+            if dtype not in passthrough_dtypes:
+                # Mask everything EXCEPT assistant responses
+                # Use get_vocab() for reliable token ID lookup (encode() can return multiple tokens)
+                assistant_start_token = self.tokens.get('assistant_start', '<|assistant|>')
+                assistant_end_token = self.tokens.get('assistant_end', '<|/assistant|>')
+                
+                vocab = self.tokenizer.get_vocab()
+                assistant_start_id = vocab.get(assistant_start_token)
+                assistant_end_id = vocab.get(assistant_end_token)
+                
+                if assistant_start_id is not None and assistant_end_id is not None:
+                    in_assistant = False
+                    for i in range(len(input_ids)):
+                        token_id = input_ids[i].item()
+                        
+                        if token_id == assistant_start_id:
+                            in_assistant = True
+                            labels[i] = -100  # Don't predict the start token itself
+                        elif token_id == assistant_end_id:
+                            in_assistant = False
+                            # Keep the end token in labels (model should learn to end)
+                        elif not in_assistant:
+                            labels[i] = -100  # Mask non-assistant tokens
             
             # Process media on-demand
             # NEVER create zero tensors - only train on REAL data or SKIP
