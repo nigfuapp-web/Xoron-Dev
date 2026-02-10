@@ -1149,11 +1149,6 @@ class XoronMultimodalModel(nn.Module):
         print(f"      - Cross Attention: {'✅' if has_cross_attention else '❌'}")
         print(f"      - LoRA Applied: {'✅' if lora_was_applied else '❌'}")
         
-        # Ensure enable_generation is True so generators are created
-        # Even if checkpoint didn't have generators, we want them for training
-        if 'enable_generation' not in config_dict:
-            config_dict['enable_generation'] = True
-        
         config = XoronConfig.from_dict(config_dict)
         
         # Create model
