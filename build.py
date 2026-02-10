@@ -49,6 +49,53 @@ from transformers import AutoTokenizer, CLIPImageProcessor
 CONFIG_FILE = "xoron_config.json"
 
 
+def get_hf_token() -> Optional[str]:
+    """
+    Get HuggingFace token from various sources:
+    1. Kaggle secrets (for Kaggle notebooks)
+    2. Environment variable HF_TOKEN
+    3. Environment variable HUGGING_FACE_HUB_TOKEN
+    4. huggingface-cli login token
+    
+    Returns:
+        HuggingFace token string or None if not found
+    """
+    # Try Kaggle secrets first
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        token = user_secrets.get_secret("hf_token")
+        if token:
+            print("   ✅ Loaded HF token from Kaggle secrets")
+            return token
+    except Exception:
+        pass  # Not in Kaggle environment or secret not found
+    
+    # Try environment variables
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        print("   ✅ Loaded HF token from HF_TOKEN env var")
+        return token
+    
+    token = os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        print("   ✅ Loaded HF token from HUGGING_FACE_HUB_TOKEN env var")
+        return token
+    
+    # Try huggingface-cli token
+    try:
+        from huggingface_hub import HfFolder
+        token = HfFolder.get_token()
+        if token:
+            print("   ✅ Loaded HF token from huggingface-cli")
+            return token
+    except Exception:
+        pass
+    
+    print("   ⚠️ No HF token found - HuggingFace uploads will be skipped")
+    return None
+
+
 def safe_convert_to_fp16(model):
     """
     Safely convert model to FP16, handling potential overflow issues.
@@ -1128,6 +1175,9 @@ def run_build_and_train(
         resume_streaming_state=resume_streaming_state
     )
 
+    # Get HF token for uploads
+    hf_token = get_hf_token()
+
     # Create trainer with resume support
     trainer = XoronTrainer(
         model=model,
@@ -1140,6 +1190,7 @@ def run_build_and_train(
         resume_from=checkpoint_path if resume_training else None,
         tokenizer=tokenizer,  # Pass tokenizer for saving with checkpoints
         eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
+        hf_token=hf_token,  # For HuggingFace uploads
     )
 
     trainer.train()
@@ -1299,6 +1350,9 @@ def run_hf_training(
         resume_streaming_state=resume_streaming_state
     )
 
+    # Get HF token for uploads
+    hf_token = get_hf_token()
+
     # Create trainer with resume support
     trainer = XoronTrainer(
         model=model,
@@ -1311,6 +1365,7 @@ def run_hf_training(
         resume_from=resume_from,  # Pass checkpoint path for resuming
         tokenizer=tokenizer,
         eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
+        hf_token=hf_token,  # For HuggingFace uploads
     )
 
     trainer.train()
