@@ -566,13 +566,15 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
             video_frames = gpu_safe_index(video_frames, type_mask)
             text_context = gpu_safe_index(text_context, type_mask)
 
-        # Handle dimension ordering: ensure [B, C, T, H, W]
+        # Handle dimension ordering: collate returns [B, T, C, H, W], we need [B, C, T, H, W]
         if video_frames.dim() == 5:
-            B, dim1, dim2, H, W = video_frames.shape
-            if dim1 > dim2:  # [B, T, C, H, W] -> [B, C, T, H, W]
-                video_frames = video_frames.permute(0, 2, 1, 3, 4)
+            B, T, C, H, W = video_frames.shape
+            # Collate always returns [B, T, C, H, W], permute to [B, C, T, H, W]
+            video_frames = video_frames.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W] -> [B, C, T, H, W]
         elif video_frames.dim() == 4:
-            video_frames = video_frames.unsqueeze(2)
+            # Single video [T, C, H, W] -> [1, C, T, H, W]
+            T, C, H, W = video_frames.shape
+            video_frames = video_frames.permute(1, 0, 2, 3).unsqueeze(0)  # [C, T, H, W] -> [1, C, T, H, W]
         else:
             return None
 
