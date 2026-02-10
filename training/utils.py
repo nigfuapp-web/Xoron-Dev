@@ -494,23 +494,22 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         images = images.to(gen_dtype).requires_grad_(True)
         if mask is not None:
             mask = mask.to(gen_dtype)
-
-        # Normalize images to [-1, 1] for diffusion
-        images_norm = images * 2 - 1
         
         # Delete intermediate tensors to save memory
-        del images, valid_mask
+        del valid_mask
 
         # Use generator's training_step if available (SOTA method)
+        # NOTE: Pass images in [0,1] range - generator.training_step normalizes internally
         if hasattr(generator, 'training_step'):
             # Ensure all inputs are correct dtype
-            losses = generator.training_step(images_norm.to(gen_dtype), text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
+            losses = generator.training_step(images.to(gen_dtype), text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
             loss = losses['total_loss']
-            del losses, images_norm  # Clean up
+            del losses, images  # Clean up
             return loss
         
-        # Fallback to manual training - ensure correct dtype
-        images_norm = images_norm.to(gen_dtype)
+        # Fallback to manual training - normalize here since no training_step
+        images_norm = images * 2 - 1
+        del images
         z, mean, logvar = generator.encode(images_norm)
         del images_norm  # No longer needed
         
@@ -626,25 +625,23 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                 single_video = single_video.to(gen_dtype).requires_grad_(True)
                 single_video = single_video.contiguous().view(1, C, T, target_size, target_size)
 
-                # Normalize to [-1, 1] for diffusion
-                video_norm = single_video * 2 - 1
-                del single_video
-
                 # Extract first frame for I2V training (50% of the time)
+                # First frame should be in [0, 1] range for generator
                 first_frame = None
                 if torch.rand(1).item() > 0.5:
-                    first_frame = (video_norm[:, :, 0] + 1) / 2
+                    first_frame = single_video[:, :, 0]  # [1, C, H, W] in [0, 1]
 
                 # Use generator's training_step
+                # NOTE: Pass video in [0,1] range - generator.training_step normalizes internally
                 if hasattr(video_generator, 'training_step'):
-                    losses = video_generator.training_step(video_norm, single_context, first_frame)
+                    losses = video_generator.training_step(single_video, single_context, first_frame)
                     step_loss = losses['total_loss']
                     if total_loss is None:
                         total_loss = step_loss
                     else:
                         total_loss = total_loss + step_loss
                     num_processed += 1
-                    del losses, video_norm, first_frame
+                    del losses, single_video, first_frame
                 
                 # Force memory cleanup after each sample
                 if torch.cuda.is_available():
@@ -1279,22 +1276,22 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
         if images.shape[2] != target_size or images.shape[3] != target_size:
             images = F.interpolate(images, size=(target_size, target_size), mode='bilinear', align_corners=False)
 
-        # Normalize to [-1, 1] for diffusion
+        # Ensure images are in [0, 1] range (training_step normalizes internally)
         if images.max() > 1.0:
-            images = images / 127.5 - 1.0
-        elif images.min() >= 0:
-            images = images * 2 - 1
+            images = images / 255.0  # Convert from [0, 255] to [0, 1]
 
         # Use generator's training_step for consistent loss calculation
+        # NOTE: Pass images in [0,1] range - generator.training_step normalizes internally
         if hasattr(generator, 'training_step'):
             with torch.no_grad():
                 losses = generator.training_step(images, text_context)
                 loss = losses['total_loss']
                 return loss.detach()
 
-        # Fallback to manual diffusion loss
+        # Fallback to manual diffusion loss - normalize here since no training_step
+        images_norm = images * 2 - 1
         with torch.no_grad():
-            z, mean, logvar = generator.encode_image(images)
+            z, mean, logvar = generator.encode_image(images_norm)
             
             batch_size = z.shape[0]
             timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
@@ -1375,29 +1372,28 @@ def eval_video_diffusion_step(video_generator, video_frames, text_context, targe
             video_frames = F.interpolate(video_frames, size=(target_size, target_size), mode='bilinear', align_corners=False)
             video_frames = video_frames.view(b, t, c, target_size, target_size)
 
-        # Normalize to [-1, 1]
+        # Ensure video_frames are in [0, 1] range (training_step normalizes internally)
         if video_frames.max() > 1.0:
-            video_frames_norm = video_frames / 127.5 - 1.0
-        elif video_frames.min() >= 0:
-            video_frames_norm = video_frames * 2 - 1
-        else:
-            video_frames_norm = video_frames
+            video_frames = video_frames / 255.0  # Convert from [0, 255] to [0, 1]
 
+        # First frame for I2V training should be in [0, 1] range
         first_frame = None
-        if video_frames_norm.shape[1] > 1:
-            first_frame = (video_frames_norm[:, 0] + 1) / 2
+        if video_frames.shape[1] > 1:
+            first_frame = video_frames[:, 0]  # [B, C, H, W] in [0, 1]
 
         # Use generator's training_step for consistent loss calculation
+        # NOTE: Pass video in [0,1] range - generator.training_step normalizes internally
         if hasattr(video_generator, 'training_step'):
             with torch.no_grad():
-                video_frames_5d = video_frames_norm.permute(0, 2, 1, 3, 4)  # B, C, T, H, W
+                video_frames_5d = video_frames.permute(0, 2, 1, 3, 4)  # B, C, T, H, W
                 losses = video_generator.training_step(video_frames_5d, text_context, first_frame)
                 loss = losses['total_loss']
                 return loss.detach()
 
         # Fallback to manual video diffusion loss
+        # NOTE: encode_video normalizes internally, so pass [0,1] range
         with torch.no_grad():
-            video_frames_5d = video_frames_norm.permute(0, 2, 1, 3, 4)
+            video_frames_5d = video_frames.permute(0, 2, 1, 3, 4)  # B, C, T, H, W
             z, mean, logvar = video_generator.encode_video(video_frames_5d)
             
             batch_size = z.shape[0]
