@@ -446,9 +446,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
     Returns:
         Total loss or None if no valid samples
     """
-    if generator is None:
-        return None
-    if images is None:
+    if generator is None or images is None:
         return None
     try:
         if not isinstance(images, torch.Tensor):

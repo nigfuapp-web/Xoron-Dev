@@ -707,12 +707,6 @@ class XoronTrainer:
         if frozen:
             print(f"   ❄️ Frozen: {frozen_str}")
         
-        # Check generator availability
-        has_img_gen = hasattr(self.model, 'generator') and self.model.generator is not None
-        has_vid_gen = hasattr(self.model, 'video_generator') and self.model.video_generator is not None
-        print(f"   🎨 Image Generator: {'✅ enabled' if has_img_gen else '❌ disabled (diffusion training will be skipped)'}")
-        print(f"   🎬 Video Generator: {'✅ enabled' if has_vid_gen else '❌ disabled (diffusion training will be skipped)'}")
-        
         # Concise settings
         precision = 'BF16' if self.amp_dtype == torch.bfloat16 else ('FP16' if self.use_amp else 'FP32')
         if self.use_multi_scale:
@@ -1006,40 +1000,31 @@ class XoronTrainer:
             text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
             # Image diffusion (use configurable loss weight)
-            image_sample_types = ['image_generation', 'image_editing']
-            has_image_samples = any(t in image_sample_types for t in sample_types)
-            if has_image_samples:
-                if self.model.generator is not None:
-                    # Check if we have valid pixel values (not all zeros)
-                    pixel_valid = pixel_values.abs().mean() > 1e-6
-                    if pixel_valid:
-                        img_diff_loss = train_image_diffusion_step(
-                            self.model.generator, pixel_values, text_embeds, self.img_gen_size,
-                            sample_types=sample_types
-                        )
-                        if img_diff_loss is not None:
-                            img_diff_loss = img_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
-                            total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
-                            epoch_img_diff_loss += img_diff_loss.item()
-                            num_img_diff += 1
+            if any(t in ['image_generation', 'image_editing'] for t in sample_types):
+                img_diff_loss = train_image_diffusion_step(
+                    self.model.generator, pixel_values, text_embeds, self.img_gen_size,
+                    sample_types=sample_types
+                )
+                if img_diff_loss is not None:
+                    # Move to same device AND dtype as total_loss
+                    img_diff_loss = img_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
+                    total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
+                    epoch_img_diff_loss += img_diff_loss.item()
+                    num_img_diff += 1
 
             # Video diffusion - train on ALL video sample types (use configurable loss weight)
             video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
-            has_video_samples = any(t in video_sample_types for t in sample_types)
-            if has_video_samples:
-                if self.model.video_generator is not None:
-                    # Check if we have valid video frames (not all zeros)
-                    video_valid = video_frames.abs().mean() > 1e-6
-                    if video_valid:
-                        vid_diff_loss = train_video_diffusion_step(
-                            self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
-                            sample_types=sample_types
-                        )
-                        if vid_diff_loss is not None:
-                            vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
-                            total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
-                            epoch_vid_diff_loss += vid_diff_loss.item()
-                            num_vid_diff += 1
+            if any(t in video_sample_types for t in sample_types):
+                vid_diff_loss = train_video_diffusion_step(
+                    self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
+                    sample_types=sample_types
+                )
+                if vid_diff_loss is not None:
+                    # Move to same device AND dtype as total_loss
+                    vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
+                    total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
+                    epoch_vid_diff_loss += vid_diff_loss.item()
+                    num_vid_diff += 1
 
             # Voice ASR (use configurable loss weight)
             # MEMORY OPTIMIZATION: Clear cache before voice training to prevent OOM
@@ -1455,34 +1440,25 @@ class XoronTrainer:
                     text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
                     # Image diffusion eval
-                    image_sample_types = ['image_generation', 'image_editing']
-                    has_image_samples = any(t in image_sample_types for t in sample_types)
-                    if has_image_samples:
-                        if self.model.generator is not None:
-                            pixel_valid = pixel_values.abs().mean() > 1e-6
-                            if pixel_valid:
-                                img_diff_loss = eval_image_diffusion_step(
-                                    self.model.generator, pixel_values, text_embeds, self.img_gen_size,
-                                    sample_types=sample_types
-                                )
-                                if img_diff_loss is not None:
-                                    eval_img_diff_loss += img_diff_loss.item()
-                                    num_img_diff += 1
+                    if any(t in ['image_generation', 'image_editing'] for t in sample_types):
+                        img_diff_loss = eval_image_diffusion_step(
+                            self.model.generator, pixel_values, text_embeds, self.img_gen_size,
+                            sample_types=sample_types
+                        )
+                        if img_diff_loss is not None:
+                            eval_img_diff_loss += img_diff_loss.item()
+                            num_img_diff += 1
 
                     # Video diffusion eval
                     video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
-                    has_video_samples = any(t in video_sample_types for t in sample_types)
-                    if has_video_samples:
-                        if self.model.video_generator is not None:
-                            video_valid = video_frames.abs().mean() > 1e-6
-                            if video_valid:
-                                vid_diff_loss = eval_video_diffusion_step(
-                                    self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
-                                    sample_types=sample_types
-                                )
-                                if vid_diff_loss is not None:
-                                    eval_vid_diff_loss += vid_diff_loss.item()
-                                    num_vid_diff += 1
+                    if any(t in video_sample_types for t in sample_types):
+                        vid_diff_loss = eval_video_diffusion_step(
+                            self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
+                            sample_types=sample_types
+                        )
+                        if vid_diff_loss is not None:
+                            eval_vid_diff_loss += vid_diff_loss.item()
+                            num_vid_diff += 1
 
                     # ASR eval
                     if any(t == 'voice_asr' for t in sample_types):
