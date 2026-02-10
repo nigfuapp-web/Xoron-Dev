@@ -269,22 +269,18 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
         # Optimized layout for 2 GPUs - REBALANCED to fix voice training OOM
         # GPU 1 was overloaded (14.3GB used vs 14.5GB total) - moved audio to GPU 0
         return {
-            # === GPU 0: Input, Generation & Audio (~10 GB) ===
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:0',      # MOVED from GPU 1 - needs room for optimizer states
-            'waveform_decoder': 'cuda:0',   # MOVED from GPU 1 - needs room for optimizer states
+            'audio_decoder': 'cuda:1',      # MOVED from GPU 1 - needs room for optimizer states
+            'waveform_decoder': 'cuda:1',   # MOVED from GPU 1 - needs room for optimizer states
             'audio_projector': 'cuda:0',
             'projector': 'cuda:0',
             'video_generator': 'cuda:0',
             'generator': 'cuda:0',
-            
-            # === GPU 1: LLM only (~14 GB) ===
             'llm': 'cuda:1',
             'modality_markers': 'cuda:1',
             'cross_attention': 'cuda:1',
-            
             'primary': 'cuda:0',
         }
     else:
