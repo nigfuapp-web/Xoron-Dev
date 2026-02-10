@@ -59,7 +59,7 @@ class TrainingConfig:
     sample_repeat: int = 2  # Each sample shown N times within gradient accumulation window
 
     # Training settings - optimized for ~31GB VRAM
-    batch_size: int = 1
+    batch_size: int = 2
     gradient_accumulation_steps: int = 16  # REDUCED: 128 too high for FP16 stability, causes gradient explosion
     learning_rate: float = 1e-4  # INCREASED: FP32 optimizer states prevent overflow, can use higher LR
     weight_decay: float = 0.01
