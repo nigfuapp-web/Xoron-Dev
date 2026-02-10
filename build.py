@@ -49,6 +49,35 @@ from transformers import AutoTokenizer, CLIPImageProcessor
 CONFIG_FILE = "xoron_config.json"
 
 
+def get_hf_token() -> Optional[str]:
+    """Get HuggingFace token from Kaggle secrets, environment, or huggingface-cli login."""
+    # 1. Try Kaggle secrets first
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        token = user_secrets.get_secret("hf_token")
+        if token:
+            return token
+    except Exception:
+        pass
+    
+    # 2. Try environment variables
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        return token
+    
+    # 3. Try huggingface-cli login token
+    try:
+        from huggingface_hub import HfFolder
+        token = HfFolder.get_token()
+        if token:
+            return token
+    except Exception:
+        pass
+    
+    return None
+
+
 def safe_convert_to_fp16(model):
     """
     Safely convert model to FP16, handling potential overflow issues.
@@ -1128,6 +1157,9 @@ def run_build_and_train(
         resume_streaming_state=resume_streaming_state
     )
 
+    # Get HuggingFace token for uploading trained model
+    hf_token = get_hf_token()
+    
     # Create trainer with resume support
     trainer = XoronTrainer(
         model=model,
@@ -1140,6 +1172,7 @@ def run_build_and_train(
         resume_from=checkpoint_path if resume_training else None,
         tokenizer=tokenizer,  # Pass tokenizer for saving with checkpoints
         eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
+        hf_token=hf_token,  # Pass HF token for uploading to HuggingFace Hub
     )
 
     trainer.train()
@@ -1299,6 +1332,9 @@ def run_hf_training(
         resume_streaming_state=resume_streaming_state
     )
 
+    # Get HuggingFace token for uploading trained model
+    hf_token = get_hf_token()
+    
     # Create trainer with resume support
     trainer = XoronTrainer(
         model=model,
@@ -1311,6 +1347,7 @@ def run_hf_training(
         resume_from=resume_from,  # Pass checkpoint path for resuming
         tokenizer=tokenizer,
         eval_dataset=eval_dataset,  # Pass eval dataset for validation after each epoch
+        hf_token=hf_token,  # Pass HF token for uploading to HuggingFace Hub
     )
 
     trainer.train()

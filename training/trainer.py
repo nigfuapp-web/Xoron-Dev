@@ -1000,7 +1000,9 @@ class XoronTrainer:
             text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
             # Image diffusion (use configurable loss weight)
-            if any(t in ['image_generation', 'image_editing'] for t in sample_types):
+            # MUST match filter in train_image_diffusion_step to actually train
+            image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
+            if any(t in image_sample_types for t in sample_types):
                 img_diff_loss = train_image_diffusion_step(
                     self.model.generator, pixel_values, text_embeds, self.img_gen_size,
                     sample_types=sample_types
@@ -1013,7 +1015,9 @@ class XoronTrainer:
                     num_img_diff += 1
 
             # Video diffusion - train on ALL video sample types (use configurable loss weight)
-            video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
+            # MUST match filter in train_video_diffusion_step to actually train
+            video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                  'video_preference', 'video_likert', 'text_to_video']
             if any(t in video_sample_types for t in sample_types):
                 vid_diff_loss = train_video_diffusion_step(
                     self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
@@ -1440,7 +1444,9 @@ class XoronTrainer:
                     text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
                     # Image diffusion eval
-                    if any(t in ['image_generation', 'image_editing'] for t in sample_types):
+                    # MUST match filter in eval_image_diffusion_step
+                    image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
+                    if any(t in image_sample_types for t in sample_types):
                         img_diff_loss = eval_image_diffusion_step(
                             self.model.generator, pixel_values, text_embeds, self.img_gen_size,
                             sample_types=sample_types
@@ -1450,7 +1456,9 @@ class XoronTrainer:
                             num_img_diff += 1
 
                     # Video diffusion eval
-                    video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
+                    # MUST match filter in eval_video_diffusion_step
+                    video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                          'video_preference', 'video_likert', 'text_to_video']
                     if any(t in video_sample_types for t in sample_types):
                         vid_diff_loss = eval_video_diffusion_step(
                             self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,

@@ -1255,8 +1255,9 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
             return None
 
         # Filter by sample type if provided
+        image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
         if sample_types is not None:
-            type_mask = torch.tensor([t in ['image_generation', 'image_editing'] for t in sample_types], dtype=torch.bool, device=gen_device)
+            type_mask = torch.tensor([t in image_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
             images = gpu_safe_index(images, type_mask)
@@ -1345,7 +1346,8 @@ def eval_video_diffusion_step(video_generator, video_frames, text_context, targe
             return None
 
         # Filter by sample type
-        video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 'video_preference', 'video_likert']
+        video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                              'video_preference', 'video_likert', 'text_to_video']
         if sample_types is not None:
             type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
