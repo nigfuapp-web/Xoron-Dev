@@ -122,6 +122,8 @@ class FP32OptimizerWrapper:
         return self.optimizer.param_groups
 
 
+_collate_debug_counter = [0]
+
 def create_collate_fn(video_frames: int, video_size: int, active_modalities: str = 'all', vision_size: int = 256):
     """Create a collate function with the specified video configuration.
     
@@ -149,6 +151,45 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             labels = torch.stack([b["labels"] for b in batch])
             batch_size = len(batch)
             sample_types = [b.get("sample_type", "text") for b in batch]
+            
+            # DEBUG: Show first 10 batches
+            _collate_debug_counter[0] += 1
+            _debug = _collate_debug_counter[0] <= 10
+            
+            if _debug:
+                print(f"\n{'='*60}")
+                print(f"[DEBUG BATCH #{_collate_debug_counter[0]}] {batch_size} samples")
+                print(f"{'='*60}")
+                for i, b in enumerate(batch):
+                    stype = b.get("sample_type", "unknown")
+                    pv = b.get("pixel_values")
+                    vf = b.get("video_frames")
+                    af = b.get("audio_features")
+                    
+                    # Image info
+                    img_info = "None"
+                    if pv is not None and isinstance(pv, torch.Tensor):
+                        img_info = f"shape={list(pv.shape)}, mean={pv.abs().mean().item():.4f}"
+                    
+                    # Video info
+                    vid_info = "None"
+                    if vf is not None and isinstance(vf, torch.Tensor):
+                        vid_info = f"shape={list(vf.shape)}, mean={vf.abs().mean().item():.4f}"
+                    
+                    # Audio info
+                    aud_info = "None"
+                    if af is not None and isinstance(af, torch.Tensor):
+                        aud_info = f"shape={list(af.shape)}, mean={af.abs().mean().item():.4f}"
+                    
+                    # Text info (first 50 chars of decoded tokens)
+                    txt_info = f"len={b['input_ids'].shape[0]}"
+                    
+                    print(f"  Sample {i} [{stype}]:")
+                    print(f"    TEXT:  {txt_info}")
+                    print(f"    IMAGE: {img_info}")
+                    print(f"    VIDEO: {vid_info}")
+                    print(f"    AUDIO: {aud_info}")
+                print(f"{'='*60}\n")
             
             # Identify which samples have REAL data (not None)
             has_image = [b.get("pixel_values") is not None for b in batch]
