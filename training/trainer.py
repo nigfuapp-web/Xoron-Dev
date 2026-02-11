@@ -15,6 +15,7 @@ import os
 import gc
 import json
 import time
+import random
 import torch
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
@@ -203,8 +204,6 @@ class XoronTrainer:
             For image: (height, width) tuple
             For video: ((height, width), num_frames) tuple
         """
-        import random
-        
         if not self.use_multi_scale:
             # Multi-scale disabled - use base sizes
             if modality == 'image':
@@ -223,7 +222,24 @@ class XoronTrainer:
         scales = list(scales)
         probs = list(probs)
         
-        # Ensure we have valid scales and probs
+        # CRITICAL: Ensure scales are proper (H, W) tuples
+        # This handles cases where scales might be improperly formatted
+        fixed_scales = []
+        for s in scales:
+            if isinstance(s, (list, tuple)) and len(s) == 2:
+                fixed_scales.append((int(s[0]), int(s[1])))
+            elif isinstance(s, (int, float)):
+                # Single value - make it square
+                fixed_scales.append((int(s), int(s)))
+            else:
+                # Fallback to first valid value or base size
+                if modality == 'image':
+                    fixed_scales.append((self.img_gen_size, self.img_gen_size))
+                else:
+                    fixed_scales.append((self.vid_gen_size, self.vid_gen_size))
+        scales = fixed_scales
+        
+        # Ensure we have valid scales and probs with matching lengths
         if len(scales) == 0 or len(probs) == 0:
             # Fallback to base size
             if modality == 'image':
@@ -231,11 +247,25 @@ class XoronTrainer:
             else:
                 return ((self.vid_gen_size, self.vid_gen_size), 16)
         
+        # CRITICAL: Match probability length to scales length
+        if len(probs) != len(scales):
+            # Truncate or pad probs to match scales
+            if len(probs) > len(scales):
+                probs = probs[:len(scales)]
+            else:
+                # Pad with equal probability
+                while len(probs) < len(scales):
+                    probs.append(1.0 / len(scales))
+        
         # Normalize probabilities
         total_prob = sum(probs)
-        probs_normalized = [p / total_prob for p in probs]
+        if total_prob <= 0:
+            # All zero probs - use uniform
+            probs_normalized = [1.0 / len(scales)] * len(scales)
+        else:
+            probs_normalized = [p / total_prob for p in probs]
         
-        # Use Python's random.choices for weighted random selection (more reliable)
+        # Use Python's random.choices for weighted random selection
         if self.multi_scale_strategy == 'progressive':
             # Progressive: start small, increase scale over epochs
             warmup = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 5) if hasattr(self, 'xoron_config') else 5
@@ -244,23 +274,47 @@ class XoronTrainer:
             scales_subset = scales[:max_idx + 1]
             probs_subset = probs_normalized[:max_idx + 1]
             total_subset = sum(probs_subset)
-            probs_subset = [p / total_subset for p in probs_subset]
+            if total_subset <= 0:
+                probs_subset = [1.0 / len(scales_subset)] * len(scales_subset)
+            else:
+                probs_subset = [p / total_subset for p in probs_subset]
             selected_scale = random.choices(scales_subset, weights=probs_subset, k=1)[0]
         else:
             # Random strategy (default): sample from full distribution
-            selected_scale = random.choices(scales, weights=probs_normalized, k=1)[0]
+            # Use random.choices with proper weight normalization
+            choice_idx = random.choices(range(len(scales)), weights=probs_normalized, k=1)[0]
+            selected_scale = scales[choice_idx]
         
-        # Handle if selected_scale is a list [H, W] instead of tuple (H, W)
+        # Ensure selected_scale is a proper (H, W) tuple
         if isinstance(selected_scale, list):
             selected_scale = tuple(selected_scale)
+        if not isinstance(selected_scale, tuple) or len(selected_scale) != 2:
+            # Fallback if somehow invalid
+            if modality == 'image':
+                selected_scale = (self.img_gen_size, self.img_gen_size)
+            else:
+                selected_scale = (self.vid_gen_size, self.vid_gen_size)
         
         if modality == 'video':
             # Also sample frame count for video
             frame_scales = list(self.video_frame_scales)
             frame_probs = list(self.video_frame_scale_probs)
+            
+            # Match lengths
+            if len(frame_probs) != len(frame_scales):
+                if len(frame_probs) > len(frame_scales):
+                    frame_probs = frame_probs[:len(frame_scales)]
+                else:
+                    while len(frame_probs) < len(frame_scales):
+                        frame_probs.append(1.0 / len(frame_scales))
+            
             total_frame_prob = sum(frame_probs)
-            frame_probs_normalized = [p / total_frame_prob for p in frame_probs]
-            num_frames = random.choices(frame_scales, weights=frame_probs_normalized, k=1)[0]
+            if total_frame_prob <= 0:
+                frame_probs_normalized = [1.0 / len(frame_scales)] * len(frame_scales)
+            else:
+                frame_probs_normalized = [p / total_frame_prob for p in frame_probs]
+            frame_idx = random.choices(range(len(frame_scales)), weights=frame_probs_normalized, k=1)[0]
+            num_frames = frame_scales[frame_idx]
             return (selected_scale, num_frames)
         
         return selected_scale
@@ -1148,8 +1202,13 @@ class XoronTrainer:
                 # Sample scale for this batch (MULTI-SCALE TRAINING)
                 if self.use_multi_scale:
                     vid_scale_info = self._sample_multi_scale('video', epoch)
-                    vid_scale = vid_scale_info[0]  # ((H, W), num_frames)
-                    current_vid_size = vid_scale[0]  # Use height (assuming square)
+                    # vid_scale_info = ((H, W), num_frames)
+                    vid_scale = vid_scale_info[0]  # (H, W) tuple
+                    vid_num_frames = vid_scale_info[1]  # num_frames
+                    current_vid_size = vid_scale[0]  # H (assuming square)
+                    # Debug log: show actual sampled scale (first 3 batches only)
+                    if batch_idx < 3:
+                        print(f"      🔍 Sampled video scale: {vid_scale}, frames={vid_num_frames}, using size={current_vid_size}")
                 else:
                     current_vid_size = self.vid_gen_size
                 
