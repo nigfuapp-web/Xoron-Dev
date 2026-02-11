@@ -143,6 +143,15 @@ class XoronTrainer:
         self.video_frame_scale_probs = getattr(xoron_config, 'video_frame_scale_probs', (0.10, 0.15, 0.30, 0.20, 0.15, 0.10))
         self.multi_scale_strategy = getattr(xoron_config, 'multi_scale_strategy', 'random')
         
+        # Debug: Print multi-scale config
+        print(f"\n📐 Multi-Scale Config Debug:")
+        print(f"   use_multi_scale: {self.use_multi_scale}")
+        print(f"   strategy: {self.multi_scale_strategy}")
+        print(f"   video_scales: {self.video_scales}")
+        print(f"   video_scale_probs: {self.video_scale_probs}")
+        print(f"   image_scales: {self.image_scales}")
+        print(f"   image_scale_probs: {self.image_scale_probs}")
+        
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)
         self.image_diffusion_loss_weight = getattr(config, 'image_diffusion_loss_weight', 0.1)
@@ -194,7 +203,6 @@ class XoronTrainer:
             For image: (height, width) tuple
             For video: ((height, width), num_frames) tuple
         """
-        import random
         import numpy as np
         
         if not self.use_multi_scale:
@@ -211,30 +219,48 @@ class XoronTrainer:
             scales = self.video_scales
             probs = self.video_scale_probs
         
+        # Convert to list if tuple (for proper indexing)
+        scales = list(scales)
+        probs = list(probs)
+        
+        # Ensure we have valid scales and probs
+        if len(scales) == 0 or len(probs) == 0:
+            # Fallback to base size
+            if modality == 'image':
+                return (self.img_gen_size, self.img_gen_size)
+            else:
+                return ((self.vid_gen_size, self.vid_gen_size), 16)
+        
         # Normalize probabilities
-        probs = np.array(probs, dtype=np.float64)
-        probs = probs / probs.sum()
+        probs_arr = np.array(probs, dtype=np.float64)
+        probs_arr = probs_arr / probs_arr.sum()
         
         if self.multi_scale_strategy == 'progressive':
             # Progressive: start small, increase scale over epochs
-            warmup = self.xoron_config.multi_scale_warmup_epochs if hasattr(self, 'xoron_config') else 5
+            warmup = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 5) if hasattr(self, 'xoron_config') else 5
             max_idx = min(len(scales) - 1, int((epoch / max(warmup, 1)) * len(scales)))
             # Sample from first max_idx+1 scales only
-            probs_subset = probs[:max_idx + 1]
+            probs_subset = probs_arr[:max_idx + 1]
             probs_subset = probs_subset / probs_subset.sum()
             scale_idx = np.random.choice(max_idx + 1, p=probs_subset)
         else:
             # Random strategy (default): sample from full distribution
-            scale_idx = np.random.choice(len(scales), p=probs)
+            scale_idx = int(np.random.choice(len(scales), p=probs_arr))
         
         selected_scale = scales[scale_idx]
         
+        # Handle if selected_scale is a list [H, W] instead of tuple (H, W)
+        if isinstance(selected_scale, list):
+            selected_scale = tuple(selected_scale)
+        
         if modality == 'video':
             # Also sample frame count for video
-            frame_probs = np.array(self.video_frame_scale_probs, dtype=np.float64)
-            frame_probs = frame_probs / frame_probs.sum()
-            frame_idx = np.random.choice(len(self.video_frame_scales), p=frame_probs)
-            num_frames = self.video_frame_scales[frame_idx]
+            frame_scales = list(self.video_frame_scales)
+            frame_probs = list(self.video_frame_scale_probs)
+            frame_probs_arr = np.array(frame_probs, dtype=np.float64)
+            frame_probs_arr = frame_probs_arr / frame_probs_arr.sum()
+            frame_idx = int(np.random.choice(len(frame_scales), p=frame_probs_arr))
+            num_frames = frame_scales[frame_idx]
             return (selected_scale, num_frames)
         
         return selected_scale
