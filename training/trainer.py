@@ -203,7 +203,7 @@ class XoronTrainer:
             For image: (height, width) tuple
             For video: ((height, width), num_frames) tuple
         """
-        import numpy as np
+        import random
         
         if not self.use_multi_scale:
             # Multi-scale disabled - use base sizes
@@ -232,22 +232,23 @@ class XoronTrainer:
                 return ((self.vid_gen_size, self.vid_gen_size), 16)
         
         # Normalize probabilities
-        probs_arr = np.array(probs, dtype=np.float64)
-        probs_arr = probs_arr / probs_arr.sum()
+        total_prob = sum(probs)
+        probs_normalized = [p / total_prob for p in probs]
         
+        # Use Python's random.choices for weighted random selection (more reliable)
         if self.multi_scale_strategy == 'progressive':
             # Progressive: start small, increase scale over epochs
             warmup = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 5) if hasattr(self, 'xoron_config') else 5
             max_idx = min(len(scales) - 1, int((epoch / max(warmup, 1)) * len(scales)))
             # Sample from first max_idx+1 scales only
-            probs_subset = probs_arr[:max_idx + 1]
-            probs_subset = probs_subset / probs_subset.sum()
-            scale_idx = np.random.choice(max_idx + 1, p=probs_subset)
+            scales_subset = scales[:max_idx + 1]
+            probs_subset = probs_normalized[:max_idx + 1]
+            total_subset = sum(probs_subset)
+            probs_subset = [p / total_subset for p in probs_subset]
+            selected_scale = random.choices(scales_subset, weights=probs_subset, k=1)[0]
         else:
             # Random strategy (default): sample from full distribution
-            scale_idx = int(np.random.choice(len(scales), p=probs_arr))
-        
-        selected_scale = scales[scale_idx]
+            selected_scale = random.choices(scales, weights=probs_normalized, k=1)[0]
         
         # Handle if selected_scale is a list [H, W] instead of tuple (H, W)
         if isinstance(selected_scale, list):
@@ -257,10 +258,9 @@ class XoronTrainer:
             # Also sample frame count for video
             frame_scales = list(self.video_frame_scales)
             frame_probs = list(self.video_frame_scale_probs)
-            frame_probs_arr = np.array(frame_probs, dtype=np.float64)
-            frame_probs_arr = frame_probs_arr / frame_probs_arr.sum()
-            frame_idx = int(np.random.choice(len(frame_scales), p=frame_probs_arr))
-            num_frames = frame_scales[frame_idx]
+            total_frame_prob = sum(frame_probs)
+            frame_probs_normalized = [p / total_frame_prob for p in frame_probs]
+            num_frames = random.choices(frame_scales, weights=frame_probs_normalized, k=1)[0]
             return (selected_scale, num_frames)
         
         return selected_scale
