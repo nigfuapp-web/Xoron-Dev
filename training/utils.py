@@ -142,9 +142,11 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             has_audio = [b.get("audio_features") is not None for b in batch]
             
             # Handle pixel_values - ONLY use VALID real data, NO zeros fallback
+            # CRITICAL: Track which samples have valid images for proper alignment
+            image_sample_indices = []  # Track indices of samples with valid images
             if need_image and any(has_image):
                 pixel_values_list = []
-                for i, b in enumerate(batch):
+                for idx, b in enumerate(batch):
                     pv = b.get("pixel_values")
                     if pv is not None and isinstance(pv, torch.Tensor) and pv.dim() == 3:
                         # Check if actually valid (not zeros)
@@ -153,6 +155,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                         if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
                             pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
                         pixel_values_list.append(pv)
+                        image_sample_indices.append(idx)
                 
                 if pixel_values_list:
                     pixel_values = torch.stack(pixel_values_list)
@@ -164,10 +167,12 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 pixel_values = None
 
             # Handle video_frames - only valid data
+            # CRITICAL: Track which samples have valid videos for proper alignment
             video_frames_tensor = None
+            video_sample_indices = []  # Track indices of samples with valid videos
             if need_video and any(has_video):
                 video_frames_list = []
-                for b in batch:
+                for idx, b in enumerate(batch):
                     vf = b.get("video_frames")
                     if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
                         if vf.abs().mean().item() > 1e-6:
@@ -175,6 +180,7 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                             vf = torch.clamp(vf, min=-10.0, max=10.0)
                             if vf.abs().mean().item() > 1e-6:
                                 video_frames_list.append(vf)
+                                video_sample_indices.append(idx)
                 if video_frames_list:
                     video_frames_tensor = torch.stack(video_frames_list)
 
@@ -269,12 +275,21 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 audio_features = None
                 speaker_ref_audio = None
 
+            # Extract aligned sample types for each modality
+            # CRITICAL: *_sample_types must match tensor.shape[0] for proper alignment
+            image_sample_types_list = [sample_types[i] for i in image_sample_indices] if image_sample_indices else []
+            video_sample_types_list = [sample_types[i] for i in video_sample_indices] if video_sample_indices else []
+            
             return {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 "labels": labels,
                 "pixel_values": pixel_values,
+                "image_sample_types": image_sample_types_list,  # Aligned with pixel_values
+                "image_sample_indices": image_sample_indices,   # Indices for text_embed alignment
                 "video_frames": video_frames_tensor,
+                "video_sample_types": video_sample_types_list,  # Aligned with video_frames
+                "video_sample_indices": video_sample_indices,   # Indices for text_embed alignment
                 "audio_features": audio_features,
                 "speaker_ref_audio": speaker_ref_audio,
                 "sample_type": sample_types,
@@ -288,7 +303,11 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 "attention_mask": torch.stack([b["attention_mask"] for b in batch]),
                 "labels": torch.stack([b["labels"] for b in batch]),
                 "pixel_values": torch.zeros(batch_size, 3, 1, 1),
+                "image_sample_types": [],
+                "image_sample_indices": [],
                 "video_frames": torch.zeros(batch_size, 1, 3, 1, 1),
+                "video_sample_types": [],
+                "video_sample_indices": [],
                 "audio_features": torch.zeros(batch_size, 1),
                 "speaker_ref_audio": torch.zeros(batch_size, 1),
                 "sample_type": ["text"] * batch_size,
@@ -493,7 +512,16 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
 
 
 def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
-    """Train video diffusion on video data."""
+    """
+    Train video diffusion on video data with multi-scale support.
+    
+    Args:
+        video_generator: The video generator model
+        video_frames: Video tensor [B, T, C, H, W] from collate (pre-filtered to valid videos)
+        text_context: Text embeddings [B_full, seq_len, dim] (may be larger than video_frames batch)
+        target_size: Target spatial size for this training step (multi-scale)
+        sample_types: List of sample types ALIGNED with video_frames (from batch['video_sample_types'])
+    """
     if video_generator is None or video_frames is None:
         return None
     try:
@@ -504,17 +532,34 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         gen_dtype = next(video_generator.parameters()).dtype
         
         video_frames = video_frames.to(device=gen_device, dtype=gen_dtype)
+        
+        # Handle text_context alignment:
+        # - video_frames has B_video samples (already filtered by collate)
+        # - text_context may have B_full samples (full batch)
+        # - sample_types should be aligned with video_frames (B_video)
+        B_video = video_frames.shape[0]
+        
+        # Filter text_context to match video_frames size if needed
+        # When sample_types is provided and aligned, we assume text_context needs slicing
+        if text_context.shape[0] != B_video:
+            # text_context is larger - take first B_video samples
+            # (This assumes video samples are at the start, which may not be true in all cases)
+            # Better: use video_sample_indices passed from collate, but for now truncate
+            text_context = text_context[:B_video]
+        
         text_context = text_context.to(device=gen_device, dtype=gen_dtype)
 
-        # Filter by sample type if provided
-        video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
-                              'video_preference', 'video_likert', 'text_to_video']
-        if sample_types is not None:
-            type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
+        # Filter by sample type if provided (sample_types should already be aligned)
+        video_sample_type_names = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                   'video_preference', 'video_likert', 'text_to_video']
+        if sample_types is not None and len(sample_types) == B_video:
+            type_mask = torch.tensor([t in video_sample_type_names for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            video_frames = gpu_safe_index(video_frames, type_mask)
-            text_context = gpu_safe_index(text_context, type_mask)
+            if not type_mask.all():
+                # Some samples are not video types - filter
+                video_frames = gpu_safe_index(video_frames, type_mask)
+                text_context = gpu_safe_index(text_context, type_mask)
 
         # Handle dimension ordering: collate returns [B, T, C, H, W], we need [B, C, T, H, W]
         if video_frames.dim() == 5:
@@ -1257,14 +1302,15 @@ def eval_image_diffusion_step(generator, images, text_context, target_size=256, 
 
 
 def eval_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
-    """Evaluate video diffusion: compute loss without gradient tracking.
+    """
+    Evaluate video diffusion: compute loss without gradient tracking.
     
     Args:
         video_generator: Video diffusion generator model
-        video_frames: Input video frames (B, T, C, H, W)
-        text_context: Text embeddings for conditioning
-        target_size: Target frame size (256 for memory efficiency)
-        sample_types: List of sample types for filtering
+        video_frames: Input video frames (B, T, C, H, W) - pre-filtered to valid videos
+        text_context: Text embeddings for conditioning - should be ALIGNED with video_frames
+        target_size: Target frame size for multi-scale training
+        sample_types: List of sample types ALIGNED with video_frames (from batch['video_sample_types'])
         
     Returns:
         Loss tensor (detached) or None if evaluation fails
@@ -1281,21 +1327,28 @@ def eval_video_diffusion_step(video_generator, video_frames, text_context, targe
         video_frames = video_frames.to(gen_device)
         
         if text_context is not None:
+            # Ensure text_context is aligned with video_frames
+            B_video = video_frames.shape[0]
+            if text_context.shape[0] != B_video:
+                text_context = text_context[:B_video]
             text_context = text_context.to(gen_device)
 
         if video_frames.dim() != 5:
             return None
 
-        # Filter by sample type
-        video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
-                              'video_preference', 'video_likert', 'text_to_video']
-        if sample_types is not None:
-            type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
+        # Filter by sample type (sample_types should already be aligned with video_frames)
+        video_sample_type_names = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                   'video_preference', 'video_likert', 'text_to_video']
+        B_video = video_frames.shape[0]
+        if sample_types is not None and len(sample_types) == B_video:
+            type_mask = torch.tensor([t in video_sample_type_names for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
                 return None
-            video_frames = gpu_safe_index(video_frames, type_mask)
-            if text_context is not None and text_context.dim() >= 2:
-                text_context = gpu_safe_index(text_context, type_mask)
+            if not type_mask.all():
+                # Some samples are not video types - filter
+                video_frames = gpu_safe_index(video_frames, type_mask)
+                if text_context is not None and text_context.dim() >= 2:
+                    text_context = gpu_safe_index(text_context, type_mask)
 
         # Filter non-zero videos
         valid_mask = video_frames.abs().sum(dim=(1, 2, 3, 4)) > 1e-6

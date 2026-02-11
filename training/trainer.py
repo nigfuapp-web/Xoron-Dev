@@ -129,10 +129,19 @@ class XoronTrainer:
         self.img_gen_size = xoron_config.image_base_size
         self.vid_gen_size = xoron_config.video_base_size
         self.use_multi_scale = getattr(xoron_config, 'use_multi_scale', True)
-        self.img_min_size = getattr(xoron_config, 'image_min_size', 256)
+        self.img_min_size = getattr(xoron_config, 'image_min_size', 128)
         self.img_max_size = getattr(xoron_config, 'image_max_size', 512)
-        self.vid_min_size = getattr(xoron_config, 'video_min_size', 256)
-        self.vid_max_size = getattr(xoron_config, 'video_max_size', 448)
+        self.vid_min_size = getattr(xoron_config, 'video_min_size', 128)
+        self.vid_max_size = getattr(xoron_config, 'video_max_size', 384)
+        
+        # Multi-scale training configuration (SOTA: random scale sampling each batch)
+        self.image_scales = getattr(xoron_config, 'image_scales', ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384), (448, 448), (512, 512)))
+        self.image_scale_probs = getattr(xoron_config, 'image_scale_probs', (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05))
+        self.video_scales = getattr(xoron_config, 'video_scales', ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384)))
+        self.video_scale_probs = getattr(xoron_config, 'video_scale_probs', (0.10, 0.20, 0.35, 0.25, 0.10))
+        self.video_frame_scales = getattr(xoron_config, 'video_frame_scales', (8, 12, 16, 20, 24, 32))
+        self.video_frame_scale_probs = getattr(xoron_config, 'video_frame_scale_probs', (0.10, 0.15, 0.30, 0.20, 0.15, 0.10))
+        self.multi_scale_strategy = getattr(xoron_config, 'multi_scale_strategy', 'random')
         
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)
@@ -172,6 +181,63 @@ class XoronTrainer:
         # Resume from checkpoint if specified
         if resume_from is not None:
             self._load_checkpoint(resume_from)
+    
+    def _sample_multi_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
+        """
+        Sample a scale for multi-scale training.
+        
+        Args:
+            modality: 'image' or 'video' - which scale set to sample from
+            epoch: Current epoch (used for progressive strategy)
+            
+        Returns:
+            For image: (height, width) tuple
+            For video: ((height, width), num_frames) tuple
+        """
+        import random
+        import numpy as np
+        
+        if not self.use_multi_scale:
+            # Multi-scale disabled - use base sizes
+            if modality == 'image':
+                return (self.img_gen_size, self.img_gen_size)
+            else:
+                return ((self.vid_gen_size, self.vid_gen_size), 16)
+        
+        if modality == 'image':
+            scales = self.image_scales
+            probs = self.image_scale_probs
+        else:
+            scales = self.video_scales
+            probs = self.video_scale_probs
+        
+        # Normalize probabilities
+        probs = np.array(probs, dtype=np.float64)
+        probs = probs / probs.sum()
+        
+        if self.multi_scale_strategy == 'progressive':
+            # Progressive: start small, increase scale over epochs
+            warmup = self.xoron_config.multi_scale_warmup_epochs if hasattr(self, 'xoron_config') else 5
+            max_idx = min(len(scales) - 1, int((epoch / max(warmup, 1)) * len(scales)))
+            # Sample from first max_idx+1 scales only
+            probs_subset = probs[:max_idx + 1]
+            probs_subset = probs_subset / probs_subset.sum()
+            scale_idx = np.random.choice(max_idx + 1, p=probs_subset)
+        else:
+            # Random strategy (default): sample from full distribution
+            scale_idx = np.random.choice(len(scales), p=probs)
+        
+        selected_scale = scales[scale_idx]
+        
+        if modality == 'video':
+            # Also sample frame count for video
+            frame_probs = np.array(self.video_frame_scale_probs, dtype=np.float64)
+            frame_probs = frame_probs / frame_probs.sum()
+            frame_idx = np.random.choice(len(self.video_frame_scales), p=frame_probs)
+            num_frames = self.video_frame_scales[frame_idx]
+            return (selected_scale, num_frames)
+        
+        return selected_scale
     
     def _enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency across all components."""
@@ -999,13 +1065,33 @@ class XoronTrainer:
             # Train diffusion models based on sample type
             text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
-            # Image diffusion (use configurable loss weight)
-            # MUST match filter in train_image_diffusion_step to actually train
-            image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
-            if any(t in image_sample_types for t in sample_types):
+            # Image diffusion (use configurable loss weight with MULTI-SCALE)
+            # CRITICAL: Use image_sample_types from batch which is ALIGNED with pixel_values tensor
+            image_sample_type_names = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
+            
+            # Get aligned image sample types and indices from batch
+            batch_image_sample_types = batch.get("image_sample_types", [])
+            batch_image_sample_indices = batch.get("image_sample_indices", [])
+            has_image_samples = len(batch_image_sample_types) > 0 and any(t in image_sample_type_names for t in batch_image_sample_types)
+            
+            if has_image_samples and pixel_values is not None:
+                # Sample scale for this batch (MULTI-SCALE TRAINING)
+                if self.use_multi_scale:
+                    img_scale = self._sample_multi_scale('image', epoch)
+                    current_img_size = img_scale[0]  # Use height (assuming square)
+                else:
+                    current_img_size = self.img_gen_size
+                
+                # Extract aligned text_embeds using image_sample_indices
+                if batch_image_sample_indices and len(batch_image_sample_indices) == pixel_values.shape[0]:
+                    image_text_embeds = text_embeds[batch_image_sample_indices]
+                else:
+                    # Fallback: truncate text_embeds to match pixel_values
+                    image_text_embeds = text_embeds[:pixel_values.shape[0]]
+                
                 img_diff_loss = train_image_diffusion_step(
-                    self.model.generator, pixel_values, text_embeds, self.img_gen_size,
-                    sample_types=sample_types
+                    self.model.generator, pixel_values, image_text_embeds, current_img_size,
+                    sample_types=batch_image_sample_types  # CRITICAL: Use aligned types!
                 )
                 if img_diff_loss is not None:
                     # Move to same device AND dtype as total_loss
@@ -1013,22 +1099,62 @@ class XoronTrainer:
                     total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
                     epoch_img_diff_loss += img_diff_loss.item()
                     num_img_diff += 1
+                    # Log first successful image diffusion training per epoch
+                    if num_img_diff == 1:
+                        print(f"   ✅ Image diffusion: scale={current_img_size}x{current_img_size}, loss={img_diff_loss.item():.4f}")
 
-            # Video diffusion - train on ALL video sample types (use configurable loss weight)
-            # MUST match filter in train_video_diffusion_step to actually train
-            video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
-                                  'video_preference', 'video_likert', 'text_to_video']
-            if any(t in video_sample_types for t in sample_types):
-                vid_diff_loss = train_video_diffusion_step(
-                    self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
-                    sample_types=sample_types
-                )
-                if vid_diff_loss is not None:
-                    # Move to same device AND dtype as total_loss
-                    vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
-                    total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
-                    epoch_vid_diff_loss += vid_diff_loss.item()
-                    num_vid_diff += 1
+            # Video diffusion - train on ALL video sample types (use configurable loss weight with MULTI-SCALE)
+            # CRITICAL: Use video_sample_types from batch which is ALIGNED with video_frames tensor
+            video_sample_type_names = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                       'video_preference', 'video_likert', 'text_to_video']
+            
+            # Get aligned video sample types and indices from batch (added by collate function)
+            batch_video_sample_types = batch.get("video_sample_types", [])
+            batch_video_sample_indices = batch.get("video_sample_indices", [])
+            has_video_samples = len(batch_video_sample_types) > 0 and any(t in video_sample_type_names for t in batch_video_sample_types)
+            
+            if has_video_samples:
+                # Sample scale for this batch (MULTI-SCALE TRAINING)
+                if self.use_multi_scale:
+                    vid_scale_info = self._sample_multi_scale('video', epoch)
+                    vid_scale = vid_scale_info[0]  # ((H, W), num_frames)
+                    current_vid_size = vid_scale[0]  # Use height (assuming square)
+                else:
+                    current_vid_size = self.vid_gen_size
+                
+                # Debug: Check if video_generator exists and video_frames is valid
+                vid_gen_ok = self.model.video_generator is not None
+                vid_frames_ok = video_frames is not None and video_frames.numel() > 0
+                
+                if not vid_gen_ok:
+                    if batch_idx == 0:  # Only log once per epoch
+                        print(f"   ⚠️ Video generator is None - cannot train video diffusion!")
+                elif not vid_frames_ok:
+                    if batch_idx == 0:
+                        print(f"   ⚠️ Video frames is None/empty - no video data in batch")
+                else:
+                    # Extract aligned text_embeds using video_sample_indices
+                    # This ensures text_embeds matches video_frames exactly
+                    if batch_video_sample_indices and len(batch_video_sample_indices) == video_frames.shape[0]:
+                        video_text_embeds = text_embeds[batch_video_sample_indices]
+                    else:
+                        # Fallback: truncate text_embeds to match video_frames
+                        video_text_embeds = text_embeds[:video_frames.shape[0]]
+                    
+                    # Use batch_video_sample_types which is ALIGNED with video_frames
+                    vid_diff_loss = train_video_diffusion_step(
+                        self.model.video_generator, video_frames, video_text_embeds, current_vid_size,
+                        sample_types=batch_video_sample_types  # CRITICAL: Use aligned types!
+                    )
+                    if vid_diff_loss is not None:
+                        # Move to same device AND dtype as total_loss
+                        vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
+                        total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
+                        epoch_vid_diff_loss += vid_diff_loss.item()
+                        num_vid_diff += 1
+                        # Log first successful video diffusion training per epoch
+                        if num_vid_diff == 1:
+                            print(f"   ✅ Video diffusion: scale={current_vid_size}x{current_vid_size}, loss={vid_diff_loss.item():.4f}")
 
             # Voice ASR (use configurable loss weight)
             # MEMORY OPTIMIZATION: Clear cache before voice training to prevent OOM
@@ -1443,26 +1569,61 @@ class XoronTrainer:
                     # Get text embeddings for modality-specific eval
                     text_embeds = self.model.get_text_embeddings(input_ids, attention_mask)
 
-                    # Image diffusion eval
-                    # MUST match filter in eval_image_diffusion_step
-                    image_sample_types = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
-                    if any(t in image_sample_types for t in sample_types):
+                    # Image diffusion eval with multi-scale
+                    # MUST use aligned image_sample_types from batch
+                    image_sample_type_names = ['image_generation', 'image_editing', 'text_to_image', 'image_caption']
+                    batch_image_sample_types = batch.get("image_sample_types", [])
+                    batch_image_sample_indices = batch.get("image_sample_indices", [])
+                    has_image_samples = len(batch_image_sample_types) > 0 and any(t in image_sample_type_names for t in batch_image_sample_types)
+                    
+                    if has_image_samples and pixel_values is not None:
+                        # Sample scale for eval (multi-scale)
+                        if self.use_multi_scale:
+                            img_scale = self._sample_multi_scale('image', epoch)
+                            current_img_size = img_scale[0]
+                        else:
+                            current_img_size = self.img_gen_size
+                        
+                        # Extract aligned text_embeds
+                        if batch_image_sample_indices and len(batch_image_sample_indices) == pixel_values.shape[0]:
+                            image_text_embeds = text_embeds[batch_image_sample_indices]
+                        else:
+                            image_text_embeds = text_embeds[:pixel_values.shape[0]]
+                        
                         img_diff_loss = eval_image_diffusion_step(
-                            self.model.generator, pixel_values, text_embeds, self.img_gen_size,
-                            sample_types=sample_types
+                            self.model.generator, pixel_values, image_text_embeds, current_img_size,
+                            sample_types=batch_image_sample_types
                         )
                         if img_diff_loss is not None:
                             eval_img_diff_loss += img_diff_loss.item()
                             num_img_diff += 1
 
-                    # Video diffusion eval
-                    # MUST match filter in eval_video_diffusion_step
-                    video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
-                                          'video_preference', 'video_likert', 'text_to_video']
-                    if any(t in video_sample_types for t in sample_types):
+                    # Video diffusion eval with multi-scale
+                    # MUST use aligned video_sample_types from batch
+                    video_sample_type_names = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
+                                               'video_preference', 'video_likert', 'text_to_video']
+                    batch_video_sample_types = batch.get("video_sample_types", [])
+                    batch_video_sample_indices = batch.get("video_sample_indices", [])
+                    has_video_samples = len(batch_video_sample_types) > 0 and any(t in video_sample_type_names for t in batch_video_sample_types)
+                    
+                    if has_video_samples and video_frames is not None:
+                        # Sample scale for eval (multi-scale)
+                        if self.use_multi_scale:
+                            vid_scale_info = self._sample_multi_scale('video', epoch)
+                            vid_scale = vid_scale_info[0]
+                            current_vid_size = vid_scale[0]
+                        else:
+                            current_vid_size = self.vid_gen_size
+                        
+                        # Extract aligned text_embeds
+                        if batch_video_sample_indices and len(batch_video_sample_indices) == video_frames.shape[0]:
+                            video_text_embeds = text_embeds[batch_video_sample_indices]
+                        else:
+                            video_text_embeds = text_embeds[:video_frames.shape[0]]
+                        
                         vid_diff_loss = eval_video_diffusion_step(
-                            self.model.video_generator, video_frames, text_embeds, self.vid_gen_size,
-                            sample_types=sample_types
+                            self.model.video_generator, video_frames, video_text_embeds, current_vid_size,
+                            sample_types=batch_video_sample_types
                         )
                         if vid_diff_loss is not None:
                             eval_vid_diff_loss += vid_diff_loss.item()
