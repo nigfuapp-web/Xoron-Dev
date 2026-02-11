@@ -223,16 +223,13 @@ class XoronTrainer:
         probs = list(probs)
         
         # CRITICAL: Ensure scales are proper (H, W) tuples
-        # This handles cases where scales might be improperly formatted
         fixed_scales = []
         for s in scales:
             if isinstance(s, (list, tuple)) and len(s) == 2:
                 fixed_scales.append((int(s[0]), int(s[1])))
             elif isinstance(s, (int, float)):
-                # Single value - make it square
                 fixed_scales.append((int(s), int(s)))
             else:
-                # Fallback to first valid value or base size
                 if modality == 'image':
                     fixed_scales.append((self.img_gen_size, self.img_gen_size))
                 else:
@@ -241,36 +238,30 @@ class XoronTrainer:
         
         # Ensure we have valid scales and probs with matching lengths
         if len(scales) == 0 or len(probs) == 0:
-            # Fallback to base size
             if modality == 'image':
                 return (self.img_gen_size, self.img_gen_size)
             else:
                 return ((self.vid_gen_size, self.vid_gen_size), 16)
         
-        # CRITICAL: Match probability length to scales length
+        # Match probability length to scales length
         if len(probs) != len(scales):
-            # Truncate or pad probs to match scales
             if len(probs) > len(scales):
                 probs = probs[:len(scales)]
             else:
-                # Pad with equal probability
                 while len(probs) < len(scales):
                     probs.append(1.0 / len(scales))
         
         # Normalize probabilities
         total_prob = sum(probs)
         if total_prob <= 0:
-            # All zero probs - use uniform
             probs_normalized = [1.0 / len(scales)] * len(scales)
         else:
             probs_normalized = [p / total_prob for p in probs]
         
-        # Use Python's random.choices for weighted random selection
+        # Sample using random - directly pick from scales using weighted choice
         if self.multi_scale_strategy == 'progressive':
-            # Progressive: start small, increase scale over epochs
             warmup = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 5) if hasattr(self, 'xoron_config') else 5
             max_idx = min(len(scales) - 1, int((epoch / max(warmup, 1)) * len(scales)))
-            # Sample from first max_idx+1 scales only
             scales_subset = scales[:max_idx + 1]
             probs_subset = probs_normalized[:max_idx + 1]
             total_subset = sum(probs_subset)
@@ -280,27 +271,32 @@ class XoronTrainer:
                 probs_subset = [p / total_subset for p in probs_subset]
             selected_scale = random.choices(scales_subset, weights=probs_subset, k=1)[0]
         else:
-            # Random strategy (default): sample from full distribution
-            # Use random.choices with proper weight normalization
-            choice_idx = random.choices(range(len(scales)), weights=probs_normalized, k=1)[0]
-            selected_scale = scales[choice_idx]
+            # Random strategy: use cumulative distribution for reliable sampling
+            import random as rand_module
+            r = rand_module.random()  # [0, 1)
+            cumulative = 0.0
+            selected_idx = 0
+            for i, p in enumerate(probs_normalized):
+                cumulative += p
+                if r < cumulative:
+                    selected_idx = i
+                    break
+            selected_scale = scales[selected_idx]
         
         # Ensure selected_scale is a proper (H, W) tuple
         if isinstance(selected_scale, list):
             selected_scale = tuple(selected_scale)
         if not isinstance(selected_scale, tuple) or len(selected_scale) != 2:
-            # Fallback if somehow invalid
             if modality == 'image':
                 selected_scale = (self.img_gen_size, self.img_gen_size)
             else:
                 selected_scale = (self.vid_gen_size, self.vid_gen_size)
         
         if modality == 'video':
-            # Also sample frame count for video
+            # Also sample frame count for video using same cumulative method
             frame_scales = list(self.video_frame_scales)
             frame_probs = list(self.video_frame_scale_probs)
             
-            # Match lengths
             if len(frame_probs) != len(frame_scales):
                 if len(frame_probs) > len(frame_scales):
                     frame_probs = frame_probs[:len(frame_scales)]
@@ -313,7 +309,17 @@ class XoronTrainer:
                 frame_probs_normalized = [1.0 / len(frame_scales)] * len(frame_scales)
             else:
                 frame_probs_normalized = [p / total_frame_prob for p in frame_probs]
-            frame_idx = random.choices(range(len(frame_scales)), weights=frame_probs_normalized, k=1)[0]
+            
+            # Use cumulative distribution for frame sampling too
+            import random as rand_module
+            r = rand_module.random()
+            cumulative = 0.0
+            frame_idx = 0
+            for i, p in enumerate(frame_probs_normalized):
+                cumulative += p
+                if r < cumulative:
+                    frame_idx = i
+                    break
             num_frames = frame_scales[frame_idx]
             return (selected_scale, num_frames)
         
@@ -1217,29 +1223,28 @@ class XoronTrainer:
                         vid_scale = vid_scale_info[0]  # (H, W) tuple
                         vid_num_frames = vid_scale_info[1]  # num_frames
                         current_vid_size = vid_scale[0]  # H (assuming square)
+                        # DEBUG: Verify the scale was actually sampled correctly
+                        if num_vid_diff < 5:
+                            print(f"      🔬 DEBUG: vid_scale_info={vid_scale_info}, vid_scale={vid_scale}, current_vid_size={current_vid_size}")
                     else:
                         current_vid_size = self.vid_gen_size
                     
                     # Extract aligned text_embeds using video_sample_indices
-                    # This ensures text_embeds matches video_frames exactly
                     if batch_video_sample_indices and len(batch_video_sample_indices) == video_frames.shape[0]:
                         video_text_embeds = text_embeds[batch_video_sample_indices]
                     else:
-                        # Fallback: truncate text_embeds to match video_frames
                         video_text_embeds = text_embeds[:video_frames.shape[0]]
                     
                     # Use batch_video_sample_types which is ALIGNED with video_frames
                     vid_diff_loss = train_video_diffusion_step(
                         self.model.video_generator, video_frames, video_text_embeds, current_vid_size,
-                        sample_types=batch_video_sample_types  # CRITICAL: Use aligned types!
+                        sample_types=batch_video_sample_types
                     )
                     if vid_diff_loss is not None:
-                        # Move to same device AND dtype as total_loss
                         vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                         total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
                         epoch_vid_diff_loss += vid_diff_loss.item()
                         num_vid_diff += 1
-                        # Log first 10 successful video diffusion batches per epoch
                         if num_vid_diff <= 10:
                             print(f"   🎬 Video [{num_vid_diff}/10]: scale={current_vid_size}x{current_vid_size}, loss={vid_diff_loss.item():.4f}")
 
