@@ -830,14 +830,14 @@ class XoronTrainer:
             
             batch_start = time.time()
 
-            # Move batch to device
+            # Move batch to device (handle None for media that was skipped)
             device = self.config.device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            pixel_values = batch["pixel_values"].to(device)
-            video_frames = batch["video_frames"].to(device)
-            audio_features = batch["audio_features"].to(device)
+            pixel_values = batch["pixel_values"].to(device) if batch.get("pixel_values") is not None else None
+            video_frames = batch["video_frames"].to(device) if batch.get("video_frames") is not None else None
+            audio_features = batch["audio_features"].to(device) if batch.get("audio_features") is not None else None
             sample_types = batch.get("sample_type", ["text"] * len(input_ids))
             
             # ═══════════════════════════════════════════════════════════════════
@@ -1391,9 +1391,9 @@ class XoronTrainer:
                 input_ids = batch["input_ids"].to(device)
                 attention_mask = batch["attention_mask"].to(device)
                 labels = batch["labels"].to(device)
-                pixel_values = batch["pixel_values"].to(device)
-                video_frames = batch["video_frames"].to(device)
-                audio_features = batch["audio_features"].to(device)
+                pixel_values = batch["pixel_values"].to(device) if batch.get("pixel_values") is not None else None
+                video_frames = batch["video_frames"].to(device) if batch.get("video_frames") is not None else None
+                audio_features = batch["audio_features"].to(device) if batch.get("audio_features") is not None else None
                 sample_types = batch.get("sample_type", ["text"] * len(input_ids))
 
                 has_cot_samples = any(t == 'chain_of_thought' for t in sample_types)
