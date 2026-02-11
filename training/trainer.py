@@ -1051,6 +1051,11 @@ class XoronTrainer:
             # Clamp LLM loss to prevent extreme values (FP16 safety)
             llm_loss = torch.clamp(llm_loss, min=0.0, max=100.0)
             
+            # Log first 10 LLM batches per epoch
+            llm_loss_val_early = llm_loss.item()
+            if batch_idx < 10 and not (llm_loss_val_early != llm_loss_val_early):  # NaN check
+                print(f"   📝 LLM [{batch_idx + 1}/10]: loss={llm_loss_val_early:.4f}, types={sample_types[:3]}...")
+            
             # Track CoT loss separately
             if has_cot_samples:
                 cot_loss_val = llm_loss.item()
@@ -1099,9 +1104,9 @@ class XoronTrainer:
                     total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
                     epoch_img_diff_loss += img_diff_loss.item()
                     num_img_diff += 1
-                    # Log first successful image diffusion training per epoch
-                    if num_img_diff == 1:
-                        print(f"   ✅ Image diffusion: scale={current_img_size}x{current_img_size}, loss={img_diff_loss.item():.4f}")
+                    # Log first 10 successful image diffusion batches per epoch
+                    if num_img_diff <= 10:
+                        print(f"   🖼️ Image [{num_img_diff}/10]: scale={current_img_size}x{current_img_size}, loss={img_diff_loss.item():.4f}")
 
             # Video diffusion - train on ALL video sample types (use configurable loss weight with MULTI-SCALE)
             # CRITICAL: Use video_sample_types from batch which is ALIGNED with video_frames tensor
@@ -1152,9 +1157,9 @@ class XoronTrainer:
                         total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
                         epoch_vid_diff_loss += vid_diff_loss.item()
                         num_vid_diff += 1
-                        # Log first successful video diffusion training per epoch
-                        if num_vid_diff == 1:
-                            print(f"   ✅ Video diffusion: scale={current_vid_size}x{current_vid_size}, loss={vid_diff_loss.item():.4f}")
+                        # Log first 10 successful video diffusion batches per epoch
+                        if num_vid_diff <= 10:
+                            print(f"   🎬 Video [{num_vid_diff}/10]: scale={current_vid_size}x{current_vid_size}, loss={vid_diff_loss.item():.4f}")
 
             # Voice ASR (use configurable loss weight)
             # MEMORY OPTIMIZATION: Clear cache before voice training to prevent OOM
@@ -1173,6 +1178,9 @@ class XoronTrainer:
                     total_loss = total_loss + self.asr_loss_weight * asr_loss
                     epoch_asr_loss += asr_loss.item()
                     num_asr += 1
+                    # Log first 10 successful ASR batches per epoch
+                    if num_asr <= 10:
+                        print(f"   🎤 ASR [{num_asr}/10]: loss={asr_loss.item():.4f}")
                     del asr_loss  # Clean up
 
             # Voice TTS with Voice Cloning (use configurable loss weight)
@@ -1195,6 +1203,9 @@ class XoronTrainer:
                     total_loss = total_loss + self.tts_loss_weight * tts_loss
                     epoch_tts_loss += tts_loss.item()
                     num_tts += 1
+                    # Log first 10 successful TTS batches per epoch
+                    if num_tts <= 10:
+                        print(f"   🔊 TTS [{num_tts}/10]: loss={tts_loss.item():.4f}")
                     del tts_loss  # Clean up
                 
                 # Train waveform decoder for Speech-to-Speech (direct audio output)
