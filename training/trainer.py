@@ -1199,20 +1199,7 @@ class XoronTrainer:
             has_video_samples = len(batch_video_sample_types) > 0 and any(t in video_sample_type_names for t in batch_video_sample_types)
             
             if has_video_samples:
-                # Sample scale for this batch (MULTI-SCALE TRAINING)
-                if self.use_multi_scale:
-                    vid_scale_info = self._sample_multi_scale('video', epoch)
-                    # vid_scale_info = ((H, W), num_frames)
-                    vid_scale = vid_scale_info[0]  # (H, W) tuple
-                    vid_num_frames = vid_scale_info[1]  # num_frames
-                    current_vid_size = vid_scale[0]  # H (assuming square)
-                    # Debug log: show actual sampled scale (first 3 batches only)
-                    if batch_idx < 3:
-                        print(f"      🔍 Sampled video scale: {vid_scale}, frames={vid_num_frames}, using size={current_vid_size}")
-                else:
-                    current_vid_size = self.vid_gen_size
-                
-                # Debug: Check if video_generator exists and video_frames is valid
+                # Check if video_generator exists and video_frames is valid FIRST
                 vid_gen_ok = self.model.video_generator is not None
                 vid_frames_ok = video_frames is not None and video_frames.numel() > 0
                 
@@ -1223,6 +1210,16 @@ class XoronTrainer:
                     if batch_idx == 0:
                         print(f"   ⚠️ Video frames is None/empty - no video data in batch")
                 else:
+                    # Sample scale ONLY when we have valid video frames (MULTI-SCALE TRAINING)
+                    if self.use_multi_scale:
+                        vid_scale_info = self._sample_multi_scale('video', epoch)
+                        # vid_scale_info = ((H, W), num_frames)
+                        vid_scale = vid_scale_info[0]  # (H, W) tuple
+                        vid_num_frames = vid_scale_info[1]  # num_frames
+                        current_vid_size = vid_scale[0]  # H (assuming square)
+                    else:
+                        current_vid_size = self.vid_gen_size
+                    
                     # Extract aligned text_embeds using video_sample_indices
                     # This ensures text_embeds matches video_frames exactly
                     if batch_video_sample_indices and len(batch_video_sample_indices) == video_frames.shape[0]:
