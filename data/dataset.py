@@ -500,54 +500,84 @@ class TrueStreamingDataset(IterableDataset):
             pass
         return frames
 
+    _video_process_debug_count = 0
+    
     def _process_video_frames(self, video_data, sample: dict) -> Optional[torch.Tensor]:
         """Process video data to frame tensors."""
         import os as _os
+        TrueStreamingDataset._video_process_debug_count += 1
+        _debug = TrueStreamingDataset._video_process_debug_count <= 20
+        
         try:
             frames = []
             temp_video_path = None
+            video_source = "unknown"
 
             # Handle URL - download video first
             if isinstance(video_data, str) and video_data.startswith('http'):
+                video_source = f"URL ({video_data[:60]}...)" if len(video_data) > 60 else f"URL ({video_data})"
                 temp_video_path = self._download_video_from_url(video_data)
                 if temp_video_path:
                     frames = self._extract_frames_from_video(temp_video_path)
+                    if _debug:
+                        print(f"      [DATASET] Downloaded video: {len(frames)} frames extracted")
                     # Clean up temp file
                     try:
                         _os.remove(temp_video_path)
                     except:
                         pass
+                elif _debug:
+                    print(f"      [DATASET] Failed to download video from URL")
 
             # Handle direct frames (list of images)
             elif isinstance(video_data, (list, tuple)):
+                video_source = f"frame_list (len={len(video_data)})"
                 for frame in video_data[:self.max_video_frames]:
                     processed = self._process_image(frame)
                     if processed is not None:
                         frames.append(processed)
+                if _debug:
+                    print(f"      [DATASET] Frame list: {len(frames)}/{len(video_data)} frames processed")
 
             # Handle video file path
             elif isinstance(video_data, str):
+                video_source = f"file ({video_data})"
                 frames = self._extract_frames_from_video(video_data)
+                if _debug:
+                    print(f"      [DATASET] Video file: {len(frames)} frames extracted")
 
             # Handle dict with bytes
             elif isinstance(video_data, dict):
                 if 'bytes' in video_data and video_data['bytes']:
+                    video_source = f"dict_bytes (len={len(video_data['bytes'])})"
                     import tempfile
                     fd, temp_path = tempfile.mkstemp(suffix='.mp4')
                     try:
                         with _os.fdopen(fd, 'wb') as f:
                             f.write(video_data['bytes'])
                         frames = self._extract_frames_from_video(temp_path)
+                        if _debug:
+                            print(f"      [DATASET] Dict bytes: {len(frames)} frames extracted")
                     finally:
                         try:
                             _os.remove(temp_path)
                         except:
                             pass
                 elif 'path' in video_data and video_data['path']:
+                    video_source = f"dict_path ({video_data['path']})"
                     frames = self._extract_frames_from_video(video_data['path'])
+                    if _debug:
+                        print(f"      [DATASET] Dict path: {len(frames)} frames extracted")
 
             if len(frames) == 0:
+                if _debug:
+                    print(f"      [DATASET] No frames from {video_source}")
                 return None
+
+            # Check frame values BEFORE padding
+            if _debug and len(frames) > 0:
+                first_frame_mean = frames[0].abs().mean().item()
+                print(f"      [DATASET] First frame mean (before pad): {first_frame_mean:.6f}")
 
             # Pad to max_video_frames
             while len(frames) < self.max_video_frames:
@@ -566,9 +596,19 @@ class TrueStreamingDataset(IterableDataset):
                 f = torch.nan_to_num(f, nan=0.0, posinf=10.0, neginf=-10.0)
                 frame_tensors.append(f)
 
-            return torch.stack(frame_tensors)
+            result = torch.stack(frame_tensors)
+            
+            if _debug:
+                result_mean = result.abs().mean().item()
+                result_min = result.min().item()
+                result_max = result.max().item()
+                print(f"      [DATASET] Final video tensor: shape={list(result.shape)}, mean={result_mean:.6f}, range=[{result_min:.4f}, {result_max:.4f}]")
+            
+            return result
 
-        except Exception:
+        except Exception as e:
+            if _debug:
+                print(f"      [DATASET] Exception in video processing: {e}")
             return None
 
     def _download_audio_from_url(self, url: str, timeout: int = 30) -> Optional[str]:

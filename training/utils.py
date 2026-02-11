@@ -186,15 +186,32 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             if need_video and any(has_video):
                 video_frames_list = []
                 first_valid_video = None
-                for b in batch:
+                _collate_debug_video = len(batch) <= 4  # Debug first few batches
+                
+                for idx, b in enumerate(batch):
                     vf = b.get("video_frames")
+                    sample_type = b.get("sample_type", "unknown")
+                    
                     if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
+                        # Check if frame data is valid BEFORE processing
+                        raw_mean = vf.abs().mean().item()
+                        if _collate_debug_video:
+                            print(f"      [COLLATE] Sample {idx} ({sample_type}): shape={list(vf.shape)}, raw_mean={raw_mean:.6f}")
+                        
                         vf = torch.nan_to_num(vf, nan=0.0, posinf=10.0, neginf=-10.0)
                         vf = torch.clamp(vf, min=-10.0, max=10.0)
+                        
+                        if _collate_debug_video:
+                            processed_mean = vf.abs().mean().item()
+                            print(f"      [COLLATE] Sample {idx}: processed_mean={processed_mean:.6f}")
+                        
                         if first_valid_video is None:
                             first_valid_video = vf
                         video_frames_list.append(vf)
                     else:
+                        if _collate_debug_video:
+                            vf_info = f"None" if vf is None else f"type={type(vf).__name__}, dim={vf.dim() if hasattr(vf, 'dim') else 'N/A'}"
+                            print(f"      [COLLATE] Sample {idx} ({sample_type}): INVALID video - {vf_info}")
                         video_frames_list.append(None)  # Mark for later
                 
                 # Replace None with first valid video (maintains batch structure)
@@ -202,10 +219,17 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                     if vf is None:
                         if first_valid_video is not None:
                             video_frames_list[i] = first_valid_video.clone()
+                            if _collate_debug_video:
+                                print(f"      [COLLATE] Sample {i}: Using first_valid_video clone")
                         else:
                             video_frames_list[i] = torch.zeros(video_frames, 3, video_size, video_size)
+                            if _collate_debug_video:
+                                print(f"      [COLLATE] Sample {i}: Using ZEROS (no valid video in batch!)")
                 
                 video_frames_tensor = torch.stack(video_frames_list)
+                if _collate_debug_video:
+                    final_mean = video_frames_tensor.abs().mean().item()
+                    print(f"      [COLLATE] Final tensor: shape={list(video_frames_tensor.shape)}, mean={final_mean:.6f}")
             else:
                 # No video modality active or no videos in batch
                 video_frames_tensor = torch.zeros(batch_size, 1, 3, 1, 1)
@@ -541,6 +565,7 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
 
 
 _video_sample_count = [0]
+_video_debug_count = [0]
 
 def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
     """Train video diffusion on video data."""
@@ -553,8 +578,22 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         gen_device = next(video_generator.parameters()).device
         gen_dtype = next(video_generator.parameters()).dtype
         
+        # DEBUG: Check input state BEFORE any processing
+        _video_debug_count[0] += 1
+        if _video_debug_count[0] <= 50:
+            input_mean = video_frames.abs().mean().item()
+            input_min = video_frames.min().item()
+            input_max = video_frames.max().item()
+            print(f"      [VIDEO DEBUG] Input: shape={list(video_frames.shape)}, dtype={video_frames.dtype}, "
+                  f"mean={input_mean:.6f}, range=[{input_min:.4f}, {input_max:.4f}]")
+        
         video_frames = video_frames.to(device=gen_device, dtype=gen_dtype)
         text_context = text_context.to(device=gen_device, dtype=gen_dtype)
+        
+        # DEBUG: Check after dtype conversion
+        if _video_debug_count[0] <= 50:
+            after_dtype_mean = video_frames.abs().mean().item()
+            print(f"      [VIDEO DEBUG] After dtype ({gen_dtype}): mean={after_dtype_mean:.6f}")
 
         # Filter by sample type if provided
         video_sample_types = ['video_generation', 'image_to_video', 'video_caption', 'video_qa', 
@@ -562,25 +601,38 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if sample_types is not None:
             type_mask = torch.tensor([t in video_sample_types for t in sample_types], dtype=torch.bool, device=gen_device)
             if not type_mask.any():
+                if _video_debug_count[0] <= 50:
+                    print(f"      [VIDEO DEBUG] No video sample types in batch! types={sample_types}")
                 return None
             video_frames = gpu_safe_index(video_frames, type_mask)
             text_context = gpu_safe_index(text_context, type_mask)
+            if _video_debug_count[0] <= 50:
+                after_filter_mean = video_frames.abs().mean().item()
+                print(f"      [VIDEO DEBUG] After type filter: shape={list(video_frames.shape)}, mean={after_filter_mean:.6f}")
 
         # Handle dimension ordering: collate returns [B, T, C, H, W], we need [B, C, T, H, W]
         if video_frames.dim() == 5:
             B, T, C, H, W = video_frames.shape
+            if _video_debug_count[0] <= 50:
+                print(f"      [VIDEO DEBUG] 5D input: B={B}, T={T}, C={C}, H={H}, W={W}")
             # Collate always returns [B, T, C, H, W], permute to [B, C, T, H, W]
             video_frames = video_frames.permute(0, 2, 1, 3, 4)  # [B, T, C, H, W] -> [B, C, T, H, W]
         elif video_frames.dim() == 4:
             # Single video [T, C, H, W] -> [1, C, T, H, W]
             T, C, H, W = video_frames.shape
+            if _video_debug_count[0] <= 50:
+                print(f"      [VIDEO DEBUG] 4D input: T={T}, C={C}, H={H}, W={W}")
             video_frames = video_frames.permute(1, 0, 2, 3).unsqueeze(0)  # [C, T, H, W] -> [1, C, T, H, W]
         else:
+            if _video_debug_count[0] <= 50:
+                print(f"      [VIDEO DEBUG] Invalid dim: {video_frames.dim()}")
             return None
 
         B, C, T, H, W = video_frames.shape
 
         if C != 3 or T < 1:
+            if _video_debug_count[0] <= 50:
+                print(f"      [VIDEO DEBUG] Invalid C={C} or T={T}")
             return None
         
         # Limit frames during training (max 16 frames)
