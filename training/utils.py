@@ -155,37 +155,32 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
             has_video = [b.get("video_frames") is not None for b in batch]
             has_audio = [b.get("audio_features") is not None for b in batch]
             
-            # Handle pixel_values - only use real data
+            # Handle pixel_values - ONLY use VALID real data, NO zeros fallback
             if need_image and any(has_image):
                 pixel_values_list = []
                 for i, b in enumerate(batch):
                     pv = b.get("pixel_values")
                     if pv is not None and isinstance(pv, torch.Tensor) and pv.dim() == 3:
+                        # Check if actually valid (not zeros)
+                        if pv.abs().mean().item() < 1e-6:
+                            continue  # Skip zero images
                         if pv.shape[1] != vision_size or pv.shape[2] != vision_size:
                             pv = F.interpolate(pv.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
                         pixel_values_list.append(pv)
-                    else:
-                        # Non-image sample - use first valid image as placeholder (maintains batch structure)
-                        # This won't affect training since loss is masked by sample_type
-                        for j, b2 in enumerate(batch):
-                            pv2 = b2.get("pixel_values")
-                            if pv2 is not None and isinstance(pv2, torch.Tensor) and pv2.dim() == 3:
-                                if pv2.shape[1] != vision_size or pv2.shape[2] != vision_size:
-                                    pv2 = F.interpolate(pv2.unsqueeze(0), size=(vision_size, vision_size), mode='bilinear', align_corners=False).squeeze(0)
-                                pixel_values_list.append(pv2.clone())
-                                break
-                        else:
-                            # No valid images in batch at all - shouldn't happen but handle gracefully
-                            pixel_values_list.append(torch.zeros(3, vision_size, vision_size))
-                pixel_values = torch.stack(pixel_values_list)
+                
+                if pixel_values_list:
+                    pixel_values = torch.stack(pixel_values_list)
+                else:
+                    # No valid images - set to None
+                    pixel_values = None
             else:
                 # No image modality active or no images in batch
-                pixel_values = torch.zeros(batch_size, 3, 1, 1)
+                pixel_values = None
 
-            # Handle video_frames - only use real data
+            # Handle video_frames - ONLY use VALID real data, NO zeros fallback
             if need_video and any(has_video):
                 video_frames_list = []
-                first_valid_video = None
+                valid_indices = []  # Track which samples have valid video
                 _collate_debug_video = len(batch) <= 4  # Debug first few batches
                 
                 for idx, b in enumerate(batch):
@@ -193,48 +188,54 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                     sample_type = b.get("sample_type", "unknown")
                     
                     if vf is not None and isinstance(vf, torch.Tensor) and vf.dim() == 4:
-                        # Check if frame data is valid BEFORE processing
+                        # Check if frame data is ACTUALLY valid (not zeros)
                         raw_mean = vf.abs().mean().item()
+                        
+                        if raw_mean < 1e-6:
+                            # This is basically zeros - SKIP IT
+                            if _collate_debug_video:
+                                print(f"      [COLLATE] Sample {idx} ({sample_type}): SKIPPED - zero frames (mean={raw_mean:.8f})")
+                            continue
+                        
                         if _collate_debug_video:
                             print(f"      [COLLATE] Sample {idx} ({sample_type}): shape={list(vf.shape)}, raw_mean={raw_mean:.6f}")
                         
                         vf = torch.nan_to_num(vf, nan=0.0, posinf=10.0, neginf=-10.0)
                         vf = torch.clamp(vf, min=-10.0, max=10.0)
                         
-                        if _collate_debug_video:
-                            processed_mean = vf.abs().mean().item()
-                            print(f"      [COLLATE] Sample {idx}: processed_mean={processed_mean:.6f}")
+                        # Double-check after nan_to_num
+                        processed_mean = vf.abs().mean().item()
+                        if processed_mean < 1e-6:
+                            if _collate_debug_video:
+                                print(f"      [COLLATE] Sample {idx}: SKIPPED after processing (mean={processed_mean:.8f})")
+                            continue
                         
-                        if first_valid_video is None:
-                            first_valid_video = vf
+                        if _collate_debug_video:
+                            print(f"      [COLLATE] Sample {idx}: VALID, processed_mean={processed_mean:.6f}")
+                        
                         video_frames_list.append(vf)
+                        valid_indices.append(idx)
                     else:
                         if _collate_debug_video:
                             vf_info = f"None" if vf is None else f"type={type(vf).__name__}, dim={vf.dim() if hasattr(vf, 'dim') else 'N/A'}"
-                            print(f"      [COLLATE] Sample {idx} ({sample_type}): INVALID video - {vf_info}")
-                        video_frames_list.append(None)  # Mark for later
+                            print(f"      [COLLATE] Sample {idx} ({sample_type}): SKIPPED - invalid ({vf_info})")
                 
-                # Replace None with first valid video (maintains batch structure)
-                for i, vf in enumerate(video_frames_list):
-                    if vf is None:
-                        if first_valid_video is not None:
-                            video_frames_list[i] = first_valid_video.clone()
-                            if _collate_debug_video:
-                                print(f"      [COLLATE] Sample {i}: Using first_valid_video clone")
-                        else:
-                            video_frames_list[i] = torch.zeros(video_frames, 3, video_size, video_size)
-                            if _collate_debug_video:
-                                print(f"      [COLLATE] Sample {i}: Using ZEROS (no valid video in batch!)")
-                
-                video_frames_tensor = torch.stack(video_frames_list)
-                if _collate_debug_video:
-                    final_mean = video_frames_tensor.abs().mean().item()
-                    print(f"      [COLLATE] Final tensor: shape={list(video_frames_tensor.shape)}, mean={final_mean:.6f}")
+                # Only stack if we have valid videos - NO FALLBACK TO ZEROS
+                if video_frames_list:
+                    video_frames_tensor = torch.stack(video_frames_list)
+                    if _collate_debug_video:
+                        final_mean = video_frames_tensor.abs().mean().item()
+                        print(f"      [COLLATE] Final tensor: {len(video_frames_list)} valid videos, shape={list(video_frames_tensor.shape)}, mean={final_mean:.6f}")
+                else:
+                    # NO valid videos - set to None so training knows to skip
+                    video_frames_tensor = None
+                    if _collate_debug_video:
+                        print(f"      [COLLATE] NO valid videos in batch - will skip video training this batch")
             else:
                 # No video modality active or no videos in batch
-                video_frames_tensor = torch.zeros(batch_size, 1, 3, 1, 1)
+                video_frames_tensor = None
 
-            # Handle audio_features - only use REAL data, no zeros
+            # Handle audio_features - ONLY valid real data, NO zeros
             if need_audio and any(has_audio):
                 audio_features_list = []
                 speaker_ref_list = []
@@ -244,73 +245,56 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                 target_mel_bins = 80
                 ref_mel_frames = 437
                 
-                # Find first valid audio to determine mode and use as reference
-                first_valid_audio = None
-                first_valid_ref = None
+                # Determine mode from first valid audio
+                use_raw_waveform = False
                 for b in batch:
                     af = b.get("audio_features")
-                    sr = b.get("speaker_ref_audio")
                     if af is not None and isinstance(af, torch.Tensor) and af.numel() > 100:
-                        if first_valid_audio is None:
-                            first_valid_audio = af
-                    if sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100:
-                        if first_valid_ref is None:
-                            first_valid_ref = sr
-                
-                use_raw_waveform = first_valid_audio is not None and first_valid_audio.dim() == 1 and first_valid_audio.shape[0] > 1000
+                        use_raw_waveform = af.dim() == 1 and af.shape[0] > 1000
+                        break
                 
                 for b in batch:
                     af = b.get("audio_features")
                     sr = b.get("speaker_ref_audio")
                     
-                    is_valid_audio = af is not None and isinstance(af, torch.Tensor) and af.numel() > 100
-                    is_valid_ref = sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100
-                    
-                    # Audio features
-                    if is_valid_audio:
+                    # Only add VALID audio - skip invalid
+                    if af is not None and isinstance(af, torch.Tensor) and af.numel() > 100:
+                        if af.abs().mean().item() < 1e-6:
+                            continue  # Skip zero audio
                         if use_raw_waveform and af.dim() == 1:
                             if af.shape[0] > max_waveform_samples:
                                 af = af[:max_waveform_samples]
-                            # Don't pad - use actual length, model handles variable length
                             audio_features_list.append(af)
+                            # Handle speaker ref for this sample
+                            if sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100 and sr.dim() == 1:
+                                if sr.shape[0] > max_ref_samples:
+                                    sr = sr[:max_ref_samples]
+                                speaker_ref_list.append(sr)
+                            else:
+                                speaker_ref_list.append(None)
                         elif not use_raw_waveform and af.dim() == 2:
                             if af.shape[0] != target_mel_bins:
                                 af = F.interpolate(af.unsqueeze(0).unsqueeze(0), size=(target_mel_bins, af.shape[1]), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
                             if af.shape[1] > max_audio_len:
                                 af = af[:, :max_audio_len]
                             audio_features_list.append(af)
-                        else:
-                            # Use first valid audio as placeholder (not zeros)
-                            audio_features_list.append(first_valid_audio.clone() if first_valid_audio is not None else None)
-                    else:
-                        # Non-audio sample - use first valid audio as placeholder
-                        audio_features_list.append(first_valid_audio.clone() if first_valid_audio is not None else None)
-                    
-                    # Speaker reference
-                    if is_valid_ref:
-                        if use_raw_waveform and sr.dim() == 1:
-                            if sr.shape[0] > max_ref_samples:
-                                sr = sr[:max_ref_samples]
-                            speaker_ref_list.append(sr)
-                        elif not use_raw_waveform and sr.dim() == 2:
-                            if sr.shape[0] != target_mel_bins:
-                                sr = F.interpolate(sr.unsqueeze(0).unsqueeze(0), size=(target_mel_bins, sr.shape[1]), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-                            if sr.shape[1] > ref_mel_frames:
-                                sr = sr[:, :ref_mel_frames]
-                            speaker_ref_list.append(sr)
-                        else:
-                            speaker_ref_list.append(first_valid_ref.clone() if first_valid_ref is not None else None)
-                    else:
-                        speaker_ref_list.append(first_valid_ref.clone() if first_valid_ref is not None else None)
+                            # Handle speaker ref for this sample
+                            if sr is not None and isinstance(sr, torch.Tensor) and sr.numel() > 100 and sr.dim() == 2:
+                                if sr.shape[0] != target_mel_bins:
+                                    sr = F.interpolate(sr.unsqueeze(0).unsqueeze(0), size=(target_mel_bins, sr.shape[1]), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+                                if sr.shape[1] > ref_mel_frames:
+                                    sr = sr[:, :ref_mel_frames]
+                                speaker_ref_list.append(sr)
+                            else:
+                                speaker_ref_list.append(None)
                 
-                # Pad all to same length for stacking (use max length in batch, not zeros)
-                if audio_features_list and all(af is not None for af in audio_features_list):
+                # Stack only if we have valid audio
+                if audio_features_list:
                     max_len = max(af.shape[-1] for af in audio_features_list)
                     padded_audio = []
                     for af in audio_features_list:
                         if af.shape[-1] < max_len:
                             if af.dim() == 1:
-                                # Repeat last value instead of zeros
                                 pad_val = af[-1:].expand(max_len - af.shape[0])
                                 af = torch.cat([af, pad_val], dim=0)
                             else:
@@ -319,12 +303,14 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                         padded_audio.append(af)
                     audio_features = torch.stack(padded_audio)
                 else:
-                    audio_features = torch.zeros(batch_size, 1)
+                    audio_features = None
                 
-                if speaker_ref_list and all(sr is not None for sr in speaker_ref_list):
-                    max_len = max(sr.shape[-1] for sr in speaker_ref_list)
+                # Stack speaker refs only if ALL are valid
+                valid_refs = [sr for sr in speaker_ref_list if sr is not None]
+                if valid_refs and len(valid_refs) == len(audio_features_list):
+                    max_len = max(sr.shape[-1] for sr in valid_refs)
                     padded_ref = []
-                    for sr in speaker_ref_list:
+                    for sr in valid_refs:
                         if sr.shape[-1] < max_len:
                             if sr.dim() == 1:
                                 pad_val = sr[-1:].expand(max_len - sr.shape[0])
@@ -335,11 +321,10 @@ def create_collate_fn(video_frames: int, video_size: int, active_modalities: str
                         padded_ref.append(sr)
                     speaker_ref_audio = torch.stack(padded_ref)
                 else:
-                    speaker_ref_audio = torch.zeros(batch_size, 1)
+                    speaker_ref_audio = None
             else:
-                # No audio modality active or no audio in batch
-                audio_features = torch.zeros(batch_size, 1)
-                speaker_ref_audio = torch.zeros(batch_size, 1)
+                audio_features = None
+                speaker_ref_audio = None
 
             return {
                 "input_ids": input_ids,

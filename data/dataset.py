@@ -1132,11 +1132,25 @@ class TrueStreamingDataset(IterableDataset):
                         ).squeeze(0)
                     video_frames = img_tensor.unsqueeze(0).expand(self.max_video_frames, -1, -1, -1).clone()
                 
-                # Video samples MUST have valid video frames
+                # Video samples MUST have valid video frames - STRICT validation
                 if video_frames is None:
-                    return None  # SKIP - no zeros
-                if video_frames.abs().mean() < 1e-6:
-                    return None  # SKIP - basically zeros
+                    if TrueStreamingDataset._video_process_debug_count <= 30:
+                        print(f"      [DATASET SKIP] Video sample rejected: no video data extracted")
+                    return None  # SKIP - no video data
+                
+                # Check mean value - must have actual content
+                frame_mean = video_frames.abs().mean().item()
+                if frame_mean < 1e-6:
+                    if TrueStreamingDataset._video_process_debug_count <= 30:
+                        print(f"      [DATASET SKIP] Video sample rejected: mean={frame_mean:.8f} (basically zeros)")
+                    return None  # SKIP - basically zeros (invalid video)
+                
+                # Check for sufficient variance (not just solid color)
+                frame_std = video_frames.std().item()
+                if frame_std < 1e-4:
+                    if TrueStreamingDataset._video_process_debug_count <= 30:
+                        print(f"      [DATASET SKIP] Video sample rejected: std={frame_std:.8f} (no variation)")
+                    return None  # SKIP - no variation (probably failed extraction)
             
             # === AUDIO PROCESSING ===
             audio_features = None
