@@ -22,6 +22,11 @@ Author: Xoron Team
 
 import os
 import sys
+
+# Force CPU only - must be set before importing torch
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["USE_CUDA"] = "0"
+
 import json
 import shutil
 import tempfile
