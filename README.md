@@ -117,7 +117,7 @@ Xoron-Dev/
 │   │   └── moe_llama.py     # MoE LLaMA with Ring Attention
 │   ├── 📁 encoders/         # Input encoders
 │   │   ├── vision.py        # SigLIP + TiTok + Dual-Stream + RoPE2DEncoder
-│   │   ├── video.py         # 3D-RoPE + VidTok + Temporal MoE + Causal3DTransformer
+│   │   ├── video.py         # 3D-RoPE + VidTokTokenizer (3D VAE) + Temporal MoE + Causal3DTransformer
 │   │   └── audio.py         # RawWaveformTokenizer + Conformer + RMLA + MAS
 │   ├── 📁 generators/       # Output generators
 │   │   ├── image.py         # MoE-DiT + Flow Matching + ImageVAE
