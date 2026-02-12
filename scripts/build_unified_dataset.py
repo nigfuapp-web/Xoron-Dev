@@ -46,18 +46,18 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # HuggingFace token - set via environment variable or command line
-# On Kaggle, add this as a secret: HF_TOKEN
-# Or run: export HF_TOKEN="your_token_here"
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+# On Kaggle, add this as a secret: hf_token
+# Or run: export hf_token="your_token_here"
+HF_TOKEN = os.environ.get("hf_token", "") or os.environ.get("HF_TOKEN", "")
 
 # If running directly and token not set, you can uncomment and set here:
 # HF_TOKEN = "your_huggingface_token_here"
 
 # To use this script on Kaggle:
 # 1. Go to Add-ons -> Secrets
-# 2. Add a secret named HF_TOKEN with your HuggingFace token
+# 2. Add a secret named hf_token with your HuggingFace token
 # 3. Enable the secret for this notebook
-# 4. The token will be available as os.environ["HF_TOKEN"]
+# 4. The token will be available as os.environ["hf_token"]
 
 # Dataset name on HuggingFace
 HF_DATASET_NAME = "nigfuapp-web/moe-data"
