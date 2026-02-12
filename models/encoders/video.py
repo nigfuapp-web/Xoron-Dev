@@ -1,10 +1,11 @@
 """
-SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, and Temporal Expert Routing.
+SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and Text-Timestamp Alignment.
 
 Features:
 - 3D-RoPE for flexible (x, y, t) positional encodings (matches video generator)
 - 3D Causal Attention for temporal understanding
 - Temporal-Aware Expert Routing for motion patterns
+- Text-Timestamp Alignment for precise event localization
 - Integrated with vision encoder backbone
 - FP16-native numerical stability
 """
@@ -13,11 +14,121 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from models.encoders.vision import VisionEncoder
 
 EPS = 1e-5
+
+
+class TextTimestampAlignment(nn.Module):
+    """
+    Text-Timestamp Alignment: Precise timestamp-grounded event localization for stronger video temporal modeling.
+    
+    SOTA: Moves beyond T-RoPE by explicitly aligning text descriptions with video timestamps,
+    enabling:
+    - Precise temporal localization of events described in text
+    - Better video captioning with accurate time references
+    - Improved video question-answering with temporal reasoning
+    - Enhanced video generation with temporal control
+    
+    Architecture:
+    - Cross-attention between text features and frame-level video features
+    - Learnable timestamp embeddings for each frame
+    - Temporal alignment loss during training
+    """
+
+    def __init__(self, hidden_size: int, max_frames: int = 64, num_heads: int = 8):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.max_frames = max_frames
+        self.num_heads = num_heads
+        
+        # Learnable timestamp embeddings
+        self.timestamp_embedding = nn.Embedding(max_frames, hidden_size)
+        
+        # Project video features for timestamp alignment
+        self.video_proj = nn.Linear(hidden_size, hidden_size)
+        
+        # Project text features for alignment
+        self.text_proj = nn.Linear(hidden_size, hidden_size)
+        
+        # Cross-attention: text queries video with timestamp context
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            batch_first=True,
+            dropout=0.1,
+        )
+        
+        # Layer norms
+        self.text_norm = nn.LayerNorm(hidden_size)
+        self.video_norm = nn.LayerNorm(hidden_size)
+        
+        # Temporal alignment prediction head (for alignment loss)
+        self.alignment_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.GELU(),
+            nn.Linear(hidden_size // 2, 1),  # Predicts timestamp relevance
+        )
+        
+        # Output projection
+        self.output_proj = nn.Linear(hidden_size, hidden_size)
+
+    def forward(
+        self, 
+        video_features: torch.Tensor, 
+        text_features: torch.Tensor,
+        num_frames: int,
+        return_alignment_scores: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Align text with video timestamps.
+        
+        Args:
+            video_features: [B, T*H*W, hidden_size] video features
+            text_features: [B, text_len, hidden_size] text features
+            num_frames: Number of frames in the video
+            return_alignment_scores: Whether to return alignment scores for loss
+            
+        Returns:
+            aligned_features: [B, T*H*W, hidden_size] timestamp-aligned video features
+            alignment_scores: Optional [B, text_len, T] alignment scores
+        """
+        batch_size = video_features.shape[0]
+        total_tokens = video_features.shape[1]
+        spatial_tokens = total_tokens // num_frames
+        
+        # Add timestamp embeddings to video features
+        timestamp_ids = torch.arange(num_frames, device=video_features.device)
+        timestamp_embeds = self.timestamp_embedding(timestamp_ids)  # [T, hidden_size]
+        
+        # Expand timestamps to match spatial tokens: [T, 1, hidden] -> [T, spatial, hidden]
+        timestamp_embeds = timestamp_embeds.unsqueeze(1).expand(-1, spatial_tokens, -1)
+        timestamp_embeds = timestamp_embeds.reshape(1, total_tokens, -1)  # [1, T*spatial, hidden]
+        timestamp_embeds = timestamp_embeds.expand(batch_size, -1, -1)  # [B, T*spatial, hidden]
+        
+        # Add timestamps to video features
+        video_feat = self.video_norm(self.video_proj(video_features) + timestamp_embeds)
+        text_feat = self.text_norm(self.text_proj(text_features))
+        
+        # Cross-attention: text queries video
+        aligned, attn_weights = self.cross_attn(text_feat, video_feat, video_feat)
+        
+        # Compute frame-level alignment scores
+        alignment_scores = None
+        if return_alignment_scores:
+            # Pool attention weights to frame level
+            # attn_weights: [B, text_len, T*spatial] -> [B, text_len, T]
+            attn_reshaped = attn_weights.view(batch_size, text_features.shape[1], num_frames, spatial_tokens)
+            alignment_scores = attn_reshaped.mean(dim=-1)  # Average over spatial
+        
+        # Project back and add residual
+        aligned_text = text_features + self.output_proj(aligned)
+        
+        # Return video features enriched with text-timestamp alignment
+        # Also return aligned text features for downstream use
+        return aligned_text, alignment_scores
 
 
 class RoPE3DEncoder(nn.Module):

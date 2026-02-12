@@ -130,19 +130,29 @@ class XoronTrainer:
         self.img_gen_size = xoron_config.image_base_size
         self.vid_gen_size = xoron_config.video_base_size
         self.use_multi_scale = getattr(xoron_config, 'use_multi_scale', True)
+        self.use_continuous_scale = getattr(xoron_config, 'use_continuous_scale', True)
+        
+        # Continuous-scale training bounds (SOTA: sample ANY scale within range)
         self.img_min_size = getattr(xoron_config, 'image_min_size', 128)
         self.img_max_size = getattr(xoron_config, 'image_max_size', 512)
+        self.img_size_step = getattr(xoron_config, 'image_size_step', 32)
         self.vid_min_size = getattr(xoron_config, 'video_min_size', 128)
         self.vid_max_size = getattr(xoron_config, 'video_max_size', 384)
+        self.vid_size_step = getattr(xoron_config, 'video_size_step', 32)
+        self.vid_min_frames = getattr(xoron_config, 'video_min_frames', 8)
+        self.vid_max_frames = getattr(xoron_config, 'video_max_frames', 24)
+        self.vid_frame_step = getattr(xoron_config, 'video_frame_step', 4)
         
-        # Multi-scale training configuration (SOTA: random scale sampling each batch)
-        self.image_scales = getattr(xoron_config, 'image_scales', ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384), (448, 448), (512, 512)))
-        self.image_scale_probs = getattr(xoron_config, 'image_scale_probs', (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05))
-        self.video_scales = getattr(xoron_config, 'video_scales', ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384)))
-        self.video_scale_probs = getattr(xoron_config, 'video_scale_probs', (0.10, 0.20, 0.35, 0.25, 0.10))
-        self.video_frame_scales = getattr(xoron_config, 'video_frame_scales', (8, 12, 16, 20, 24, 32))
-        self.video_frame_scale_probs = getattr(xoron_config, 'video_frame_scale_probs', (0.10, 0.15, 0.30, 0.20, 0.15, 0.10))
-        self.multi_scale_strategy = getattr(xoron_config, 'multi_scale_strategy', 'random')
+        # Continuous-scale strategy: "uniform", "gaussian", or "adaptive"
+        self.multi_scale_strategy = getattr(xoron_config, 'multi_scale_strategy', 'adaptive')
+        self.multi_scale_warmup_epochs = getattr(xoron_config, 'multi_scale_warmup_epochs', 3)
+        
+        # Adaptive scale tracking (for strategy="adaptive")
+        self.adaptive_scale_oom_penalty = getattr(xoron_config, 'adaptive_scale_oom_penalty', 0.5)
+        self.adaptive_scale_success_boost = getattr(xoron_config, 'adaptive_scale_success_boost', 0.1)
+        self._adaptive_img_max = self.img_max_size
+        self._adaptive_vid_max = self.vid_max_size
+        self._adaptive_frame_max = self.vid_max_frames
         
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)
@@ -286,9 +296,10 @@ class XoronTrainer:
     
     def _sample_multi_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
         """
-        Sample a scale for multi-scale training.
+        Sample a scale for multi-scale training using continuous-scale sampling.
         
-        SOTA: Uses continuous-scale sampling if enabled, else falls back to discrete.
+        SOTA: Continuous-scale training samples ANY resolution within min/max bounds,
+        enabling better generalization and more efficient memory usage.
         
         Args:
             modality: 'image' or 'video'
@@ -302,63 +313,9 @@ class XoronTrainer:
             if modality == 'image':
                 return (self.img_gen_size, self.img_gen_size)
             else:
-                return ((self.vid_gen_size, self.vid_gen_size), 16)
+                return ((self.vid_gen_size, self.vid_gen_size), self.vid_max_frames // 2)
         
-        # Check if continuous-scale is enabled
-        use_continuous = getattr(self.xoron_config, 'use_continuous_scale', True) if hasattr(self, 'xoron_config') else True
-        
-        if use_continuous:
-            return self._sample_continuous_scale(modality, epoch)
-        
-        # Legacy discrete sampling (fallback)
-        return self._sample_discrete_scale(modality, epoch)
-    
-    def _sample_discrete_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
-        """Legacy discrete scale sampling for backward compatibility."""
-        if modality == 'image':
-            scales = list(self.image_scales)
-            probs = list(self.image_scale_probs)
-        else:
-            scales = list(self.video_scales)
-            probs = list(self.video_scale_probs)
-        
-        # Fix scales to be (H, W) tuples
-        fixed_scales = []
-        for s in scales:
-            if isinstance(s, (list, tuple)) and len(s) == 2:
-                fixed_scales.append((int(s[0]), int(s[1])))
-            elif isinstance(s, (int, float)):
-                fixed_scales.append((int(s), int(s)))
-            else:
-                fixed_scales.append((self.img_gen_size if modality == 'image' else self.vid_gen_size,) * 2)
-        scales = fixed_scales
-        
-        if not scales:
-            base = self.img_gen_size if modality == 'image' else self.vid_gen_size
-            if modality == 'video':
-                return ((base, base), 16)
-            return (base, base)
-        
-        # Normalize probs
-        if len(probs) != len(scales):
-            probs = [1.0 / len(scales)] * len(scales)
-        total = sum(probs)
-        probs = [p / total for p in probs] if total > 0 else [1.0 / len(scales)] * len(scales)
-        
-        # Sample
-        selected = random.choices(scales, weights=probs, k=1)[0]
-        
-        if modality == 'video':
-            frame_scales = list(self.video_frame_scales)
-            frame_probs = list(self.video_frame_scale_probs)
-            if len(frame_probs) != len(frame_scales):
-                frame_probs = [1.0 / len(frame_scales)] * len(frame_scales)
-            total = sum(frame_probs)
-            frame_probs = [p / total for p in frame_probs] if total > 0 else [1.0 / len(frame_scales)] * len(frame_scales)
-            num_frames = random.choices(frame_scales, weights=frame_probs, k=1)[0]
-            return (selected, num_frames)
-        
-        return selected
+        return self._sample_continuous_scale(modality, epoch)
     
     def _enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency across all components."""
@@ -825,11 +782,6 @@ class XoronTrainer:
             if model_loss is not None:
                 return model_loss
             return torch.tensor(0.0, device=device, requires_grad=True)
-    
-    # Keep old method name for backward compatibility
-    def _compute_cot_weighted_loss(self, logits, labels, input_ids, sample_types, model_loss=None):
-        """Backward compatible alias for _compute_weighted_loss."""
-        return self._compute_weighted_loss(logits, labels, input_ids, sample_types, model_loss)
 
     def _verify_model_weights(self):
         """Verify model weights are valid (no NaN/Inf) before training."""
@@ -1002,6 +954,7 @@ class XoronTrainer:
         epoch_waveform_loss = 0.0  # Waveform decoder loss (Speech-to-Speech)
         num_batches = 0
         num_valid_batches = 0  # Track batches with valid loss for learning
+        num_llm_displayed = 0  # Counter for LLM sample display (first 10 per epoch)
         num_cot = 0
         num_img_diff = 0
         num_vid_diff = 0
@@ -1158,10 +1111,11 @@ class XoronTrainer:
             # Clamp LLM loss to prevent extreme values (FP16 safety)
             llm_loss = torch.clamp(llm_loss, min=0.0, max=100.0)
             
-            # Log first 10 LLM batches per epoch
+            # Log first 10 LLM batches per epoch (using proper counter, not batch_idx)
             llm_loss_val_early = llm_loss.item()
-            if batch_idx < 10 and not (llm_loss_val_early != llm_loss_val_early):  # NaN check
-                print(f"   📝 LLM [{batch_idx + 1}/10]: loss={llm_loss_val_early:.4f}, types={sample_types[:3]}...")
+            if num_llm_displayed < 10 and not (llm_loss_val_early != llm_loss_val_early):  # NaN check
+                num_llm_displayed += 1
+                print(f"   📝 LLM [{num_llm_displayed}/10]: loss={llm_loss_val_early:.4f}, types={sample_types[:3]}...")
             
             # Track CoT loss separately
             if has_cot_samples:

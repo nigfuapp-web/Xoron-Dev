@@ -1893,13 +1893,17 @@ def run_cli_mode(args):
         else:
             active_modes = []  # Empty means 'all'
     
-    # For backwards compatibility, set effective_mode for single mode or 'multi' for multiple
+    # Set effective_mode/modalities for device placement and training
+    # For combined modes (--text --image), pass the list for proper device placement
     if len(active_modes) == 0:
         effective_mode = 'all'
+        effective_modalities = 'all'  # Use string for 'all' case
     elif len(active_modes) == 1:
         effective_mode = active_modes[0]
+        effective_modalities = active_modes[0]  # Single mode as string
     else:
-        effective_mode = 'multi'  # Multiple modes combined
+        effective_mode = 'multi'  # For display
+        effective_modalities = active_modes  # Pass list for proper device placement
     
     # Apply dataset mode - use filter_datasets_by_modalities for multi-mode support
     if active_modes:
@@ -1992,7 +1996,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
-            active_modalities=effective_mode or 'all',
+            active_modalities=effective_modalities,
         )
         return
     
@@ -2012,7 +2016,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
-            active_modalities=effective_mode or 'all',
+            active_modalities=effective_modalities,
         )
         return
     
@@ -2032,7 +2036,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
-            active_modalities=effective_mode or 'all',
+            active_modalities=effective_modalities,
         )
         return
     
@@ -2053,7 +2057,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
-            active_modalities=effective_mode or 'all',
+            active_modalities=effective_modalities,
         )
         return
     
@@ -2076,7 +2080,7 @@ def run_cli_mode(args):
             export_gguf=args.gguf,
             onnx_quant_bits=args.quant_bits,
             gguf_quant_type=args.gguf_quant,
-            active_modalities=effective_mode or 'all',
+            active_modalities=effective_modalities,
         )
         return
     

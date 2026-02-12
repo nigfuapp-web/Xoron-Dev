@@ -6,11 +6,13 @@ Vision Encoder:
 - 2D-RoPE for flexible aspect ratios
 - TiTok-style 1D tokenization
 - Dual-stream attention
+- DeepStack for multi-level ViT feature fusion
 
 Video Encoder:
 - 3D-RoPE for (x, y, t) positions
 - 3D Causal Attention
 - Temporal-Aware Expert Routing
+- Text-Timestamp Alignment for precise event localization
 - Integrates with video generator
 
 Audio Encoder/Decoder:
@@ -30,6 +32,7 @@ from models.encoders.vision import (
     VisionEncoder,
     RoPE2DEncoder,
     TiTokTokenizer,
+    DeepStack,
     DualStreamEncoderAttention,
     VisionEncoderBlock,
     get_vision_encoder,
@@ -38,6 +41,7 @@ from models.encoders.vision import (
 from models.encoders.video import (
     VideoEncoder,
     RoPE3DEncoder,
+    TextTimestampAlignment,
     Causal3DAttentionEncoder,
     TemporalMoELayerEncoder,
     TemporalExpertRouterEncoder,
@@ -67,6 +71,7 @@ __all__ = [
     'VisionEncoder',
     'RoPE2DEncoder',
     'TiTokTokenizer',
+    'DeepStack',
     'DualStreamEncoderAttention',
     'VisionEncoderBlock',
     'get_vision_encoder',
@@ -74,6 +79,7 @@ __all__ = [
     # Video
     'VideoEncoder',
     'RoPE3DEncoder',
+    'TextTimestampAlignment',
     'Causal3DAttentionEncoder',
     'TemporalMoELayerEncoder',
     'TemporalExpertRouterEncoder',

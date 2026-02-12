@@ -99,14 +99,6 @@ class XoronConfig:
     video_base_frames: int = 16  # Base/default frame count
     video_frame_step: int = 4    # Quantize to multiples of this
     
-    # LEGACY: Discrete scales (kept for backward compatibility but unused with continuous_scale=True)
-    image_scales: Tuple[Tuple[int, int], ...] = ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384))
-    image_scale_probs: Tuple[float, ...] = (0.15, 0.25, 0.30, 0.20, 0.10)
-    video_scales: Tuple[Tuple[int, int], ...] = ((128, 128), (192, 192), (256, 256), (320, 320))
-    video_scale_probs: Tuple[float, ...] = (0.20, 0.35, 0.30, 0.15)
-    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24)
-    video_frame_scale_probs: Tuple[float, ...] = (0.15, 0.25, 0.30, 0.20, 0.10)
-    
     # Continuous-scale sampling strategy
     # "uniform" - uniform distribution across range
     # "gaussian" - Gaussian centered on base size (better quality)
@@ -220,23 +212,23 @@ class XoronConfig:
             'num_video_experts': self.num_video_experts,
             # Multi-scale configuration (source of truth for all sizes/frames)
             'use_multi_scale': self.use_multi_scale,
-            'image_scales': list(self.image_scales),
-            'image_scale_probs': list(self.image_scale_probs),
+            'use_continuous_scale': self.use_continuous_scale,
             'image_min_size': self.image_min_size,
             'image_max_size': self.image_max_size,
             'image_base_size': self.image_base_size,
-            'video_scales': list(self.video_scales),
-            'video_scale_probs': list(self.video_scale_probs),
+            'image_size_step': self.image_size_step,
             'video_min_size': self.video_min_size,
             'video_max_size': self.video_max_size,
             'video_base_size': self.video_base_size,
-            'video_frame_scales': list(self.video_frame_scales),
-            'video_frame_scale_probs': list(self.video_frame_scale_probs),
+            'video_size_step': self.video_size_step,
             'video_min_frames': self.video_min_frames,
             'video_max_frames': self.video_max_frames,
             'video_base_frames': self.video_base_frames,
+            'video_frame_step': self.video_frame_step,
             'multi_scale_strategy': self.multi_scale_strategy,
             'multi_scale_warmup_epochs': self.multi_scale_warmup_epochs,
+            'adaptive_scale_oom_penalty': self.adaptive_scale_oom_penalty,
+            'adaptive_scale_success_boost': self.adaptive_scale_success_boost,
             'generation_supported_sizes': list(self.generation_supported_sizes),
             'generation_supported_frames': list(self.generation_supported_frames),
             # Generation configs
@@ -287,18 +279,6 @@ class XoronConfig:
         # Convert lists back to tuples for tuple fields
         if 'lora_target_modules' in config_dict and isinstance(config_dict['lora_target_modules'], list):
             config_dict['lora_target_modules'] = tuple(config_dict['lora_target_modules'])
-        if 'image_scales' in config_dict and isinstance(config_dict['image_scales'], list):
-            config_dict['image_scales'] = tuple(tuple(s) if isinstance(s, list) else s for s in config_dict['image_scales'])
-        if 'image_scale_probs' in config_dict and isinstance(config_dict['image_scale_probs'], list):
-            config_dict['image_scale_probs'] = tuple(config_dict['image_scale_probs'])
-        if 'video_scales' in config_dict and isinstance(config_dict['video_scales'], list):
-            config_dict['video_scales'] = tuple(tuple(s) if isinstance(s, list) else s for s in config_dict['video_scales'])
-        if 'video_scale_probs' in config_dict and isinstance(config_dict['video_scale_probs'], list):
-            config_dict['video_scale_probs'] = tuple(config_dict['video_scale_probs'])
-        if 'video_frame_scales' in config_dict and isinstance(config_dict['video_frame_scales'], list):
-            config_dict['video_frame_scales'] = tuple(config_dict['video_frame_scales'])
-        if 'video_frame_scale_probs' in config_dict and isinstance(config_dict['video_frame_scale_probs'], list):
-            config_dict['video_frame_scale_probs'] = tuple(config_dict['video_frame_scale_probs'])
         if 'generation_supported_sizes' in config_dict and isinstance(config_dict['generation_supported_sizes'], list):
             config_dict['generation_supported_sizes'] = tuple(config_dict['generation_supported_sizes'])
         if 'generation_supported_frames' in config_dict and isinstance(config_dict['generation_supported_frames'], list):
@@ -319,19 +299,15 @@ class XoronConfig:
         print(f"   - Dual-Stream: {self.use_vision_dual_stream} ({self.num_vision_dual_stream_layers} layers)")
         print(f"🎬 Video Encoder: 3D-RoPE={self.use_video_3d_rope}, Temporal MoE={self.use_video_temporal_moe}")
         # Multi-scale info
-        if self.use_multi_scale:
-            img_sizes = [f"{s[0]}x{s[1]}" for s in self.image_scales]
-            vid_sizes = [f"{s[0]}x{s[1]}" for s in self.video_scales]
-            print(f"📐 Multi-Scale Training: ENABLED (strategy={self.multi_scale_strategy})")
-            print(f"   - Image: {self.image_min_size}-{self.image_max_size}px, base={self.image_base_size}")
-            print(f"   - Video: {self.video_min_size}-{self.video_max_size}px, base={self.video_base_size}")
-            print(f"   - Frames: {self.video_min_frames}-{self.video_max_frames}, base={self.video_base_frames}")
-        else:
-            print(f"📐 Multi-Scale: DISABLED (fixed {self.image_base_size}x{self.image_base_size})")
-        if self.use_multi_scale:
+        if self.use_multi_scale and self.use_continuous_scale:
+            print(f"📐 Continuous-Scale Training: ENABLED (strategy={self.multi_scale_strategy})")
+            print(f"   - Image: {self.image_min_size}-{self.image_max_size}px (step={self.image_size_step}), base={self.image_base_size}")
+            print(f"   - Video: {self.video_min_size}-{self.video_max_size}px (step={self.video_size_step}), base={self.video_base_size}")
+            print(f"   - Frames: {self.video_min_frames}-{self.video_max_frames} (step={self.video_frame_step}), base={self.video_base_frames}")
             print(f"🎨 Image Gen: {self.image_min_size}-{self.image_max_size}px, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
             print(f"🎬 Video Gen: {self.video_min_frames}-{self.video_max_frames} frames @ {self.video_min_size}-{self.video_max_size}px, 3D-RoPE={self.generation_video_use_3d_rope}")
         else:
+            print(f"📐 Multi-Scale: DISABLED (fixed {self.image_base_size}x{self.image_base_size})")
             print(f"🎨 Image Gen: {self.image_base_size}x{self.image_base_size}, Flow={self.generation_use_flow_matching}, Dual-Stream={self.generation_use_dual_stream}")
             print(f"🎬 Video Gen: {self.video_base_frames} frames @ {self.video_base_size}, 3D-RoPE={self.generation_video_use_3d_rope}")
         print(f"🎤 Audio: {self.audio_sample_rate}Hz, RawWaveform={self.use_raw_waveform}, MAS={self.use_mas}")

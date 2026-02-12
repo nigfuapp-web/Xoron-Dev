@@ -291,7 +291,7 @@ def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, 
 
 
 def _get_static_device_map(num_gpus: int) -> Dict[str, str]:
-    """Static device map for backwards compatibility."""
+    """Static device map for default placement when no modality info provided."""
     if num_gpus == 2:
         return {
             'vision_encoder': 'cuda:0',
@@ -375,23 +375,42 @@ def _get_dynamic_device_map(num_gpus: int, trainable_groups: List[str], frozen_g
     return device_map
 
 
-def get_trainable_groups_from_modality(active_modalities: str) -> List[str]:
+def get_trainable_groups_from_modality(active_modalities) -> List[str]:
     """
-    Convert active modality string to list of component groups to train.
+    Convert active modality string or list to list of component groups to train.
     
     NOTE: LLM is always trained but placed on secondary GPU (except text-only mode)
     to maximize VRAM for modality-specific components on primary GPU.
     
     Args:
         active_modalities: One of 'all', 'text', 'image', 'video', 'audio', 'multi'
+                          OR a list of modalities like ['text', 'image']
     
     Returns:
         List of component group names that should be trainable
     """
+    # Handle list of modalities (for combined modes like --text --image)
+    if isinstance(active_modalities, (list, tuple)):
+        trainable = set(['llm', 'cross_attention', 'modality_markers'])  # Always trained
+        for mode in active_modalities:
+            if mode == 'text':
+                pass  # LLM already added
+            elif mode == 'image':
+                trainable.update(['vision', 'image_generation'])
+            elif mode == 'video':
+                trainable.update(['vision', 'video', 'video_generation'])
+            elif mode == 'audio' or mode == 'voice':
+                trainable.add('audio')
+        return list(trainable)
+    
+    # Handle string mode
     trainable = []
     
-    if active_modalities == 'all' or active_modalities == 'multi':
+    if active_modalities == 'all':
         # All modalities - train everything
+        trainable = ['vision', 'video', 'audio', 'image_generation', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
+    elif active_modalities == 'multi':
+        # Multi mode without specific list defaults to all
         trainable = ['vision', 'video', 'audio', 'image_generation', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
     elif active_modalities == 'text':
         # Text only - just LLM
@@ -409,8 +428,10 @@ def get_trainable_groups_from_modality(active_modalities: str) -> List[str]:
     return trainable
 
 
-def is_text_only_mode(active_modalities: str) -> bool:
+def is_text_only_mode(active_modalities) -> bool:
     """Check if we're in text-only training mode."""
+    if isinstance(active_modalities, (list, tuple)):
+        return len(active_modalities) == 1 and active_modalities[0] == 'text'
     return active_modalities == 'text'
 
 

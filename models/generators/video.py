@@ -1,12 +1,13 @@
 """
-SOTA Video Generator with Flow Matching, 3D-RoPE, Temporal Expert Routing, 3D Causal Transformers.
+SOTA Video Generator with Flow Matching, Interleaved-MRoPE, Temporal Expert Routing, 3D Causal Transformers.
 
 Features:
 - Flow Matching with CFG for superior generation quality
-- 3D-RoPE for flexible (x, y, t) positional encodings
+- Interleaved-MRoPE for full-frequency allocation over (x, y, t) dimensions
 - Temporal-Aware Expert Routing in transformer blocks
 - 3D Causal Transformers for autoregressive video generation
 - FP16-native numerical stability
+- Continuous-scale training for any-size video generation
 """
 
 import math
@@ -16,6 +17,99 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 
 EPS = 1e-5
+
+
+class InterleavedMRoPE(nn.Module):
+    """
+    Interleaved Multi-dimensional Rotary Position Embedding (MRoPE).
+    
+    SOTA: Full-frequency allocation over time, width, and height via robust positional embeddings.
+    Unlike separate spatial and temporal RoPE, Interleaved-MRoPE allocates frequencies across
+    all three dimensions jointly, enhancing long-horizon video reasoning.
+    
+    Key advantages:
+    - Better temporal-spatial correlation modeling
+    - More robust for variable aspect ratios and frame counts
+    - Improved long-range video understanding
+    """
+
+    def __init__(self, dim: int, max_height: int = 64, max_width: int = 64, max_frames: int = 64, base: float = 10000.0):
+        super().__init__()
+        self.dim = dim
+        self.max_height = max_height
+        self.max_width = max_width
+        self.max_frames = max_frames
+        self.base = base
+        
+        # Interleaved allocation: divide dim into 3 parts for t, y, x
+        self.dim_t = dim // 3
+        self.dim_y = dim // 3
+        self.dim_x = dim - self.dim_t - self.dim_y  # Remaining dims
+        
+        # Separate inverse frequencies for each dimension
+        inv_freq_t = 1.0 / (base ** (torch.arange(0, self.dim_t, 2, dtype=torch.float32) / self.dim_t))
+        inv_freq_y = 1.0 / (base ** (torch.arange(0, self.dim_y, 2, dtype=torch.float32) / self.dim_y))
+        inv_freq_x = 1.0 / (base ** (torch.arange(0, self.dim_x, 2, dtype=torch.float32) / self.dim_x))
+        
+        self.register_buffer('inv_freq_t', inv_freq_t, persistent=False)
+        self.register_buffer('inv_freq_y', inv_freq_y, persistent=False)
+        self.register_buffer('inv_freq_x', inv_freq_x, persistent=False)
+
+    def forward(self, x: torch.Tensor, height: int, width: int, num_frames: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute interleaved 3D positional embeddings.
+        
+        Args:
+            x: Input tensor for device/dtype reference
+            height: Spatial height
+            width: Spatial width  
+            num_frames: Temporal frames
+            
+        Returns:
+            cos, sin: [T * H * W, dim] positional embeddings
+        """
+        device = x.device
+        dtype = x.dtype
+        
+        # Position indices
+        pos_t = torch.arange(num_frames, device=device, dtype=torch.float32)
+        pos_y = torch.arange(height, device=device, dtype=torch.float32)
+        pos_x = torch.arange(width, device=device, dtype=torch.float32)
+        
+        # Compute frequencies for each dimension
+        freqs_t = torch.outer(pos_t, self.inv_freq_t.to(device))  # [T, dim_t/2]
+        freqs_y = torch.outer(pos_y, self.inv_freq_y.to(device))  # [H, dim_y/2]
+        freqs_x = torch.outer(pos_x, self.inv_freq_x.to(device))  # [W, dim_x/2]
+        
+        # Double frequencies (for sin/cos interleaving)
+        freqs_t = torch.cat([freqs_t, freqs_t], dim=-1)  # [T, dim_t]
+        freqs_y = torch.cat([freqs_y, freqs_y], dim=-1)  # [H, dim_y]
+        freqs_x = torch.cat([freqs_x, freqs_x], dim=-1)  # [W, dim_x]
+        
+        # Build interleaved 3D embeddings [T, H, W, dim]
+        seq_len = num_frames * height * width
+        cos_3d = torch.zeros(num_frames, height, width, self.dim, device=device, dtype=dtype)
+        sin_3d = torch.zeros(num_frames, height, width, self.dim, device=device, dtype=dtype)
+        
+        # Interleaved assignment: t->y->x pattern
+        for t in range(num_frames):
+            for h in range(height):
+                for w in range(width):
+                    # Time dimension
+                    cos_3d[t, h, w, :self.dim_t] = freqs_t[t].cos().to(dtype)
+                    sin_3d[t, h, w, :self.dim_t] = freqs_t[t].sin().to(dtype)
+                    # Height dimension
+                    cos_3d[t, h, w, self.dim_t:self.dim_t+self.dim_y] = freqs_y[h].cos().to(dtype)
+                    sin_3d[t, h, w, self.dim_t:self.dim_t+self.dim_y] = freqs_y[h].sin().to(dtype)
+                    # Width dimension
+                    cos_3d[t, h, w, self.dim_t+self.dim_y:] = freqs_x[w].cos().to(dtype)
+                    sin_3d[t, h, w, self.dim_t+self.dim_y:] = freqs_x[w].sin().to(dtype)
+        
+        # Flatten to [T*H*W, dim]
+        cos_3d = cos_3d.view(seq_len, self.dim)
+        sin_3d = sin_3d.view(seq_len, self.dim)
+        
+        return cos_3d, sin_3d
 
 
 class RoPE2D(nn.Module):

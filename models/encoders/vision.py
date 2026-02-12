@@ -131,6 +131,101 @@ class TiTokTokenizer(nn.Module):
         return tokens
 
 
+class DeepStack(nn.Module):
+    """
+    DeepStack: Fuses multi-level ViT features to capture fine-grained details and sharpen image-text alignment.
+    
+    SOTA: Instead of using only the final layer features, DeepStack combines features from
+    multiple intermediate layers of the vision encoder, enabling:
+    - Better fine-grained detail capture (early layers have high-resolution features)
+    - Stronger image-text alignment (different layers capture different semantic levels)
+    - Improved generation quality for both understanding and generation tasks
+    
+    Architecture:
+    - Collects features from selected layers (typically: early, middle, late)
+    - Projects each level to a common dimension
+    - Combines via learned weighted sum or attention
+    """
+
+    def __init__(self, hidden_size: int, num_layers: int = 3, use_attention: bool = True):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.use_attention = use_attention
+        
+        # Projection layers for each level
+        self.level_projs = nn.ModuleList([
+            nn.Linear(hidden_size, hidden_size)
+            for _ in range(num_layers)
+        ])
+        
+        # Layer normalization for each level
+        self.level_norms = nn.ModuleList([
+            nn.LayerNorm(hidden_size)
+            for _ in range(num_layers)
+        ])
+        
+        if use_attention:
+            # Learnable queries for cross-attention fusion
+            self.fusion_query = nn.Parameter(torch.randn(1, 1, hidden_size) * 0.02)
+            self.fusion_attn = nn.MultiheadAttention(
+                embed_dim=hidden_size,
+                num_heads=8,
+                batch_first=True,
+                dropout=0.1,
+            )
+            self.fusion_norm = nn.LayerNorm(hidden_size)
+        else:
+            # Learnable weights for weighted sum fusion
+            self.level_weights = nn.Parameter(torch.ones(num_layers) / num_layers)
+        
+        # Output projection
+        self.output_proj = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+
+    def forward(self, multi_level_features: list) -> torch.Tensor:
+        """
+        Fuse multi-level features.
+        
+        Args:
+            multi_level_features: List of [B, seq_len, hidden_size] features from different layers
+            
+        Returns:
+            [B, seq_len, hidden_size] fused features
+        """
+        if len(multi_level_features) != self.num_layers:
+            # Fallback: use only available layers
+            multi_level_features = multi_level_features[-self.num_layers:] if len(multi_level_features) > self.num_layers else multi_level_features
+        
+        batch_size, seq_len, _ = multi_level_features[0].shape
+        
+        # Project and normalize each level
+        projected = []
+        for i, (feat, proj, norm) in enumerate(zip(multi_level_features, self.level_projs, self.level_norms)):
+            projected.append(norm(proj(feat)))
+        
+        if self.use_attention:
+            # Stack features for cross-attention: [B, num_layers * seq_len, hidden_size]
+            stacked = torch.cat(projected, dim=1)
+            
+            # Expand fusion query
+            query = self.fusion_query.expand(batch_size, seq_len, -1)
+            
+            # Cross-attention fusion
+            fused, _ = self.fusion_attn(query, stacked, stacked)
+            fused = self.fusion_norm(query + fused)
+        else:
+            # Weighted sum fusion
+            weights = F.softmax(self.level_weights, dim=0)
+            fused = sum(w * feat for w, feat in zip(weights, projected))
+        
+        # Final projection
+        return self.output_proj(fused)
+
+
 class DualStreamEncoderAttention(nn.Module):
     """
     Symmetric Dual-Stream Self-Attention for vision encoding.

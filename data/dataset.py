@@ -222,9 +222,6 @@ class TrueStreamingDataset(IterableDataset):
                 for modality in ["text", "image", "video", "audio"]:
                     if modality in state["modality_positions"]:
                         self._streaming_state["modality_positions"][modality] = state["modality_positions"][modality]
-                # Handle legacy state files that used "voice" instead of "audio"
-                if "voice" in state["modality_positions"] and "audio" not in state["modality_positions"]:
-                    self._streaming_state["modality_positions"]["audio"] = state["modality_positions"]["voice"]
             
             print(f"   📂 Resumed from epoch {state.get('epoch', 0)}, {state.get('unique_samples', 0)} samples seen")
         except Exception as e:
@@ -607,12 +604,9 @@ class TrueStreamingDataset(IterableDataset):
             return None
 
     def _process_audio(self, audio_data, sample: dict) -> Optional[torch.Tensor]:
-        """Process audio data to raw waveform (SOTA) or mel-spectrogram (legacy).
+        """Process audio data to raw waveform tensor for RawWaveformTokenizer.
         
-        When use_raw_waveform=True (default, SOTA):
-            Returns: [T] raw waveform tensor for RawWaveformTokenizer
-        When use_raw_waveform=False (legacy):
-            Returns: [n_mels, T] mel spectrogram for conv_subsample
+        Returns: [T] raw waveform tensor for RawWaveformTokenizer
         """
         if self.voice_processor is None:
             return None
@@ -666,23 +660,13 @@ class TrueStreamingDataset(IterableDataset):
                 return None
         
         def _waveform_to_output(waveform, sr):
-            """Convert waveform to appropriate output format based on use_raw_waveform setting."""
+            """Convert waveform to raw waveform tensor for RawWaveformTokenizer."""
             waveform = _preprocess_waveform(waveform, sr)
             if waveform is None:
                 return None
             
-            if self.use_raw_waveform:
-                # SOTA: Return raw waveform [T] for RawWaveformTokenizer
-                return waveform
-            else:
-                # Legacy: Convert to mel spectrogram [n_mels, T]
-                # Ensure minimum length for mel extraction
-                if waveform.shape[-1] < 400:  # Minimum for FFT
-                    pad_len = 400 - waveform.shape[-1]
-                    waveform = torch.nn.functional.pad(waveform, (0, pad_len))
-                
-                mel = self.voice_processor.extract_mel(waveform.unsqueeze(0)).squeeze(0)
-                return mel
+            # SOTA: Return raw waveform [T] for RawWaveformTokenizer
+            return waveform
         
         try:
             # Handle URL - download audio first
@@ -778,10 +762,6 @@ class TrueStreamingDataset(IterableDataset):
                 waveform = audio_data.float()
                 return _waveform_to_output(waveform, sampling_rate)
             
-            # Fallback - if we got here and use_raw_waveform is False, try legacy mel processing
-            if not self.use_raw_waveform:
-                mel = self.voice_processor.process_audio_array(audio_data, sampling_rate)
-                return mel
             return None
         except Exception:
             return None
