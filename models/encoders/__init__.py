@@ -40,6 +40,7 @@ from models.encoders.vision import (
 )
 from models.encoders.video import (
     VideoEncoder,
+    VideoTokenizer,
     RoPE3DEncoder,
     TextTimestampAlignment,
     Causal3DAttentionEncoder,
@@ -78,6 +79,7 @@ __all__ = [
     'SIGLIP_MODELS',
     # Video
     'VideoEncoder',
+    'VideoTokenizer',
     'RoPE3DEncoder',
     'TextTimestampAlignment',
     'Causal3DAttentionEncoder',

@@ -131,6 +131,128 @@ class TextTimestampAlignment(nn.Module):
         return aligned_text, alignment_scores
 
 
+class VideoTokenizer(nn.Module):
+    """
+    Video Tokenizer: Compresses spatio-temporal video features into efficient 1D tokens.
+    
+    SOTA: Similar to TiTok for images, but extended for video with temporal awareness.
+    Compresses [B, T*H*W, hidden] video features into [B, num_tokens, hidden] tokens.
+    
+    Key features:
+    - Temporal-aware compression using 3D queries
+    - Learnable token queries for cross-attention compression  
+    - Preserves temporal structure while reducing sequence length
+    - Compatible with video generation and understanding tasks
+    """
+
+    def __init__(
+        self, 
+        hidden_size: int, 
+        num_tokens: int = 64, 
+        max_frames: int = 32,
+        num_spatial_tokens: int = 256,  # Expected spatial tokens per frame
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_tokens = num_tokens
+        self.max_frames = max_frames
+        self.num_spatial_tokens = num_spatial_tokens
+        
+        # Learnable compression queries with temporal structure
+        # Split tokens: some for temporal, some for spatial-temporal combined
+        self.temporal_tokens = max(num_tokens // 4, 8)  # Dedicated temporal tokens
+        self.combined_tokens = num_tokens - self.temporal_tokens
+        
+        # Temporal query tokens (capture global motion/flow)
+        self.temporal_queries = nn.Parameter(
+            torch.randn(1, self.temporal_tokens, hidden_size) * 0.02
+        )
+        
+        # Combined spatio-temporal query tokens
+        self.combined_queries = nn.Parameter(
+            torch.randn(1, self.combined_tokens, hidden_size) * 0.02
+        )
+        
+        # Temporal position encoding for queries
+        self.temporal_pos = nn.Parameter(
+            torch.randn(1, max_frames, hidden_size) * 0.02
+        )
+        
+        # Compression projections
+        self.input_proj = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        
+        # Cross-attention for temporal compression
+        self.temporal_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=8,
+            batch_first=True,
+            dropout=0.1,
+        )
+        self.temporal_norm = nn.LayerNorm(hidden_size)
+        
+        # Cross-attention for combined compression
+        self.combined_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=8,
+            batch_first=True,
+            dropout=0.1,
+        )
+        self.combined_norm = nn.LayerNorm(hidden_size)
+        
+        # Output projection
+        self.output_proj = nn.Linear(hidden_size, hidden_size)
+        
+        print(f"   🎬 VideoTokenizer: {num_tokens} tokens ({self.temporal_tokens} temporal + {self.combined_tokens} combined)")
+
+    def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
+        """
+        Compress video features to tokens.
+        
+        Args:
+            x: [B, T*spatial, hidden_size] video features
+            num_frames: Number of frames
+            
+        Returns:
+            [B, num_tokens, hidden_size] compressed video tokens
+        """
+        batch_size = x.shape[0]
+        total_tokens = x.shape[1]
+        spatial_per_frame = total_tokens // num_frames
+        
+        # Project input
+        x_proj = self.input_proj(x)
+        
+        # Reshape to [B, T, spatial, hidden]
+        x_frames = x_proj.view(batch_size, num_frames, spatial_per_frame, self.hidden_size)
+        
+        # ===== Temporal tokens: pool spatially, attend temporally =====
+        # Average pool each frame: [B, T, hidden]
+        frame_pooled = x_frames.mean(dim=2)
+        
+        # Add temporal position encoding
+        frame_pooled = frame_pooled + self.temporal_pos[:, :num_frames]
+        
+        # Cross-attention: temporal queries attend to frame representations
+        temporal_queries = self.temporal_queries.expand(batch_size, -1, -1)
+        temporal_tokens, _ = self.temporal_attn(temporal_queries, frame_pooled, frame_pooled)
+        temporal_tokens = self.temporal_norm(temporal_queries + temporal_tokens)
+        
+        # ===== Combined tokens: attend to full spatio-temporal features =====
+        combined_queries = self.combined_queries.expand(batch_size, -1, -1)
+        combined_tokens, _ = self.combined_attn(combined_queries, x_proj, x_proj)
+        combined_tokens = self.combined_norm(combined_queries + combined_tokens)
+        
+        # Concatenate temporal and combined tokens
+        all_tokens = torch.cat([temporal_tokens, combined_tokens], dim=1)
+        
+        # Final projection
+        return self.output_proj(all_tokens)
+
+
 class RoPE3DEncoder(nn.Module):
     """
     3D Rotary Position Embedding for (x, y, t) dimensions.
@@ -366,12 +488,13 @@ class VideoEncoderBlock(nn.Module):
 
 class VideoEncoder(nn.Module):
     """
-    SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, and Temporal Expert Routing.
+    SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and VideoTokenizer.
     
     Features:
     - 3D-RoPE for flexible (x, y, t) positional encodings
     - 3D Causal Attention for temporal understanding
     - Temporal-Aware Expert Routing for motion patterns
+    - VideoTokenizer for efficient token compression (like TiTok for video)
     - Integrated with vision encoder backbone
     - FP16-native numerical stability
     """
@@ -384,6 +507,8 @@ class VideoEncoder(nn.Module):
         num_experts: int = 4,
         use_3d_rope: bool = True,
         use_temporal_moe: bool = True,
+        use_video_tokenizer: bool = True,
+        num_video_tokens: int = 64,
     ):
         super().__init__()
         self.vision_encoder = vision_encoder
@@ -391,11 +516,13 @@ class VideoEncoder(nn.Module):
         self.hidden_size = vision_encoder.hidden_size
         self.use_3d_rope = use_3d_rope
         self.use_temporal_moe = use_temporal_moe
+        self.use_video_tokenizer = use_video_tokenizer
         
         # Get expected image size from vision encoder
         self.image_size = getattr(vision_encoder, 'image_size', 384)
         self.patch_size = getattr(vision_encoder.vision_model.config, 'patch_size', 14)
         self.patches_per_side = self.image_size // self.patch_size
+        self.num_spatial_tokens = self.patches_per_side ** 2
 
         # 3D-RoPE for spatio-temporal position encoding
         if use_3d_rope:
@@ -426,7 +553,18 @@ class VideoEncoder(nn.Module):
         if use_temporal_moe:
             print(f"   🎯 Temporal MoE: {num_experts} experts per layer")
 
-        # Temporal pooling attention for video-level representation
+        # VideoTokenizer for efficient video token compression (like TiTok for images)
+        if use_video_tokenizer:
+            self.video_tokenizer = VideoTokenizer(
+                hidden_size=self.hidden_size,
+                num_tokens=num_video_tokens,
+                max_frames=max_frames,
+                num_spatial_tokens=self.num_spatial_tokens,
+            )
+        else:
+            self.video_tokenizer = None
+
+        # Temporal pooling attention for video-level representation (fallback when not using tokenizer)
         self.temporal_pool_query = nn.Parameter(torch.randn(1, 1, self.hidden_size) * 0.02)
         self.temporal_pool_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_size,
@@ -466,7 +604,13 @@ class VideoEncoder(nn.Module):
         
         return frame_features, batch_size, num_frames
 
-    def forward(self, frames: torch.Tensor, return_all_frames: bool = False, causal: bool = False) -> torch.Tensor:
+    def forward(
+        self, 
+        frames: torch.Tensor, 
+        return_all_frames: bool = False, 
+        causal: bool = False,
+        return_tokens: bool = False,
+    ) -> torch.Tensor:
         """
         Process video frames with 3D-RoPE and Causal Attention.
         
@@ -474,9 +618,12 @@ class VideoEncoder(nn.Module):
             frames: [B, T, C, H, W] tensor of video frames
             return_all_frames: If True, return all frame features; else return pooled
             causal: If True, use causal attention (for autoregressive)
+            return_tokens: If True, return VideoTokenizer compressed tokens
             
         Returns:
-            [B, T, hidden_size] if return_all_frames else [B, hidden_size]
+            If return_tokens: [B, num_tokens, hidden_size] video tokens
+            If return_all_frames: [B, T, hidden_size] per-frame features
+            Else: [B, hidden_size] pooled video representation
         """
         frame_features, batch_size, num_frames = self._extract_frame_features(frames)
         
@@ -496,6 +643,10 @@ class VideoEncoder(nn.Module):
         # Apply 3D transformer blocks
         for block in self.encoder_blocks:
             x = block(x, height, width, num_frames, causal=causal)
+        
+        # Return VideoTokenizer compressed tokens if requested
+        if return_tokens and self.video_tokenizer is not None:
+            return self.video_tokenizer(x, num_frames)  # [B, num_tokens, hidden_size]
         
         if return_all_frames:
             # Return per-frame features (mean over patches per frame)
