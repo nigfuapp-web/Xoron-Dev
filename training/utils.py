@@ -527,6 +527,12 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
     try:
         if not isinstance(video_frames, torch.Tensor) or video_frames.numel() == 0:
             return None
+        
+        # Check if model can handle this size
+        model_max_size = getattr(video_generator, 'image_size', 128)
+        if target_size > model_max_size:
+            print(f"      ⚠️ Video target_size={target_size} > model_max_size={model_max_size}, skipping!")
+            return None
 
         gen_device = next(video_generator.parameters()).device
         gen_dtype = next(video_generator.parameters()).dtype
