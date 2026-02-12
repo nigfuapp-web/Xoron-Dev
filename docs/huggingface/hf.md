@@ -113,10 +113,10 @@ datasets:
 ## 🌟 Model Highlights
 
 * **Architecture:** Mixture of Experts (8 Experts + 1 Shared, top-2 routing) with Ring Attention and Aux-Lossless routing.
-* **Multi-Scale Training (NEW):** Random scale selection per batch - images (128-512px), videos (128-384px), frames (8-32 including 20).
-* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization** (256 compressed tokens), **Dual-Stream Attention** (2 layers), and **2D-RoPE** for images; **3D-RoPE** + **VidTokTokenizer** (full 3D VAE with 4x8x8 compression) + **Temporal MoE** (4 experts) for video (8-32 frames).
-* **Image Generation:** **MoE-DiT** (Diffusion Transformer with 4 MoE experts) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 256-512px, 50 inference steps.
-* **Video Generation:** **3D Causal Transformers** (4 layers) with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing** (4 experts). Multi-scale: 8-32 frames @ 128-384px.
+* **Continuous-Scale Training:** Adaptive strategy samples ANY scale in range - images (128-384px), videos (128-320px), frames (8-24).
+* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization** (256 compressed tokens), **Dual-Stream Attention** (2 layers), and **2D-RoPE** for images; **3D-RoPE** + **VidTokTokenizer** (full 3D VAE with 4x8x8 compression) + **Temporal MoE** (4 experts) for video (8-24 frames).
+* **Image Generation:** **MoE-DiT** (Diffusion Transformer with 4 MoE experts) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 192-384px, 50 inference steps.
+* **Video Generation:** **3D Causal Transformers** (4 layers) with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing** (4 experts). Multi-scale: 8-24 frames @ 128-320px.
 * **Audio (Speech-to-Speech):** **Conformer encoder with RMLA** and **Raw Waveform Tokenizer** for ASR; **Direct waveform decoder** (no vocoder needed!) with **MAS** for TTS; **Zero-Shot Speaker Cloning** with In-Context Audio Prompting. Talk to it, and it talks back!
 * **Agentic:** Trained for tool calling, file operations, and code execution with uncertainty estimation.
 * **Context:** Efficient 128K context using Ring Attention (4096 chunk size).
@@ -155,8 +155,8 @@ datasets:
 ### 🎬 Video Encoder (3D Causal Transformers + VidTok)
 | Feature | Description |
 |---------|-------------|
-| Frame Scales | 8, 12, 16, 24, 32 frames (multi-scale) |
-| Resolution Scales | 128, 192, 256, 320, 384px (multi-scale) |
+| Frame Range | 8-24 frames (continuous-scale) |
+| Resolution Range | 128-320px (continuous-scale) |
 | Position Encoding | **3D-RoPE** for (x, y, t) coordinates |
 | VidTokTokenizer | Full 3D VAE (Microsoft VidTok architecture) |
 | Compression | 4x temporal, 8x8 spatial (4x8x8 total) |
@@ -171,7 +171,7 @@ datasets:
 |---------|-------------|
 | Architecture | **MoE-DiT** (Diffusion Transformer with MoE) |
 | Scheduler | **Flow Matching** (not DDPM) |
-| Output Resolution | 256-512px (multi-scale: 256, 320, 384, 448, 512) |
+| Output Resolution | 192-384px (continuous-scale, step=32) |
 | Position Encoding | 2D-RoPE |
 | Attention | **Symmetric Dual-Stream Attention** (SD3/Flux-style) |
 | MoE Experts | 4 experts in DiT blocks |
@@ -181,22 +181,22 @@ datasets:
 ### 📹 Video Generation (3D Causal + Flow Matching)
 | Feature | Description |
 |---------|-------------|
-| Output Resolution | 128-384px (multi-scale: 128, 192, 256, 320, 384) |
-| Output Frames | 8-32 frames (multi-scale: 8, 12, 16, 20, 24, 32) |
+| Output Resolution | 128-320px (continuous-scale, step=32) |
+| Output Frames | 8-24 frames (continuous-scale, step=4) |
 | Scheduler | **Flow Matching** |
 | Position Encoding | **3D-RoPE** for (x, y, t) |
 | Attention | Factorized Spatial-Temporal (3D Causal) |
 | Expert Routing | **Temporal MoE** (4 experts) |
 | Guidance Scale | 7.5 (CFG) |
 
-### 📐 Multi-Scale Training Configuration
-| Type | Scales | Probabilities |
-|------|--------|---------------|
-| **Image** | 128, 192, 256, 320, 384, 448, 512px | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
-| **Video** | 128, 192, 256, 320, 384px | 10%, 20%, 35%, 25%, 10% |
-| **Frames** | 8, 12, 16, 20, 24, 32 | 10%, 15%, 30%, 20%, 15%, 10% |
+### 📐 Continuous-Scale Training Configuration
+| Type | Range | Base | Step |
+|------|-------|------|------|
+| **Image** | 128-384px | 256px | 32px |
+| **Video** | 128-320px | 192px | 32px |
+| **Frames** | 8-24 | 16 | 4 |
 
-Multi-scale training is **enabled by default** with **random** strategy - each batch samples a different scale for variety.
+Continuous-scale training is **enabled by default** with **adaptive** strategy - dynamically adjusts scale ranges based on OOM history for optimal memory usage.
 
 ### 🎤 Audio (Speech-to-Speech with RMLA + MAS + Zero-Shot Cloning)
 | Feature | Description |

@@ -41,9 +41,10 @@
   - Efficient 2D+1D architecture (separates spatial and temporal processing)
   - AlphaBlender for temporal blending
   - Supports continuous (KL) and discrete (FSQ) tokenization
+  - 4x temporal, 8x8 spatial compression (4x8x8 total)
 - **Temporal MoE** - 4 experts for motion patterns with expert-choice routing
 - **3D Causal Transformer** - Factorized spatio-temporal attention
-- **Multi-scale: 8-32 frames** at 128-384px resolution
+- **Continuous-scale: 8-24 frames** at 128-320px resolution
 
 ### Audio System
 - **Raw Waveform Tokenizer** - Direct audio processing at 16kHz with RVQ (4 codebooks)
@@ -57,37 +58,37 @@
 - **Flow Matching** - Replaces DDPM for faster convergence
 - **Dual-Stream Self-Attention** - 2D-RoPE for spatial awareness
 - **ImageVAE** - For latent space encoding/decoding
-- **Multi-scale: 256-512px** output resolution, CFG scale 7.5
+- **Continuous-scale: 192-384px** output resolution, CFG scale 7.5
 
 ### Video Generation
 - **3D Causal Transformers** - Factorized spatial + temporal attention
 - **Flow Matching Scheduler** - Smooth frame transitions with log-SNR weighting
 - **Temporal MoE** - 4 experts with load balancing loss
 - **VideoVAE3D** - 3D VAE for video latent space
-- **Multi-scale: 8-32 frames @ 128-384px**
+- **Continuous-scale: 8-24 frames @ 128-320px**
 
 ---
 
 ## 🌟 Features
 
 ### 🧠 **Multimodal Understanding**
-| Modality | Encoder | Input Size (Multi-Scale) | Output Tokens |
-|----------|---------|--------------------------|---------------|
-| Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream RoPE2D | 128-512px | 64 tokens |
-| Video | 3D-RoPE + VidTok (3D VAE) + Temporal MoE | 8-32 frames @ 128-384px | Latent space |
+| Modality | Encoder | Input Size (Continuous-Scale) | Output |
+|----------|---------|-------------------------------|--------|
+| Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream RoPE2D | 128-384px | 64 tokens |
+| Video | 3D-RoPE + VidTok (3D VAE) + Temporal MoE | 8-24 frames @ 128-320px | Latent space |
 | Audio | Raw Waveform Tokenizer + Conformer + RMLA (MLA-style KV compression) | 16kHz, up to 10s | Variable |
 | Text | Qwen2.5 Tokenizer (151K vocab) | 128K context | - |
 
 ### 🎨 **Multimodal Generation**
-| Output | Architecture | Resolution (Multi-Scale) |
-|--------|--------------|--------------------------|
+| Output | Architecture | Resolution (Continuous-Scale) |
+|--------|--------------|-------------------------------|
 | Text | MoE LLM (8 experts, configurable shared) + Chain-of-Thought | 128K tokens |
-| Image | MoE-DiT (4 experts, SwiGLU) + Flow Matching + 2D-RoPE | 256-512px (50 steps) |
-| Video | VideoUNet3D + Flow Matching + Temporal MoE | 8-32 frames @ 128-384px |
+| Image | MoE-DiT (4 experts, SwiGLU) + Flow Matching + 2D-RoPE | 192-384px (50 steps) |
+| Video | VideoUNet3D + Flow Matching + Temporal MoE | 8-24 frames @ 128-320px |
 | Audio | BigVGAN-style Decoder + MAS (soft/hard) + Speaker Encoder | 16kHz |
 
 ### ⚡ **Training Features**
-- **Multi-Scale Training**: Random scale selection per batch for resolution variety
+- **Continuous-Scale Training**: Adaptive strategy samples ANY scale in range for optimal memory usage
 - **Mixture of Experts**: 8 experts + configurable shared, top-2 routing, aux-lossless routing
 - **Expert Choice MoE**: Alternative routing where experts select tokens
 - **LoRA+/rsLoRA/DoRA**: r=32, α=64, B matrix learns 4× faster (LoRA+ ratio)
@@ -385,7 +386,7 @@ class XoronConfig:
     num_experts: int = 8
     num_experts_per_tok: int = 2
     moe_layer_freq: int = 2
-    use_shared_expert: bool = True  # Can be disabled
+    use_shared_expert: bool = True
     use_aux_lossless: bool = True
     
     # Vision Encoder (SOTA)
@@ -395,38 +396,39 @@ class XoronConfig:
     use_vision_titok: bool = True
     num_vision_titok_tokens: int = 256
     
-    # Video Encoder (SOTA)
+    # Video Encoder (SOTA) - VidTok 3D VAE
     use_video_3d_rope: bool = True
     use_video_temporal_moe: bool = True
-    use_video_vidtok: bool = True  # VidTok 3D VAE
+    use_video_vidtok: bool = True
+    vidtok_latent_channels: int = 4
     vidtok_temporal_compression: int = 4
     vidtok_spatial_compression: int = 8
+    vidtok_causal: bool = True
+    vidtok_use_fsq: bool = False  # KL (continuous) vs FSQ (discrete)
     num_video_encoder_layers: int = 4
     
-    # Multi-Scale Training
+    # Continuous-Scale Training (SOTA)
     use_multi_scale: bool = True
-    multi_scale_strategy: str = "random"  # "random", "progressive", "curriculum"
+    use_continuous_scale: bool = True  # Samples ANY scale in range
+    multi_scale_strategy: str = "adaptive"  # "uniform", "gaussian", "adaptive"
     
-    # Image multi-scale: 128, 192, 256, 320, 384, 448, 512
-    image_scales: Tuple[int, ...] = (128, 192, 256, 320, 384, 448, 512)
-    image_scale_probs: Tuple[float, ...] = (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05)
+    # Image continuous-scale settings
     image_min_size: int = 128
-    image_max_size: int = 512
+    image_max_size: int = 384
     image_base_size: int = 256
+    image_size_step: int = 32
     
-    # Video multi-scale: 128, 192, 256, 320, 384
-    video_scales: Tuple[int, ...] = (128, 192, 256, 320, 384)
-    video_scale_probs: Tuple[float, ...] = (0.10, 0.20, 0.35, 0.25, 0.10)
+    # Video continuous-scale settings
     video_min_size: int = 128
-    video_max_size: int = 384
-    video_base_size: int = 256
+    video_max_size: int = 320
+    video_base_size: int = 192
+    video_size_step: int = 32
     
-    # Frame multi-scale: 8, 12, 16, 20, 24, 32
-    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
-    video_frame_scale_probs: Tuple[float, ...] = (0.10, 0.15, 0.30, 0.20, 0.15, 0.10)
+    # Video temporal continuous-scale settings
     video_min_frames: int = 8
-    video_max_frames: int = 32
+    video_max_frames: int = 24
     video_base_frames: int = 16
+    video_frame_step: int = 4
     
     # Image Generation (MoE-DiT + Flow Matching)
     enable_generation: bool = True
@@ -435,10 +437,11 @@ class XoronConfig:
     generation_use_dual_stream: bool = True
     generation_num_experts: int = 4
     
-    # Video Generation (VideoUNet3D + Temporal MoE)
+    # Video Generation (3D Causal + Temporal MoE)
     generation_video_use_flow_matching: bool = True
     generation_video_use_3d_rope: bool = True
     generation_video_num_experts: int = 4
+    generation_video_use_temporal_moe: bool = True
     
     # LoRA variants
     use_lora: bool = True
@@ -452,17 +455,17 @@ class XoronConfig:
     use_flash_attention: bool = True
 ```
 
-### Multi-Scale Training
+### Continuous-Scale Training
 
-Multi-scale training allows the model to handle varying resolutions and frame counts:
+Continuous-scale training samples ANY resolution within min/max bounds (not discrete scales):
 
-| Type | Scales | Probabilities |
-|------|--------|---------------|
-| **Image** | 128, 192, 256, 320, 384, 448, 512 | 5%, 10%, 30%, 25%, 15%, 10%, 5% |
-| **Video** | 128, 192, 256, 320, 384 | 10%, 20%, 35%, 25%, 10% |
-| **Frames** | 8, 12, 16, 20, 24, 32 | 10%, 15%, 30%, 20%, 15%, 10% |
+| Type | Range | Base | Step |
+|------|-------|------|------|
+| **Image** | 128-384px | 256px | 32px |
+| **Video** | 128-320px | 192px | 32px |
+| **Frames** | 8-24 | 16 | 4 |
 
-Each batch randomly samples a scale, providing variety during training so the model learns to handle multiple resolutions.
+The **adaptive** strategy adjusts scale ranges based on OOM history for optimal memory usage.
 
 ---
 
