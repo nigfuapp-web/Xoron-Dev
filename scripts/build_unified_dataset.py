@@ -60,7 +60,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 # 4. The token will be available as os.environ["HF_TOKEN"]
 
 # Dataset name on HuggingFace
-HF_DATASET_NAME = "nigfuapp-web/xoron-unified-multimodal"
+HF_DATASET_NAME = "nigfuapp-web/moe-data"
 
 # Base directory for temporary storage (Kaggle uses /tmp with 150GB)
 BASE_DIR = "/tmp/xoron_dataset_build"
