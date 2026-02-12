@@ -428,59 +428,46 @@ def save_image_pil(image, output_path: str) -> Optional[str]:
 # SAMPLE EXTRACTION FUNCTIONS
 # ============================================================================
 
-def extract_text_from_sample(sample: Dict, category: str) -> Optional[Dict]:
-    """Extract text content from a sample."""
-    text_fields = [
-        'text', 'content', 'instruction', 'prompt', 'query', 'question',
-        'response', 'output', 'answer', 'completion', 'code', 'solution',
-        'input', 'context', 'message', 'dialogue', 'conversation'
-    ]
+def serialize_value(val: Any) -> Any:
+    """Serialize a value to be JSON-compatible for the dataset."""
+    if val is None:
+        return None
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, (list, tuple)):
+        return [serialize_value(v) for v in val]
+    if isinstance(val, dict):
+        return {k: serialize_value(v) for k, v in val.items()}
+    # For PIL images, bytes, etc - skip (handled separately)
+    return str(val) if val else None
+
+
+def extract_all_metadata(sample: Dict, skip_fields: List[str] = None) -> Dict:
+    """Extract ALL metadata fields from a sample, preserving original columns."""
+    skip_fields = skip_fields or []
+    # Fields that contain binary/media data - handle separately
+    media_fields = ['image', 'img', 'audio', 'video', 'speech', 'waveform', 'photo', 'picture']
     
-    result = {"category": category, "type": "text"}
+    metadata = {}
+    for key, val in sample.items():
+        if key in skip_fields:
+            continue
+        if key.lower() in media_fields:
+            continue
+        
+        # Serialize the value
+        try:
+            serialized = serialize_value(val)
+            if serialized is not None:
+                metadata[key] = serialized
+        except Exception:
+            # If we can't serialize, convert to string
+            try:
+                metadata[key] = str(val)
+            except:
+                pass
     
-    # Try to extract instruction/response pairs
-    instruction = None
-    response = None
-    
-    for field in ['instruction', 'prompt', 'query', 'question', 'input']:
-        if field in sample and sample[field]:
-            instruction = str(sample[field])
-            break
-    
-    for field in ['response', 'output', 'answer', 'completion', 'solution']:
-        if field in sample and sample[field]:
-            response = str(sample[field])
-            break
-    
-    if instruction and response:
-        result['instruction'] = instruction
-        result['response'] = response
-        return result
-    
-    # Fallback to any text field
-    for field in text_fields:
-        if field in sample and sample[field]:
-            val = sample[field]
-            if isinstance(val, str) and len(val) > 10:
-                result['text'] = val
-                return result
-    
-    # Handle conversation format
-    if 'conversations' in sample and isinstance(sample['conversations'], list):
-        convs = sample['conversations']
-        if len(convs) >= 2:
-            result['instruction'] = str(convs[0].get('value', convs[0].get('content', '')))
-            result['response'] = str(convs[1].get('value', convs[1].get('content', '')))
-            return result
-    
-    if 'messages' in sample and isinstance(sample['messages'], list):
-        msgs = sample['messages']
-        if len(msgs) >= 2:
-            result['instruction'] = str(msgs[0].get('content', ''))
-            result['response'] = str(msgs[1].get('content', ''))
-            return result
-    
-    return None
+    return metadata
 
 
 def extract_video_url(sample: Dict) -> Optional[str]:
@@ -551,28 +538,12 @@ def extract_audio_data(sample: Dict) -> Tuple[Optional[Any], Optional[str]]:
     return (None, None)
 
 
-def get_text_from_sample(sample: Dict) -> Optional[str]:
-    """Get text caption/description from sample."""
-    text_fields = [
-        'caption', 'text', 'description', 'prompt', 'transcription',
-        'transcript', 'sentence', 'normalized_text', 'raw_text'
-    ]
-    
-    for field in text_fields:
-        if field in sample:
-            text = sample[field]
-            if isinstance(text, str) and text.strip():
-                return text.strip()
-    
-    return None
-
-
 # ============================================================================
 # DATASET PROCESSING
 # ============================================================================
 
 def process_text_dataset(config: Dict, category: str, max_samples: int) -> List[Dict]:
-    """Process a text dataset and extract samples."""
+    """Process a text dataset and extract ALL columns/metadata."""
     from datasets import load_dataset
     
     samples = []
@@ -591,21 +562,31 @@ def process_text_dataset(config: Dict, category: str, max_samples: int) -> List[
             if count >= max_samples:
                 break
             
-            extracted = extract_text_from_sample(sample, category)
-            if extracted:
-                extracted['source_dataset'] = name
-                samples.append(extracted)
-                count += 1
+            # Extract ALL metadata from the sample
+            sample_data = extract_all_metadata(sample)
+            
+            # Skip empty samples
+            if not sample_data:
+                continue
+            
+            # Add our tracking fields
+            sample_data['_category'] = category
+            sample_data['_source_dataset'] = name
+            sample_data['_modality'] = 'text'
+            
+            samples.append(sample_data)
+            count += 1
         
         logger.info(f"  Extracted {len(samples)} text samples from {name}")
     except Exception as e:
         logger.error(f"  Error processing {name}: {e}")
+        traceback.print_exc()
     
     return samples
 
 
 def process_image_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process an image dataset, download images, and extract samples."""
+    """Process an image dataset, download images, and extract ALL metadata."""
     from datasets import load_dataset
     from PIL import Image
     
@@ -629,11 +610,9 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
                 break
             
             img_data, img_url = extract_image_data(sample)
-            text = get_text_from_sample(sample)
             
             img_path = None
             if img_data is not None:
-                # Save PIL image
                 img_filename = f"{idx:06d}.jpg"
                 img_path = os.path.join(img_dir, img_filename)
                 
@@ -654,14 +633,14 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
                 img_path = download_image(img_url, img_path)
             
             if img_path and os.path.exists(img_path):
-                sample_data = {
-                    "category": category,
-                    "type": "image",
-                    "source_dataset": name,
-                    "image_path": img_path,
-                }
-                if text:
-                    sample_data["caption"] = text
+                # Extract ALL metadata from the sample
+                sample_data = extract_all_metadata(sample)
+                
+                # Add image path and tracking fields
+                sample_data['_image_path'] = img_path
+                sample_data['_category'] = category
+                sample_data['_source_dataset'] = name
+                sample_data['_modality'] = 'image'
                 
                 samples.append(sample_data)
                 count += 1
@@ -675,7 +654,7 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
 
 
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process a video dataset, download videos, and extract samples."""
+    """Process a video dataset, download videos, and extract ALL metadata."""
     from datasets import load_dataset
     
     samples = []
@@ -700,13 +679,11 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             if count >= max_samples:
                 break
             
-            # Stop if too many failures
             if failed > max_samples * 2:
                 logger.warning(f"  Too many download failures for {name}, stopping")
                 break
             
             video_url = extract_video_url(sample)
-            text = get_text_from_sample(sample)
             
             if not video_url:
                 continue
@@ -715,21 +692,20 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             video_path = download_video(video_url, vid_dir, video_id)
             
             if video_path and os.path.exists(video_path):
-                # Check file size
                 size_mb = get_file_size_mb(video_path)
                 if size_mb > MAX_VIDEO_SIZE_MB:
                     os.remove(video_path)
                     failed += 1
                     continue
                 
-                sample_data = {
-                    "category": category,
-                    "type": "video",
-                    "source_dataset": name,
-                    "video_path": video_path,
-                }
-                if text:
-                    sample_data["caption"] = text
+                # Extract ALL metadata from the sample
+                sample_data = extract_all_metadata(sample)
+                
+                # Add video path and tracking fields
+                sample_data['_video_path'] = video_path
+                sample_data['_category'] = category
+                sample_data['_source_dataset'] = name
+                sample_data['_modality'] = 'video'
                 
                 samples.append(sample_data)
                 count += 1
@@ -746,7 +722,7 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
 
 
 def process_audio_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process an audio dataset, save audio files, and extract samples."""
+    """Process an audio dataset, save audio files, and extract ALL metadata."""
     from datasets import load_dataset
     import soundfile as sf
     import numpy as np
@@ -771,7 +747,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                 break
             
             audio_data, audio_url = extract_audio_data(sample)
-            text = get_text_from_sample(sample)
             
             audio_path = None
             audio_filename = f"{idx:06d}.wav"
@@ -794,7 +769,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                             sf.write(target_path, arr, sr)
                             audio_path = target_path
                         elif 'path' in audio_data and audio_data['path']:
-                            # Copy file
                             src = audio_data['path']
                             if os.path.exists(src):
                                 shutil.copy(src, target_path)
@@ -806,20 +780,19 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                 audio_path = download_audio_direct(audio_url, target_path)
             
             if audio_path and os.path.exists(audio_path):
-                # Check file size
                 size_mb = get_file_size_mb(audio_path)
                 if size_mb > MAX_AUDIO_SIZE_MB:
                     os.remove(audio_path)
                     continue
                 
-                sample_data = {
-                    "category": category,
-                    "type": "audio",
-                    "source_dataset": name,
-                    "audio_path": audio_path,
-                }
-                if text:
-                    sample_data["transcription"] = text
+                # Extract ALL metadata from the sample
+                sample_data = extract_all_metadata(sample)
+                
+                # Add audio path and tracking fields
+                sample_data['_audio_path'] = audio_path
+                sample_data['_category'] = category
+                sample_data['_source_dataset'] = name
+                sample_data['_modality'] = 'audio'
                 
                 samples.append(sample_data)
                 count += 1
@@ -906,89 +879,93 @@ def build_unified_dataset():
     
     datasets_dict = {}
     
-    # Text split
+    def samples_to_dataset(samples: List[Dict], modality: str) -> Optional[Dataset]:
+        """Convert samples with varying columns to a Dataset, preserving ALL columns."""
+        if not samples:
+            return None
+        
+        # Collect ALL unique keys across all samples
+        all_keys = set()
+        for s in samples:
+            all_keys.update(s.keys())
+        
+        # Build column data - each column is a list
+        column_data = {key: [] for key in all_keys}
+        
+        for s in samples:
+            for key in all_keys:
+                # Get value or None if missing
+                val = s.get(key, None)
+                # Convert complex types to JSON strings for storage
+                if isinstance(val, (list, dict)):
+                    try:
+                        val = json.dumps(val)
+                    except:
+                        val = str(val)
+                column_data[key].append(val)
+        
+        # Create dataset
+        try:
+            ds = Dataset.from_dict(column_data)
+            return ds
+        except Exception as e:
+            logger.error(f"Error creating {modality} dataset: {e}")
+            return None
+    
+    # Text split - keep ALL original columns
     if all_samples["text"]:
-        text_data = {
-            "instruction": [],
-            "response": [],
-            "text": [],
-            "category": [],
-            "source_dataset": [],
-        }
-        for s in all_samples["text"]:
-            text_data["instruction"].append(s.get("instruction", ""))
-            text_data["response"].append(s.get("response", ""))
-            text_data["text"].append(s.get("text", ""))
-            text_data["category"].append(s.get("category", ""))
-            text_data["source_dataset"].append(s.get("source_dataset", ""))
-        
-        datasets_dict["text"] = Dataset.from_dict(text_data)
-        logger.info(f"  Text dataset: {len(datasets_dict['text'])} samples")
+        ds = samples_to_dataset(all_samples["text"], "text")
+        if ds:
+            datasets_dict["text"] = ds
+            logger.info(f"  Text dataset: {len(ds)} samples, {len(ds.column_names)} columns")
+            logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
     
-    # Image split
+    # Image split - keep ALL original columns + image
     if all_samples["image"]:
-        image_data = {
-            "image": [],
-            "caption": [],
-            "category": [],
-            "source_dataset": [],
-        }
-        for s in all_samples["image"]:
-            img_path = s.get("image_path", "")
-            if img_path and os.path.exists(img_path):
-                image_data["image"].append(img_path)
-                image_data["caption"].append(s.get("caption", ""))
-                image_data["category"].append(s.get("category", ""))
-                image_data["source_dataset"].append(s.get("source_dataset", ""))
+        # Filter to only samples with valid image paths
+        valid_samples = [s for s in all_samples["image"] 
+                        if s.get("_image_path") and os.path.exists(s.get("_image_path", ""))]
         
-        if image_data["image"]:
-            ds = Dataset.from_dict(image_data)
-            ds = ds.cast_column("image", HFImage())
-            datasets_dict["image"] = ds
-            logger.info(f"  Image dataset: {len(datasets_dict['image'])} samples")
+        if valid_samples:
+            ds = samples_to_dataset(valid_samples, "image")
+            if ds and "_image_path" in ds.column_names:
+                # Rename _image_path to image and cast to Image type
+                ds = ds.rename_column("_image_path", "image")
+                ds = ds.cast_column("image", HFImage())
+                datasets_dict["image"] = ds
+                logger.info(f"  Image dataset: {len(ds)} samples, {len(ds.column_names)} columns")
+                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
     
-    # Audio split
+    # Audio split - keep ALL original columns + audio
     if all_samples["audio"]:
-        audio_data = {
-            "audio": [],
-            "transcription": [],
-            "category": [],
-            "source_dataset": [],
-        }
-        for s in all_samples["audio"]:
-            audio_path = s.get("audio_path", "")
-            if audio_path and os.path.exists(audio_path):
-                audio_data["audio"].append(audio_path)
-                audio_data["transcription"].append(s.get("transcription", ""))
-                audio_data["category"].append(s.get("category", ""))
-                audio_data["source_dataset"].append(s.get("source_dataset", ""))
+        # Filter to only samples with valid audio paths
+        valid_samples = [s for s in all_samples["audio"]
+                        if s.get("_audio_path") and os.path.exists(s.get("_audio_path", ""))]
         
-        if audio_data["audio"]:
-            ds = Dataset.from_dict(audio_data)
-            ds = ds.cast_column("audio", HFAudio())
-            datasets_dict["audio"] = ds
-            logger.info(f"  Audio dataset: {len(datasets_dict['audio'])} samples")
+        if valid_samples:
+            ds = samples_to_dataset(valid_samples, "audio")
+            if ds and "_audio_path" in ds.column_names:
+                # Rename _audio_path to audio and cast to Audio type
+                ds = ds.rename_column("_audio_path", "audio")
+                ds = ds.cast_column("audio", HFAudio())
+                datasets_dict["audio"] = ds
+                logger.info(f"  Audio dataset: {len(ds)} samples, {len(ds.column_names)} columns")
+                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
     
-    # Video split (store paths - videos are large)
+    # Video split - keep ALL original columns + video path
     if all_samples["video"]:
-        video_data = {
-            "video_path": [],
-            "caption": [],
-            "category": [],
-            "source_dataset": [],
-        }
-        for s in all_samples["video"]:
-            video_path = s.get("video_path", "")
-            if video_path and os.path.exists(video_path):
-                video_data["video_path"].append(video_path)
-                video_data["caption"].append(s.get("caption", ""))
-                video_data["category"].append(s.get("category", ""))
-                video_data["source_dataset"].append(s.get("source_dataset", ""))
+        # Filter to only samples with valid video paths
+        valid_samples = [s for s in all_samples["video"]
+                        if s.get("_video_path") and os.path.exists(s.get("_video_path", ""))]
         
-        if video_data["video_path"]:
-            # For videos, we'll create a tar archive and upload separately
-            datasets_dict["video"] = Dataset.from_dict(video_data)
-            logger.info(f"  Video dataset: {len(datasets_dict['video'])} samples")
+        if valid_samples:
+            ds = samples_to_dataset(valid_samples, "video")
+            if ds and "_video_path" in ds.column_names:
+                # Rename _video_path to video_path for clarity
+                ds = ds.rename_column("_video_path", "video")
+                datasets_dict["video"] = ds
+                logger.info(f"  Video dataset: {len(ds)} samples, {len(ds.column_names)} columns")
+                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
     
     if not datasets_dict:
         logger.error("No datasets created! Check for errors above.")
