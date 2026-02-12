@@ -72,64 +72,55 @@ class XoronConfig:
     num_video_encoder_layers: int = 4  # 3D causal transformer layers
     num_video_experts: int = 4  # Temporal MoE experts
 
-    # ========== MULTI-SCALE TRAINING CONFIGURATION (SOTA) ==========
-    # Multi-scale enables training and inference at multiple resolutions
-    # This allows the model to handle various input/output sizes dynamically
-    # ALL image/video size and frame settings are consolidated here
+    # ========== CONTINUOUS-SCALE TRAINING CONFIGURATION (SOTA) ==========
+    # SOTA: Continuous-scale training replaces discrete scale lists with continuous sampling
+    # This enables the model to train at ANY resolution within min/max bounds
+    # Better generalization, more memory efficient, and handles OOM gracefully
     
-    # Enable multi-scale training (dynamic resolution selection during training)
+    # Enable continuous-scale training (SOTA: samples ANY scale in range)
     use_multi_scale: bool = True
+    use_continuous_scale: bool = True  # NEW: Enable continuous sampling (vs discrete)
     
-    # Image multi-scale settings
-    # Available image resolutions for training (height, width)
-    image_scales: Tuple[Tuple[int, int], ...] = (
-        (128, 128),   # Low res - fast training, good for low-memory
-        (192, 192),   # Medium-low res
-        (256, 256),   # Base resolution (default)
-        (320, 320),   # Medium-high res
-        (384, 384),   # High res - matches SigLIP native resolution
-        (448, 448),   # Very high res
-        (512, 512),   # Max resolution for high quality
-    )
-    # Probability distribution for scale sampling (sum should be ~1.0)
-    # Higher probability for middle scales, lower for extremes
-    image_scale_probs: Tuple[float, ...] = (0.05, 0.10, 0.30, 0.25, 0.15, 0.10, 0.05)
+    # Image continuous-scale settings
     image_min_size: int = 128   # Minimum image size
-    image_max_size: int = 512   # Maximum image size
-    image_base_size: int = 256  # Base/default image size (used when multi-scale disabled)
+    image_max_size: int = 384   # Maximum image size (reduced for memory)
+    image_base_size: int = 256  # Base/default image size
+    image_size_step: int = 32   # Quantize to multiples of this (for VAE compatibility)
     
-    # Video spatial multi-scale settings
-    # Available video resolutions (height, width)
-    video_scales: Tuple[Tuple[int, int], ...] = (
-        (128, 128),   # Low res - fast
-        (192, 192),   # Medium-low
-        (256, 256),   # Base resolution
-        (320, 320),   # Medium-high
-        (384, 384),   # High res
-    )
-    video_scale_probs: Tuple[float, ...] = (0.10, 0.20, 0.35, 0.25, 0.10)
+    # Video continuous-scale settings  
     video_min_size: int = 128   # Minimum video spatial size
-    video_max_size: int = 384   # Maximum video spatial size  
-    video_base_size: int = 256  # Base/default video size (used when multi-scale disabled)
+    video_max_size: int = 320   # Maximum video spatial size (reduced for memory)
+    video_base_size: int = 192  # Base/default video size (reduced for memory)
+    video_size_step: int = 32   # Quantize to multiples of this
     
-    # Video temporal multi-scale settings (frame counts)
-    # Available frame counts for training - supports 8 to 32 frames
-    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
-    video_frame_scale_probs: Tuple[float, ...] = (0.10, 0.15, 0.30, 0.20, 0.15, 0.10)
+    # Video temporal continuous-scale settings
     video_min_frames: int = 8    # Minimum frame count
-    video_max_frames: int = 32   # Maximum frame count (supports 16+ frames)
+    video_max_frames: int = 24   # Maximum frame count (reduced for memory)
     video_base_frames: int = 16  # Base/default frame count
+    video_frame_step: int = 4    # Quantize to multiples of this
     
-    # Multi-scale training strategy
-    # "random" - randomly sample scale each batch (best for variety - each sample gets different size)
-    # "progressive" - start small, gradually increase scale during training (epoch-based)
-    # "curriculum" - alternate between scales in a curriculum
-    multi_scale_strategy: str = "random"
-    multi_scale_warmup_epochs: int = 5  # For progressive strategy: epochs to reach max scale
+    # LEGACY: Discrete scales (kept for backward compatibility but unused with continuous_scale=True)
+    image_scales: Tuple[Tuple[int, int], ...] = ((128, 128), (192, 192), (256, 256), (320, 320), (384, 384))
+    image_scale_probs: Tuple[float, ...] = (0.15, 0.25, 0.30, 0.20, 0.10)
+    video_scales: Tuple[Tuple[int, int], ...] = ((128, 128), (192, 192), (256, 256), (320, 320))
+    video_scale_probs: Tuple[float, ...] = (0.20, 0.35, 0.30, 0.15)
+    video_frame_scales: Tuple[int, ...] = (8, 12, 16, 20, 24)
+    video_frame_scale_probs: Tuple[float, ...] = (0.15, 0.25, 0.30, 0.20, 0.10)
+    
+    # Continuous-scale sampling strategy
+    # "uniform" - uniform distribution across range
+    # "gaussian" - Gaussian centered on base size (better quality)
+    # "adaptive" - adapts based on OOM history (best for limited VRAM)
+    multi_scale_strategy: str = "adaptive"
+    multi_scale_warmup_epochs: int = 3  # Epochs before reaching full scale range
+    
+    # Adaptive scaling settings (for strategy="adaptive")
+    adaptive_scale_oom_penalty: float = 0.5  # Reduce max scale by this factor on OOM
+    adaptive_scale_success_boost: float = 0.1  # Increase max scale on success
     
     # Supported sizes for generation inference
-    generation_supported_sizes: Tuple[int, ...] = (256, 320, 384, 448, 512)
-    generation_supported_frames: Tuple[int, ...] = (8, 12, 16, 20, 24, 32)
+    generation_supported_sizes: Tuple[int, ...] = (192, 256, 320, 384)
+    generation_supported_frames: Tuple[int, ...] = (8, 12, 16, 20, 24)
     # ================================================================
 
     # Image Generation Configuration (SOTA: MoE-DiT with Flow Matching + 2D-RoPE)

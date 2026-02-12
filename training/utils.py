@@ -471,43 +471,48 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
 
         # Use generator's training_step if available (SOTA method)
         # NOTE: Pass images in [0,1] range - generator.training_step normalizes internally
-        if hasattr(generator, 'training_step'):
-            # Ensure all inputs are correct dtype
-            losses = generator.training_step(images.to(gen_dtype), text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
-            loss = losses['total_loss']
-            del losses, images  # Clean up
-            return loss
-        
-        # Fallback to manual training - normalize here since no training_step
-        images_norm = images * 2 - 1
-        del images
-        z, mean, logvar = generator.encode(images_norm)
-        del images_norm  # No longer needed
-        
-        batch_size = z.shape[0]
-        timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
-        noise = torch.randn_like(z)
-        
-        # Add noise
-        if hasattr(generator, 'add_noise'):
-            noisy_z = generator.add_noise(z, noise, timesteps)
-        else:
-            alpha_t = generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(gen_dtype)
-            noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
-        
-        noise_pred = generator.unet(noisy_z, timesteps, text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
-        del noisy_z  # Clean up
-        
-        diff_loss = F.mse_loss(noise_pred, noise)
-        del noise_pred, noise  # Clean up
-        
-        kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-        del z, mean, logvar  # Clean up
-        
-        return diff_loss + 0.0001 * kl_loss
+        try:
+            if hasattr(generator, 'training_step'):
+                losses = generator.training_step(images.to(gen_dtype), text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
+                loss = losses['total_loss']
+                del losses, images
+                return loss
+            
+            # Fallback to manual training
+            images_norm = images * 2 - 1
+            del images
+            z, mean, logvar = generator.encode(images_norm)
+            del images_norm
+            
+            batch_size = z.shape[0]
+            timesteps = torch.randint(0, 1000, (batch_size,), device=gen_device)
+            noise = torch.randn_like(z)
+            
+            if hasattr(generator, 'add_noise'):
+                noisy_z = generator.add_noise(z, noise, timesteps)
+            else:
+                alpha_t = generator.alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(gen_dtype)
+                noisy_z = torch.sqrt(alpha_t) * z + torch.sqrt(1 - alpha_t) * noise
+            
+            noise_pred = generator.unet(noisy_z, timesteps, text_context.to(gen_dtype), mask.to(gen_dtype) if mask is not None else None)
+            del noisy_z
+            
+            diff_loss = F.mse_loss(noise_pred, noise)
+            del noise_pred, noise
+            
+            kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+            del z, mean, logvar
+            
+            return diff_loss + 0.0001 * kl_loss
+            
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return "OOM"  # Signal OOM to trainer for adaptive scaling
+            raise
         
     except Exception as e:
-        print(f"      ⚠️ Image diffusion training error: {type(e).__name__}: {str(e)[:100]}")
         return None
 
 
@@ -649,7 +654,7 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                     oom_count += 1
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    continue  # Skip this sample, try next
+                    continue
                 else:
                     other_error_count += 1
                     continue
@@ -657,8 +662,11 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                 other_error_count += 1
                 continue
         
-        # Only return None if no samples succeeded - no verbose logging for partial failures
+        # Return None with OOM flag if all samples failed due to OOM
         if num_processed == 0 or total_loss is None:
+            # Return special marker for OOM so trainer can adapt
+            if oom_count > 0 and other_error_count == 0:
+                return "OOM"  # Signal OOM to trainer for adaptive scaling
             return None
             
         return total_loss / num_processed

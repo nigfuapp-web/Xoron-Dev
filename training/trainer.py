@@ -183,37 +183,146 @@ class XoronTrainer:
         if resume_from is not None:
             self._load_checkpoint(resume_from)
     
+    def _sample_continuous_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
+        """
+        SOTA: Continuous-scale sampling for more efficient training.
+        
+        Instead of discrete scales, samples ANY size within min/max bounds.
+        Uses adaptive strategy to avoid OOM by tracking successful scales.
+        
+        Args:
+            modality: 'image' or 'video'
+            epoch: Current epoch for warmup
+            
+        Returns:
+            For image: (height, width) tuple
+            For video: ((height, width), num_frames) tuple
+        """
+        # Get config values
+        if modality == 'image':
+            min_size = self.img_min_size
+            max_size = self.img_max_size
+            base_size = self.img_gen_size
+            size_step = getattr(self.xoron_config, 'image_size_step', 32) if hasattr(self, 'xoron_config') else 32
+        else:
+            min_size = self.vid_min_size
+            max_size = self.vid_max_size
+            base_size = self.vid_gen_size
+            size_step = getattr(self.xoron_config, 'video_size_step', 32) if hasattr(self, 'xoron_config') else 32
+        
+        # Adaptive max based on OOM history
+        adaptive_max = getattr(self, f'_{modality}_adaptive_max', max_size)
+        effective_max = min(max_size, adaptive_max)
+        
+        # Warmup: start small and gradually increase range
+        warmup_epochs = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 3) if hasattr(self, 'xoron_config') else 3
+        if epoch < warmup_epochs:
+            warmup_ratio = (epoch + 1) / warmup_epochs
+            effective_max = int(min_size + (effective_max - min_size) * warmup_ratio)
+        
+        # Sample size based on strategy
+        strategy = self.multi_scale_strategy
+        
+        if strategy == 'gaussian':
+            # Gaussian centered on base size
+            std = (effective_max - min_size) / 4
+            size = int(random.gauss(base_size, std))
+        elif strategy == 'adaptive':
+            # Adaptive: favor smaller sizes when VRAM is limited
+            # Use beta distribution skewed toward smaller sizes
+            alpha, beta_param = 2.0, 3.0  # Skewed toward smaller
+            sample = random.betavariate(alpha, beta_param)
+            size = int(min_size + sample * (effective_max - min_size))
+        else:  # uniform
+            size = random.randint(min_size, effective_max)
+        
+        # Quantize to step size (for VAE compatibility)
+        size = max(min_size, min(effective_max, size))
+        size = (size // size_step) * size_step
+        size = max(min_size, size)  # Ensure not below min after quantization
+        
+        if modality == 'video':
+            # Also sample frame count
+            min_frames = getattr(self.xoron_config, 'video_min_frames', 8) if hasattr(self, 'xoron_config') else 8
+            max_frames = getattr(self.xoron_config, 'video_max_frames', 24) if hasattr(self, 'xoron_config') else 24
+            frame_step = getattr(self.xoron_config, 'video_frame_step', 4) if hasattr(self, 'xoron_config') else 4
+            
+            # Adaptive frame max based on spatial size (larger = fewer frames)
+            size_ratio = size / max_size
+            adaptive_frame_max = int(min_frames + (max_frames - min_frames) * (1 - size_ratio * 0.5))
+            adaptive_frame_max = min(max_frames, max(min_frames, adaptive_frame_max))
+            
+            num_frames = random.randint(min_frames, adaptive_frame_max)
+            num_frames = (num_frames // frame_step) * frame_step
+            num_frames = max(min_frames, num_frames)
+            
+            return ((size, size), num_frames)
+        
+        return (size, size)
+    
+    def _update_adaptive_scale(self, modality: str, size: int, success: bool):
+        """Update adaptive max scale based on OOM/success."""
+        attr_name = f'_{modality}_adaptive_max'
+        
+        if modality == 'image':
+            max_size = self.img_max_size
+            min_size = self.img_min_size
+        else:
+            max_size = self.vid_max_size
+            min_size = self.vid_min_size
+        
+        current_max = getattr(self, attr_name, max_size)
+        
+        if success:
+            # Slowly increase max on success
+            boost = getattr(self.xoron_config, 'adaptive_scale_success_boost', 0.1) if hasattr(self, 'xoron_config') else 0.1
+            new_max = min(max_size, current_max + int((max_size - current_max) * boost))
+        else:
+            # Reduce max on OOM
+            penalty = getattr(self.xoron_config, 'adaptive_scale_oom_penalty', 0.5) if hasattr(self, 'xoron_config') else 0.5
+            new_max = max(min_size, int(size * penalty))
+        
+        setattr(self, attr_name, new_max)
+    
     def _sample_multi_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
         """
         Sample a scale for multi-scale training.
         
+        SOTA: Uses continuous-scale sampling if enabled, else falls back to discrete.
+        
         Args:
-            modality: 'image' or 'video' - which scale set to sample from
-            epoch: Current epoch (used for progressive strategy)
+            modality: 'image' or 'video'
+            epoch: Current epoch
             
         Returns:
             For image: (height, width) tuple
             For video: ((height, width), num_frames) tuple
         """
         if not self.use_multi_scale:
-            # Multi-scale disabled - use base sizes
             if modality == 'image':
                 return (self.img_gen_size, self.img_gen_size)
             else:
                 return ((self.vid_gen_size, self.vid_gen_size), 16)
         
+        # Check if continuous-scale is enabled
+        use_continuous = getattr(self.xoron_config, 'use_continuous_scale', True) if hasattr(self, 'xoron_config') else True
+        
+        if use_continuous:
+            return self._sample_continuous_scale(modality, epoch)
+        
+        # Legacy discrete sampling (fallback)
+        return self._sample_discrete_scale(modality, epoch)
+    
+    def _sample_discrete_scale(self, modality: str = 'video', epoch: int = 0) -> tuple:
+        """Legacy discrete scale sampling for backward compatibility."""
         if modality == 'image':
-            scales = self.image_scales
-            probs = self.image_scale_probs
+            scales = list(self.image_scales)
+            probs = list(self.image_scale_probs)
         else:
-            scales = self.video_scales
-            probs = self.video_scale_probs
+            scales = list(self.video_scales)
+            probs = list(self.video_scale_probs)
         
-        # Convert to list if tuple (for proper indexing)
-        scales = list(scales)
-        probs = list(probs)
-        
-        # CRITICAL: Ensure scales are proper (H, W) tuples
+        # Fix scales to be (H, W) tuples
         fixed_scales = []
         for s in scales:
             if isinstance(s, (list, tuple)) and len(s) == 2:
@@ -221,100 +330,35 @@ class XoronTrainer:
             elif isinstance(s, (int, float)):
                 fixed_scales.append((int(s), int(s)))
             else:
-                if modality == 'image':
-                    fixed_scales.append((self.img_gen_size, self.img_gen_size))
-                else:
-                    fixed_scales.append((self.vid_gen_size, self.vid_gen_size))
+                fixed_scales.append((self.img_gen_size if modality == 'image' else self.vid_gen_size,) * 2)
         scales = fixed_scales
         
-        # Ensure we have valid scales and probs with matching lengths
-        if len(scales) == 0 or len(probs) == 0:
-            if modality == 'image':
-                return (self.img_gen_size, self.img_gen_size)
-            else:
-                return ((self.vid_gen_size, self.vid_gen_size), 16)
+        if not scales:
+            base = self.img_gen_size if modality == 'image' else self.vid_gen_size
+            if modality == 'video':
+                return ((base, base), 16)
+            return (base, base)
         
-        # Match probability length to scales length
+        # Normalize probs
         if len(probs) != len(scales):
-            if len(probs) > len(scales):
-                probs = probs[:len(scales)]
-            else:
-                while len(probs) < len(scales):
-                    probs.append(1.0 / len(scales))
+            probs = [1.0 / len(scales)] * len(scales)
+        total = sum(probs)
+        probs = [p / total for p in probs] if total > 0 else [1.0 / len(scales)] * len(scales)
         
-        # Normalize probabilities
-        total_prob = sum(probs)
-        if total_prob <= 0:
-            probs_normalized = [1.0 / len(scales)] * len(scales)
-        else:
-            probs_normalized = [p / total_prob for p in probs]
-        
-        # Sample using random - directly pick from scales using weighted choice
-        if self.multi_scale_strategy == 'progressive':
-            warmup = getattr(self.xoron_config, 'multi_scale_warmup_epochs', 5) if hasattr(self, 'xoron_config') else 5
-            max_idx = min(len(scales) - 1, int((epoch / max(warmup, 1)) * len(scales)))
-            scales_subset = scales[:max_idx + 1]
-            probs_subset = probs_normalized[:max_idx + 1]
-            total_subset = sum(probs_subset)
-            if total_subset <= 0:
-                probs_subset = [1.0 / len(scales_subset)] * len(scales_subset)
-            else:
-                probs_subset = [p / total_subset for p in probs_subset]
-            selected_scale = random.choices(scales_subset, weights=probs_subset, k=1)[0]
-        else:
-            # Random strategy: use cumulative distribution for reliable sampling
-            import random as rand_module
-            r = rand_module.random()  # [0, 1)
-            cumulative = 0.0
-            selected_idx = 0
-            for i, p in enumerate(probs_normalized):
-                cumulative += p
-                if r < cumulative:
-                    selected_idx = i
-                    break
-            selected_scale = scales[selected_idx]
-        
-        # Ensure selected_scale is a proper (H, W) tuple
-        if isinstance(selected_scale, list):
-            selected_scale = tuple(selected_scale)
-        if not isinstance(selected_scale, tuple) or len(selected_scale) != 2:
-            if modality == 'image':
-                selected_scale = (self.img_gen_size, self.img_gen_size)
-            else:
-                selected_scale = (self.vid_gen_size, self.vid_gen_size)
+        # Sample
+        selected = random.choices(scales, weights=probs, k=1)[0]
         
         if modality == 'video':
-            # Also sample frame count for video using same cumulative method
             frame_scales = list(self.video_frame_scales)
             frame_probs = list(self.video_frame_scale_probs)
-            
             if len(frame_probs) != len(frame_scales):
-                if len(frame_probs) > len(frame_scales):
-                    frame_probs = frame_probs[:len(frame_scales)]
-                else:
-                    while len(frame_probs) < len(frame_scales):
-                        frame_probs.append(1.0 / len(frame_scales))
-            
-            total_frame_prob = sum(frame_probs)
-            if total_frame_prob <= 0:
-                frame_probs_normalized = [1.0 / len(frame_scales)] * len(frame_scales)
-            else:
-                frame_probs_normalized = [p / total_frame_prob for p in frame_probs]
-            
-            # Use cumulative distribution for frame sampling too
-            import random as rand_module
-            r = rand_module.random()
-            cumulative = 0.0
-            frame_idx = 0
-            for i, p in enumerate(frame_probs_normalized):
-                cumulative += p
-                if r < cumulative:
-                    frame_idx = i
-                    break
-            num_frames = frame_scales[frame_idx]
-            return (selected_scale, num_frames)
+                frame_probs = [1.0 / len(frame_scales)] * len(frame_scales)
+            total = sum(frame_probs)
+            frame_probs = [p / total for p in frame_probs] if total > 0 else [1.0 / len(frame_scales)] * len(frame_scales)
+            num_frames = random.choices(frame_scales, weights=frame_probs, k=1)[0]
+            return (selected, num_frames)
         
-        return selected_scale
+        return selected
     
     def _enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency across all components."""
@@ -1143,7 +1187,7 @@ class XoronTrainer:
             has_image_samples = len(batch_image_sample_types) > 0 and any(t in image_sample_type_names for t in batch_image_sample_types)
             
             if has_image_samples and pixel_values is not None:
-                # Sample scale for this batch (MULTI-SCALE TRAINING)
+                # Sample scale for this batch (CONTINUOUS-SCALE TRAINING)
                 if self.use_multi_scale:
                     img_scale = self._sample_multi_scale('image', epoch)
                     current_img_size = img_scale[0]  # Use height (assuming square)
@@ -1154,20 +1198,23 @@ class XoronTrainer:
                 if batch_image_sample_indices and len(batch_image_sample_indices) == pixel_values.shape[0]:
                     image_text_embeds = text_embeds[batch_image_sample_indices]
                 else:
-                    # Fallback: truncate text_embeds to match pixel_values
                     image_text_embeds = text_embeds[:pixel_values.shape[0]]
                 
                 img_diff_loss = train_image_diffusion_step(
                     self.model.generator, pixel_values, image_text_embeds, current_img_size,
-                    sample_types=batch_image_sample_types  # CRITICAL: Use aligned types!
+                    sample_types=batch_image_sample_types
                 )
-                if img_diff_loss is not None:
-                    # Move to same device AND dtype as total_loss
+                
+                # Handle adaptive scaling based on OOM feedback
+                if img_diff_loss == "OOM":
+                    self._update_adaptive_scale('image', current_img_size, success=False)
+                    img_diff_loss = None
+                elif img_diff_loss is not None:
+                    self._update_adaptive_scale('image', current_img_size, success=True)
                     img_diff_loss = img_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                     total_loss = total_loss + self.image_diffusion_loss_weight * img_diff_loss
                     epoch_img_diff_loss += img_diff_loss.item()
                     num_img_diff += 1
-                    # Log first 10 successful image diffusion batches per epoch
                     if num_img_diff <= 10:
                         print(f"   🖼️ Image [{num_img_diff}/10]: scale={current_img_size}x{current_img_size}, loss={img_diff_loss.item():.4f}")
 
@@ -1193,7 +1240,7 @@ class XoronTrainer:
                     if batch_idx == 0:
                         print(f"   ⚠️ Video frames is None/empty - no video data in batch")
                 else:
-                    # Sample scale ONLY when we have valid video frames (MULTI-SCALE TRAINING)
+                    # Sample scale ONLY when we have valid video frames (CONTINUOUS-SCALE TRAINING)
                     if self.use_multi_scale:
                         vid_scale_info = self._sample_multi_scale('video', epoch)
                         vid_scale = vid_scale_info[0]  # (H, W) tuple
@@ -1211,7 +1258,15 @@ class XoronTrainer:
                         self.model.video_generator, video_frames, video_text_embeds, current_vid_size,
                         sample_types=batch_video_sample_types
                     )
-                    if vid_diff_loss is not None:
+                    
+                    # Handle adaptive scaling based on OOM feedback
+                    if vid_diff_loss == "OOM":
+                        # OOM occurred - update adaptive scale to use smaller sizes
+                        self._update_adaptive_scale('video', current_vid_size, success=False)
+                        vid_diff_loss = None
+                    elif vid_diff_loss is not None:
+                        # Success - slowly increase adaptive max
+                        self._update_adaptive_scale('video', current_vid_size, success=True)
                         vid_diff_loss = vid_diff_loss.to(device=total_loss.device, dtype=total_loss.dtype)
                         total_loss = total_loss + self.video_diffusion_loss_weight * vid_diff_loss
                         epoch_vid_diff_loss += vid_diff_loss.item()
