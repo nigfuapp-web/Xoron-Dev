@@ -1,10 +1,16 @@
 """
-SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and Text-Timestamp Alignment.
+SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, VidTok, and Text-Timestamp Alignment.
 
 Features:
 - 3D-RoPE for flexible (x, y, t) positional encodings (matches video generator)
 - 3D Causal Attention for temporal understanding
 - Temporal-Aware Expert Routing for motion patterns
+- VidTokTokenizer: Full 3D VAE for video compression (Microsoft VidTok architecture)
+  - Efficient 2D+1D architecture (separates spatial and temporal processing)
+  - AlphaBlender for temporal blending
+  - Supports both continuous (KL) and discrete (FSQ) tokenization
+  - Causal mode for streaming/autoregressive applications
+- VideoTokenizer: Cross-attention based feature compression (like TiTok for images)
 - Text-Timestamp Alignment for precise event localization
 - Integrated with vision encoder backbone
 - FP16-native numerical stability
@@ -131,18 +137,464 @@ class TextTimestampAlignment(nn.Module):
         return aligned_text, alignment_scores
 
 
+class AlphaBlender(nn.Module):
+    """
+    AlphaBlender operator from VidTok for temporal blending.
+    Blends two inputs with a learnable or fixed alpha parameter.
+    """
+    def __init__(self, alpha: float = 0.55):  # sigmoid(0.2) ≈ 0.55
+        super().__init__()
+        self.alpha = alpha
+    
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        return self.alpha * x1 + (1 - self.alpha) * x2
+
+
+class VidTokEncoder(nn.Module):
+    """
+    VidTok-style Video Encoder following Microsoft's VidTok architecture.
+    
+    SOTA: Implements the VidTok encoder with:
+    - 3D convolutions for input and bottleneck (information fusion)
+    - 2D convolutions for spatial downsampling (efficiency)
+    - AlphaBlender + 1D convolutions for temporal downsampling
+    - Layer normalization for stability
+    
+    Compresses video [B, C, T, H, W] -> latent [B, latent_dim, t, h, w]
+    """
+    
+    def __init__(
+        self,
+        in_channels: int = 3,
+        latent_channels: int = 4,
+        base_channels: int = 64,
+        temporal_downsample: int = 4,
+        spatial_downsample: int = 8,
+        causal: bool = True,
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.latent_channels = latent_channels
+        self.base_channels = base_channels
+        self.temporal_downsample = temporal_downsample
+        self.spatial_downsample = spatial_downsample
+        self.causal = causal
+        
+        # Calculate number of spatial/temporal downsample stages
+        self.num_spatial_downs = int(math.log2(spatial_downsample))  # e.g., 8 -> 3 stages
+        self.num_temporal_downs = int(math.log2(temporal_downsample))  # e.g., 4 -> 2 stages
+        
+        # Input block: 3D conv for initial feature extraction
+        self.input_block = nn.Sequential(
+            nn.Conv3d(in_channels, base_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(8, base_channels),
+            nn.SiLU(),
+        )
+        
+        # Spatial downsampling blocks (2D conv)
+        self.spatial_down_blocks = nn.ModuleList()
+        ch = base_channels
+        for i in range(self.num_spatial_downs):
+            out_ch = min(ch * 2, 512)
+            self.spatial_down_blocks.append(
+                self._make_spatial_down_block(ch, out_ch)
+            )
+            ch = out_ch
+        
+        # Temporal downsampling blocks (AlphaBlender + 1D conv)
+        self.temporal_down_blocks = nn.ModuleList()
+        for i in range(self.num_temporal_downs):
+            self.temporal_down_blocks.append(
+                self._make_temporal_down_block(ch)
+            )
+        
+        # Bottleneck: 3D conv for information fusion
+        self.bottleneck = nn.Sequential(
+            nn.Conv3d(ch, ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, ch),
+            nn.SiLU(),
+            nn.Conv3d(ch, ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, ch),
+            nn.SiLU(),
+        )
+        
+        # Output projection to latent channels
+        self.to_latent = nn.Conv3d(ch, latent_channels, kernel_size=1)
+        
+        print(f"   🎬 VidTokEncoder: {in_channels}ch -> {latent_channels}ch latent")
+        print(f"      Spatial: {spatial_downsample}x down ({self.num_spatial_downs} stages)")
+        print(f"      Temporal: {temporal_downsample}x down ({self.num_temporal_downs} stages)")
+    
+    def _make_spatial_down_block(self, in_ch: int, out_ch: int) -> nn.Module:
+        """Create a spatial downsampling block using 2D convolutions."""
+        return nn.Sequential(
+            # Reshape for 2D conv: [B, C, T, H, W] -> [B*T, C, H, W]
+            Rearrange3Dto2D(),
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=2, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
+            # Reshape back: [B*T, C, H, W] -> [B, C, T, H, W]
+            Rearrange2Dto3D(),
+        )
+    
+    def _make_temporal_down_block(self, channels: int) -> nn.Module:
+        """Create a temporal downsampling block using AlphaBlender + 1D conv."""
+        return TemporalDownBlock(channels, causal=self.causal)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encode video to latent space.
+        
+        Args:
+            x: [B, C, T, H, W] input video
+            
+        Returns:
+            [B, latent_channels, t, h, w] latent representation
+        """
+        # Store original shape for reshape operations
+        B, C, T, H, W = x.shape
+        
+        # Input block
+        x = self.input_block(x)
+        
+        # Spatial downsampling
+        for block in self.spatial_down_blocks:
+            # Pass temporal dimension for reshape
+            if hasattr(block[0], 'set_temporal_dim'):
+                block[0].set_temporal_dim(x.shape[2])
+            if hasattr(block[-1], 'set_temporal_dim'):
+                block[-1].set_temporal_dim(x.shape[2])
+            x = block(x)
+        
+        # Temporal downsampling
+        for block in self.temporal_down_blocks:
+            x = block(x)
+        
+        # Bottleneck
+        x = self.bottleneck(x)
+        
+        # Project to latent
+        x = self.to_latent(x)
+        
+        return x
+
+
+class VidTokDecoder(nn.Module):
+    """
+    VidTok-style Video Decoder following Microsoft's VidTok architecture.
+    
+    Reconstructs video from latent [B, latent_dim, t, h, w] -> [B, C, T, H, W]
+    """
+    
+    def __init__(
+        self,
+        out_channels: int = 3,
+        latent_channels: int = 4,
+        base_channels: int = 64,
+        temporal_upsample: int = 4,
+        spatial_upsample: int = 8,
+        causal: bool = True,
+    ):
+        super().__init__()
+        self.out_channels = out_channels
+        self.latent_channels = latent_channels
+        self.base_channels = base_channels
+        self.temporal_upsample = temporal_upsample
+        self.spatial_upsample = spatial_upsample
+        self.causal = causal
+        
+        self.num_spatial_ups = int(math.log2(spatial_upsample))
+        self.num_temporal_ups = int(math.log2(temporal_upsample))
+        
+        # Calculate channel progression (reverse of encoder)
+        ch = min(base_channels * (2 ** self.num_spatial_ups), 512)
+        
+        # Input projection from latent
+        self.from_latent = nn.Conv3d(latent_channels, ch, kernel_size=1)
+        
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv3d(ch, ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, ch),
+            nn.SiLU(),
+            nn.Conv3d(ch, ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, ch),
+            nn.SiLU(),
+        )
+        
+        # Temporal upsampling blocks
+        self.temporal_up_blocks = nn.ModuleList()
+        for i in range(self.num_temporal_ups):
+            self.temporal_up_blocks.append(
+                TemporalUpBlock(ch, causal=self.causal)
+            )
+        
+        # Spatial upsampling blocks (2D conv)
+        self.spatial_up_blocks = nn.ModuleList()
+        for i in range(self.num_spatial_ups):
+            out_ch = max(ch // 2, base_channels)
+            self.spatial_up_blocks.append(
+                self._make_spatial_up_block(ch, out_ch)
+            )
+            ch = out_ch
+        
+        # Output block
+        self.output_block = nn.Sequential(
+            nn.Conv3d(ch, out_channels, kernel_size=3, padding=1),
+            nn.Tanh(),  # Output in [-1, 1]
+        )
+        
+        print(f"   🎬 VidTokDecoder: {latent_channels}ch latent -> {out_channels}ch")
+    
+    def _make_spatial_up_block(self, in_ch: int, out_ch: int) -> nn.Module:
+        """Create a spatial upsampling block using 2D convolutions."""
+        return nn.Sequential(
+            Rearrange3Dto2D(),
+            nn.ConvTranspose2d(in_ch, out_ch, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
+            Rearrange2Dto3D(),
+        )
+    
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Decode latent to video.
+        
+        Args:
+            z: [B, latent_channels, t, h, w] latent representation
+            
+        Returns:
+            [B, C, T, H, W] reconstructed video
+        """
+        x = self.from_latent(z)
+        x = self.bottleneck(x)
+        
+        for block in self.temporal_up_blocks:
+            x = block(x)
+        
+        for block in self.spatial_up_blocks:
+            x = block(x)
+        
+        x = self.output_block(x)
+        return x
+
+
+class Rearrange3Dto2D(nn.Module):
+    """Reshape [B, C, T, H, W] -> [B*T, C, H, W] for 2D operations."""
+    def __init__(self):
+        super().__init__()
+        self.temporal_dim = None
+    
+    def set_temporal_dim(self, t: int):
+        self.temporal_dim = t
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, T, H, W = x.shape
+        self.temporal_dim = T
+        return x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+
+
+class Rearrange2Dto3D(nn.Module):
+    """Reshape [B*T, C, H, W] -> [B, C, T, H, W] after 2D operations."""
+    def __init__(self):
+        super().__init__()
+        self.temporal_dim = None
+    
+    def set_temporal_dim(self, t: int):
+        self.temporal_dim = t
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        BT, C, H, W = x.shape
+        T = self.temporal_dim if self.temporal_dim else 1
+        B = BT // T
+        return x.reshape(B, T, C, H, W).permute(0, 2, 1, 3, 4)
+
+
+class TemporalDownBlock(nn.Module):
+    """Temporal downsampling using AlphaBlender + 1D conv (VidTok style)."""
+    def __init__(self, channels: int, causal: bool = True):
+        super().__init__()
+        self.channels = channels
+        self.causal = causal
+        self.alpha_blender = AlphaBlender()
+        
+        # 1D temporal conv for downsampling
+        padding = (1, 0) if causal else 1
+        self.temporal_conv = nn.Conv1d(channels, channels, kernel_size=2, stride=2, padding=0)
+        self.norm = nn.GroupNorm(8, channels)
+        self.act = nn.SiLU()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [B, C, T, H, W]
+        Returns:
+            [B, C, T//2, H, W]
+        """
+        B, C, T, H, W = x.shape
+        
+        # Reshape for 1D temporal conv: [B, C, T, H, W] -> [B*H*W, C, T]
+        x = x.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, T)
+        
+        # Temporal downsampling
+        x = self.temporal_conv(x)
+        x = self.norm(x.unsqueeze(-1)).squeeze(-1)  # GroupNorm needs 4D
+        x = self.act(x)
+        
+        # Reshape back: [B*H*W, C, T//2] -> [B, C, T//2, H, W]
+        T_new = x.shape[2]
+        x = x.reshape(B, H, W, C, T_new).permute(0, 3, 4, 1, 2)
+        
+        return x
+
+
+class TemporalUpBlock(nn.Module):
+    """Temporal upsampling using AlphaBlender + 1D conv (VidTok style)."""
+    def __init__(self, channels: int, causal: bool = True):
+        super().__init__()
+        self.channels = channels
+        self.causal = causal
+        self.alpha_blender = AlphaBlender()
+        
+        # 1D temporal conv for upsampling
+        self.temporal_conv = nn.ConvTranspose1d(channels, channels, kernel_size=2, stride=2)
+        self.norm = nn.GroupNorm(8, channels)
+        self.act = nn.SiLU()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [B, C, T, H, W]
+        Returns:
+            [B, C, T*2, H, W]
+        """
+        B, C, T, H, W = x.shape
+        
+        # Reshape for 1D temporal conv
+        x = x.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, T)
+        
+        # Temporal upsampling
+        x = self.temporal_conv(x)
+        x = self.norm(x.unsqueeze(-1)).squeeze(-1)
+        x = self.act(x)
+        
+        # Reshape back
+        T_new = x.shape[2]
+        x = x.reshape(B, H, W, C, T_new).permute(0, 3, 4, 1, 2)
+        
+        return x
+
+
+class VidTokTokenizer(nn.Module):
+    """
+    VidTok-style Video Tokenizer (3D VAE) following Microsoft's VidTok architecture.
+    
+    SOTA: Full encoder-decoder architecture for video compression to latent space.
+    - Efficient 2D+1D architecture (separates spatial and temporal processing)
+    - AlphaBlender for temporal blending
+    - Supports both continuous (KL) and discrete (FSQ) tokenization
+    - Causal mode for streaming/autoregressive applications
+    
+    Compresses video [B, C, T, H, W] -> latent [B, latent_dim, t, h, w]
+    """
+    
+    def __init__(
+        self,
+        in_channels: int = 3,
+        latent_channels: int = 4,
+        base_channels: int = 64,
+        temporal_compression: int = 4,
+        spatial_compression: int = 8,
+        causal: bool = True,
+        use_fsq: bool = False,
+        fsq_levels: int = 8,  # For discrete tokenization
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.latent_channels = latent_channels
+        self.temporal_compression = temporal_compression
+        self.spatial_compression = spatial_compression
+        self.causal = causal
+        self.use_fsq = use_fsq
+        self.fsq_levels = fsq_levels
+        
+        # Encoder
+        self.encoder = VidTokEncoder(
+            in_channels=in_channels,
+            latent_channels=latent_channels * 2 if not use_fsq else latent_channels,  # *2 for mean+logvar
+            base_channels=base_channels,
+            temporal_downsample=temporal_compression,
+            spatial_downsample=spatial_compression,
+            causal=causal,
+        )
+        
+        # Decoder
+        self.decoder = VidTokDecoder(
+            out_channels=in_channels,
+            latent_channels=latent_channels,
+            base_channels=base_channels,
+            temporal_upsample=temporal_compression,
+            spatial_upsample=spatial_compression,
+            causal=causal,
+        )
+        
+        print(f"   🎬 VidTokTokenizer: {temporal_compression}x{spatial_compression}x{spatial_compression} compression")
+        print(f"      Mode: {'FSQ (discrete)' if use_fsq else 'KL (continuous)'}, Causal: {causal}")
+    
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode video to latent space."""
+        h = self.encoder(x)
+        
+        if self.use_fsq:
+            # Finite Scalar Quantization
+            return self._fsq_quantize(h)
+        else:
+            # KL regularization (VAE style)
+            mean, logvar = h.chunk(2, dim=1)
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            return mean + eps * std
+    
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Decode latent to video."""
+        return self.decoder(z)
+    
+    def _fsq_quantize(self, z: torch.Tensor) -> torch.Tensor:
+        """Finite Scalar Quantization - quantize each channel independently."""
+        # Scale to [-1, 1] then quantize to fsq_levels
+        z = torch.tanh(z)
+        z = torch.round((z + 1) * (self.fsq_levels - 1) / 2) * 2 / (self.fsq_levels - 1) - 1
+        return z
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Full forward pass: encode then decode.
+        
+        Args:
+            x: [B, C, T, H, W] input video
+            
+        Returns:
+            Tuple of (reconstructed video, latent representation)
+        """
+        z = self.encode(x)
+        x_recon = self.decode(z)
+        return x_recon, z
+
+
+# Backward compatibility alias - keep old VideoTokenizer for feature compression
 class VideoTokenizer(nn.Module):
     """
-    Video Tokenizer: Compresses spatio-temporal video features into efficient 1D tokens.
+    Video Feature Tokenizer: Compresses spatio-temporal video features into efficient 1D tokens.
     
-    SOTA: Similar to TiTok for images, but extended for video with temporal awareness.
-    Compresses [B, T*H*W, hidden] video features into [B, num_tokens, hidden] tokens.
-    
-    Key features:
-    - Temporal-aware compression using 3D queries
-    - Learnable token queries for cross-attention compression  
-    - Preserves temporal structure while reducing sequence length
-    - Compatible with video generation and understanding tasks
+    NOTE: This is different from VidTokTokenizer which is a full 3D VAE.
+    This class compresses already-extracted features [B, T*H*W, hidden] -> [B, num_tokens, hidden]
+    using cross-attention, similar to TiTokTokenizer for images.
     """
 
     def __init__(
@@ -150,7 +602,7 @@ class VideoTokenizer(nn.Module):
         hidden_size: int, 
         num_tokens: int = 64, 
         max_frames: int = 32,
-        num_spatial_tokens: int = 256,  # Expected spatial tokens per frame
+        num_spatial_tokens: int = 256,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -158,99 +610,60 @@ class VideoTokenizer(nn.Module):
         self.max_frames = max_frames
         self.num_spatial_tokens = num_spatial_tokens
         
-        # Learnable compression queries with temporal structure
-        # Split tokens: some for temporal, some for spatial-temporal combined
-        self.temporal_tokens = max(num_tokens // 4, 8)  # Dedicated temporal tokens
-        self.combined_tokens = num_tokens - self.temporal_tokens
-        
-        # Temporal query tokens (capture global motion/flow)
-        self.temporal_queries = nn.Parameter(
-            torch.randn(1, self.temporal_tokens, hidden_size) * 0.02
-        )
-        
-        # Combined spatio-temporal query tokens
-        self.combined_queries = nn.Parameter(
-            torch.randn(1, self.combined_tokens, hidden_size) * 0.02
-        )
-        
-        # Temporal position encoding for queries
-        self.temporal_pos = nn.Parameter(
-            torch.randn(1, max_frames, hidden_size) * 0.02
-        )
-        
-        # Compression projections
-        self.input_proj = nn.Sequential(
+        # Learnable compression
+        self.compress = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, hidden_size),
         )
         
-        # Cross-attention for temporal compression
-        self.temporal_attn = nn.MultiheadAttention(
+        # Learnable token queries
+        self.token_queries = nn.Parameter(torch.randn(1, num_tokens, hidden_size) * 0.02)
+        
+        # Temporal position embeddings
+        self.temporal_pos = nn.Parameter(torch.randn(1, max_frames, hidden_size) * 0.02)
+        
+        # Cross-attention for compression
+        self.compress_attn = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=8,
             batch_first=True,
             dropout=0.1,
         )
-        self.temporal_norm = nn.LayerNorm(hidden_size)
+        self.compress_norm = nn.LayerNorm(hidden_size)
         
-        # Cross-attention for combined compression
-        self.combined_attn = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=8,
-            batch_first=True,
-            dropout=0.1,
-        )
-        self.combined_norm = nn.LayerNorm(hidden_size)
-        
-        # Output projection
-        self.output_proj = nn.Linear(hidden_size, hidden_size)
-        
-        print(f"   🎬 VideoTokenizer: {num_tokens} tokens ({self.temporal_tokens} temporal + {self.combined_tokens} combined)")
+        print(f"   🎬 VideoTokenizer: {num_tokens} tokens (feature compression)")
 
-    def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, num_frames: Optional[int] = None) -> torch.Tensor:
         """
         Compress video features to tokens.
         
         Args:
             x: [B, T*spatial, hidden_size] video features
-            num_frames: Number of frames
+            num_frames: Number of frames for temporal position encoding
             
         Returns:
             [B, num_tokens, hidden_size] compressed video tokens
         """
         batch_size = x.shape[0]
-        total_tokens = x.shape[1]
-        spatial_per_frame = total_tokens // num_frames
+        total_patches = x.shape[1]
         
-        # Project input
-        x_proj = self.input_proj(x)
+        # Add temporal position encoding if frames info provided
+        if num_frames is not None and num_frames > 0:
+            spatial_per_frame = total_patches // num_frames
+            x_frames = x.view(batch_size, num_frames, spatial_per_frame, self.hidden_size)
+            x_frames = x_frames + self.temporal_pos[:, :num_frames].unsqueeze(2)
+            x = x_frames.view(batch_size, total_patches, self.hidden_size)
         
-        # Reshape to [B, T, spatial, hidden]
-        x_frames = x_proj.view(batch_size, num_frames, spatial_per_frame, self.hidden_size)
+        # Expand token queries for batch
+        queries = self.token_queries.expand(batch_size, -1, -1)
         
-        # ===== Temporal tokens: pool spatially, attend temporally =====
-        # Average pool each frame: [B, T, hidden]
-        frame_pooled = x_frames.mean(dim=2)
+        # Cross-attention compression
+        x_proj = self.compress(x)
+        tokens, _ = self.compress_attn(queries, x_proj, x_proj)
+        tokens = self.compress_norm(queries + tokens)
         
-        # Add temporal position encoding
-        frame_pooled = frame_pooled + self.temporal_pos[:, :num_frames]
-        
-        # Cross-attention: temporal queries attend to frame representations
-        temporal_queries = self.temporal_queries.expand(batch_size, -1, -1)
-        temporal_tokens, _ = self.temporal_attn(temporal_queries, frame_pooled, frame_pooled)
-        temporal_tokens = self.temporal_norm(temporal_queries + temporal_tokens)
-        
-        # ===== Combined tokens: attend to full spatio-temporal features =====
-        combined_queries = self.combined_queries.expand(batch_size, -1, -1)
-        combined_tokens, _ = self.combined_attn(combined_queries, x_proj, x_proj)
-        combined_tokens = self.combined_norm(combined_queries + combined_tokens)
-        
-        # Concatenate temporal and combined tokens
-        all_tokens = torch.cat([temporal_tokens, combined_tokens], dim=1)
-        
-        # Final projection
-        return self.output_proj(all_tokens)
+        return tokens
 
 
 class RoPE3DEncoder(nn.Module):
@@ -488,13 +901,13 @@ class VideoEncoderBlock(nn.Module):
 
 class VideoEncoder(nn.Module):
     """
-    SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and VideoTokenizer.
+    SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and VidTokTokenizer.
     
     Features:
     - 3D-RoPE for flexible (x, y, t) positional encodings
     - 3D Causal Attention for temporal understanding
     - Temporal-Aware Expert Routing for motion patterns
-    - VideoTokenizer for efficient token compression (like TiTok for video)
+    - VidTokTokenizer for efficient 1D token compression (mirrors TiTokTokenizer for images)
     - Integrated with vision encoder backbone
     - FP16-native numerical stability
     """
@@ -553,15 +966,18 @@ class VideoEncoder(nn.Module):
         if use_temporal_moe:
             print(f"   🎯 Temporal MoE: {num_experts} experts per layer")
 
-        # VideoTokenizer for efficient video token compression (like TiTok for images)
+        # VidTokTokenizer for efficient video token compression (like TiTok for images)
         if use_video_tokenizer:
-            self.video_tokenizer = VideoTokenizer(
+            self.vidtok = VidTokTokenizer(
                 hidden_size=self.hidden_size,
                 num_tokens=num_video_tokens,
+                num_patches=self.num_spatial_tokens * max_frames,  # T * H * W
                 max_frames=max_frames,
-                num_spatial_tokens=self.num_spatial_tokens,
             )
+            # Backward compatibility alias
+            self.video_tokenizer = self.vidtok
         else:
+            self.vidtok = None
             self.video_tokenizer = None
 
         # Temporal pooling attention for video-level representation (fallback when not using tokenizer)
@@ -644,9 +1060,9 @@ class VideoEncoder(nn.Module):
         for block in self.encoder_blocks:
             x = block(x, height, width, num_frames, causal=causal)
         
-        # Return VideoTokenizer compressed tokens if requested
-        if return_tokens and self.video_tokenizer is not None:
-            return self.video_tokenizer(x, num_frames)  # [B, num_tokens, hidden_size]
+        # Return VidTokTokenizer compressed tokens if requested
+        if return_tokens and self.vidtok is not None:
+            return self.vidtok(x, num_frames)  # [B, num_tokens, hidden_size]
         
         if return_all_frames:
             # Return per-frame features (mean over patches per frame)

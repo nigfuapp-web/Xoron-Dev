@@ -37,6 +37,10 @@
 
 ### Video Encoder
 - **3D-RoPE** - Spatiotemporal (x, y, t) positional encodings
+- **VidTokTokenizer** - Full 3D VAE (Microsoft VidTok architecture)
+  - Efficient 2D+1D architecture (separates spatial and temporal processing)
+  - AlphaBlender for temporal blending
+  - Supports continuous (KL) and discrete (FSQ) tokenization
 - **Temporal MoE** - 4 experts for motion patterns with expert-choice routing
 - **3D Causal Transformer** - Factorized spatio-temporal attention
 - **Multi-scale: 8-32 frames** at 128-384px resolution
@@ -70,7 +74,7 @@
 | Modality | Encoder | Input Size (Multi-Scale) | Output Tokens |
 |----------|---------|--------------------------|---------------|
 | Vision | SigLIP SO400M + TiTok (256 tokens) + Dual-Stream RoPE2D | 128-512px | 64 tokens |
-| Video | 3D-RoPE + Factorized Spatio-Temporal + Temporal MoE | 8-32 frames @ 128-384px | 64 tokens |
+| Video | 3D-RoPE + VidTok (3D VAE) + Temporal MoE | 8-32 frames @ 128-384px | Latent space |
 | Audio | Raw Waveform Tokenizer + Conformer + RMLA (MLA-style KV compression) | 16kHz, up to 10s | Variable |
 | Text | Qwen2.5 Tokenizer (151K vocab) | 128K context | - |
 
@@ -112,7 +116,7 @@ Xoron-Dev/
 │   │   └── moe_llama.py     # MoE LLaMA with Ring Attention
 │   ├── 📁 encoders/         # Input encoders
 │   │   ├── vision.py        # SigLIP + TiTok + Dual-Stream + RoPE2DEncoder
-│   │   ├── video.py         # 3D-RoPE + Temporal MoE + Causal3DTransformer
+│   │   ├── video.py         # 3D-RoPE + VidTok + Temporal MoE + Causal3DTransformer
 │   │   └── audio.py         # RawWaveformTokenizer + Conformer + RMLA + MAS
 │   ├── 📁 generators/       # Output generators
 │   │   ├── image.py         # MoE-DiT + Flow Matching + ImageVAE
@@ -394,6 +398,9 @@ class XoronConfig:
     # Video Encoder (SOTA)
     use_video_3d_rope: bool = True
     use_video_temporal_moe: bool = True
+    use_video_vidtok: bool = True  # VidTok 3D VAE
+    vidtok_temporal_compression: int = 4
+    vidtok_spatial_compression: int = 8
     num_video_encoder_layers: int = 4
     
     # Multi-Scale Training

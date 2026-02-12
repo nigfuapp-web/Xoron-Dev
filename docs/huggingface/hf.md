@@ -21,6 +21,7 @@ tags:
 - flow-matching
 - 3d-rope
 - titok
+- vidtok
 - dual-stream-attention
 - zero-shot-voice-cloning
 - bigvgan
@@ -113,7 +114,7 @@ datasets:
 
 * **Architecture:** Mixture of Experts (8 Experts + 1 Shared, top-2 routing) with Ring Attention and Aux-Lossless routing.
 * **Multi-Scale Training (NEW):** Random scale selection per batch - images (128-512px), videos (128-384px), frames (8-32 including 20).
-* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization** (256 compressed tokens), **Dual-Stream Attention** (2 layers), and **2D-RoPE** for images; **3D-RoPE** + **Temporal MoE** (4 experts) for video (8-32 frames).
+* **Vision Encoder:** SigLIP-2 (384px native) with **TiTok-style 1D tokenization** (256 compressed tokens), **Dual-Stream Attention** (2 layers), and **2D-RoPE** for images; **3D-RoPE** + **VidTokTokenizer** (full 3D VAE with 4x8x8 compression) + **Temporal MoE** (4 experts) for video (8-32 frames).
 * **Image Generation:** **MoE-DiT** (Diffusion Transformer with 4 MoE experts) using **Flow Matching**, **2D-RoPE**, and **Symmetric Dual-Stream Attention** (SD3/Flux-style). Multi-scale output: 256-512px, 50 inference steps.
 * **Video Generation:** **3D Causal Transformers** (4 layers) with **Flow Matching**, **3D-RoPE** for (x,y,t) positions, and **Temporal Expert Routing** (4 experts). Multi-scale: 8-32 frames @ 128-384px.
 * **Audio (Speech-to-Speech):** **Conformer encoder with RMLA** and **Raw Waveform Tokenizer** for ASR; **Direct waveform decoder** (no vocoder needed!) with **MAS** for TTS; **Zero-Shot Speaker Cloning** with In-Context Audio Prompting. Talk to it, and it talks back!
@@ -151,12 +152,16 @@ datasets:
 | Position Encoding | 2D-RoPE |
 | Output Tokens | 64 tokens per image |
 
-### 🎬 Video Encoder (3D Causal Transformers)
+### 🎬 Video Encoder (3D Causal Transformers + VidTok)
 | Feature | Description |
 |---------|-------------|
 | Frame Scales | 8, 12, 16, 24, 32 frames (multi-scale) |
 | Resolution Scales | 128, 192, 256, 320, 384px (multi-scale) |
 | Position Encoding | **3D-RoPE** for (x, y, t) coordinates |
+| VidTokTokenizer | Full 3D VAE (Microsoft VidTok architecture) |
+| Compression | 4x temporal, 8x8 spatial (4x8x8 total) |
+| Architecture | 2D+1D efficient design with AlphaBlender |
+| Quantization | Continuous (KL) or Discrete (FSQ) |
 | Attention | 3D Causal Self-Attention |
 | Expert Routing | **Temporal MoE** (4 experts, temporally-aware) |
 | Encoder Layers | 4 layers |

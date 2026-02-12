@@ -12,6 +12,12 @@ Video Encoder:
 - 3D-RoPE for (x, y, t) positions
 - 3D Causal Attention
 - Temporal-Aware Expert Routing
+- VidTokTokenizer: Full 3D VAE (Microsoft VidTok architecture)
+  - Efficient 2D+1D architecture (separates spatial and temporal processing)
+  - AlphaBlender for temporal blending
+  - Supports both continuous (KL) and discrete (FSQ) tokenization
+  - Causal mode for streaming/autoregressive applications
+- VideoTokenizer: Cross-attention based feature compression
 - Text-Timestamp Alignment for precise event localization
 - Integrates with video generator
 
@@ -40,7 +46,13 @@ from models.encoders.vision import (
 )
 from models.encoders.video import (
     VideoEncoder,
+    VidTokTokenizer,
+    VidTokEncoder,
+    VidTokDecoder,
     VideoTokenizer,
+    AlphaBlender,
+    TemporalDownBlock,
+    TemporalUpBlock,
     RoPE3DEncoder,
     TextTimestampAlignment,
     Causal3DAttentionEncoder,
@@ -79,7 +91,13 @@ __all__ = [
     'SIGLIP_MODELS',
     # Video
     'VideoEncoder',
-    'VideoTokenizer',
+    'VidTokTokenizer',  # Full 3D VAE (Microsoft VidTok architecture)
+    'VidTokEncoder',
+    'VidTokDecoder',
+    'VideoTokenizer',  # Cross-attention feature compression
+    'AlphaBlender',
+    'TemporalDownBlock',
+    'TemporalUpBlock',
     'RoPE3DEncoder',
     'TextTimestampAlignment',
     'Causal3DAttentionEncoder',

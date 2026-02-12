@@ -20,6 +20,7 @@ class XoronConfig:
     - MoE-DiT with Flow Matching for image generation
     - 3D-RoPE + 3D Causal Transformers for video generation
     - TiTok-style 1D tokenization for vision encoding
+    - VidTok-style 1D tokenization for video encoding (mirrors TiTok)
     - Dual-stream attention for symmetric processing
     - Conformer audio encoder/decoder
     - FP16-native numerical stability
@@ -71,6 +72,12 @@ class XoronConfig:
     use_video_temporal_moe: bool = True  # Temporal-aware expert routing
     num_video_encoder_layers: int = 4  # 3D causal transformer layers
     num_video_experts: int = 4  # Temporal MoE experts
+    use_video_vidtok: bool = True  # VidTok 3D VAE (Microsoft VidTok architecture)
+    vidtok_latent_channels: int = 4  # VidTok latent channels
+    vidtok_temporal_compression: int = 4  # VidTok temporal compression ratio
+    vidtok_spatial_compression: int = 8  # VidTok spatial compression ratio
+    vidtok_causal: bool = True  # VidTok causal mode for streaming
+    vidtok_use_fsq: bool = False  # Use FSQ (discrete) vs KL (continuous)
 
     # ========== CONTINUOUS-SCALE TRAINING CONFIGURATION (SOTA) ==========
     # SOTA: Continuous-scale training replaces discrete scale lists with continuous sampling
@@ -210,6 +217,12 @@ class XoronConfig:
             'use_video_temporal_moe': self.use_video_temporal_moe,
             'num_video_encoder_layers': self.num_video_encoder_layers,
             'num_video_experts': self.num_video_experts,
+            'use_video_vidtok': self.use_video_vidtok,
+            'vidtok_latent_channels': self.vidtok_latent_channels,
+            'vidtok_temporal_compression': self.vidtok_temporal_compression,
+            'vidtok_spatial_compression': self.vidtok_spatial_compression,
+            'vidtok_causal': self.vidtok_causal,
+            'vidtok_use_fsq': self.vidtok_use_fsq,
             # Multi-scale configuration (source of truth for all sizes/frames)
             'use_multi_scale': self.use_multi_scale,
             'use_continuous_scale': self.use_continuous_scale,
@@ -298,6 +311,8 @@ class XoronConfig:
         print(f"   - TiTok: {self.use_vision_titok} ({self.num_vision_titok_tokens} tokens)")
         print(f"   - Dual-Stream: {self.use_vision_dual_stream} ({self.num_vision_dual_stream_layers} layers)")
         print(f"🎬 Video Encoder: 3D-RoPE={self.use_video_3d_rope}, Temporal MoE={self.use_video_temporal_moe}")
+        print(f"   - VidTok: {self.use_video_vidtok} ({self.vidtok_temporal_compression}x{self.vidtok_spatial_compression}x{self.vidtok_spatial_compression} compression)")
+        print(f"   - VidTok Mode: {'FSQ (discrete)' if self.vidtok_use_fsq else 'KL (continuous)'}, Causal: {self.vidtok_causal}")
         # Multi-scale info
         if self.use_multi_scale and self.use_continuous_scale:
             print(f"📐 Continuous-Scale Training: ENABLED (strategy={self.multi_scale_strategy})")
