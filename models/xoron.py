@@ -205,24 +205,28 @@ class XoronMultimodalModel(nn.Module):
         self.generator = None
         if config.enable_generation:
             print(f"\n🎨 Building MobileDiffusion Generator (Images)...")
+            # CRITICAL: Use image_max_size so model can handle ALL multi-scale sizes
             self.generator = MobileDiffusionGenerator(
                 latent_channels=config.generation_latent_channels,
                 base_channels=config.generation_base_channels,
                 context_dim=config.hidden_size,
                 num_inference_steps=config.generation_inference_steps,
-                image_size=config.image_base_size,  # Multi-scale: use image_base_size
+                image_size=config.image_max_size,   # FIXED: Use max_size for multi-scale support
             )
 
         # 12. Video Generator
         self.video_generator = None
         if config.enable_generation:
             print(f"\n🎬 Building MobileVideoDiffusion Generator (Videos)...")
+            # CRITICAL: Use video_max_size so model can handle ALL multi-scale sizes
+            # The model's UNet uses max_height/max_width based on image_size
+            # Using max_size ensures it can process 128, 192, 256, 320, 384 etc.
             self.video_generator = MobileVideoDiffusion(
                 latent_channels=config.generation_latent_channels,
                 base_channels=config.generation_base_channels // 2,
                 context_dim=config.hidden_size,
                 num_frames=config.video_max_frames,  # Multi-scale: use video_max_frames
-                image_size=config.video_base_size,   # Multi-scale: use video_base_size
+                image_size=config.video_max_size,    # FIXED: Use max_size for multi-scale support
                 num_inference_steps=config.generation_inference_steps,
             )
 
