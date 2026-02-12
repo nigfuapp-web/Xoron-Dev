@@ -381,8 +381,8 @@ def select_components_to_train_menu() -> List[str]:
     return selected
 
 
-def build_new_model(xoron_config, training_config):
-    """Build a new model from scratch."""
+def build_new_model(xoron_config, training_config, active_modalities: str = 'all'):
+    """Build a new model from scratch with dynamic device placement."""
     print("\n" + "=" * 60)
     print("🔨 BUILDING NEW MODEL")
     print("=" * 60)
@@ -392,9 +392,15 @@ def build_new_model(xoron_config, training_config):
     device_map = None
 
     if training_config.use_model_parallel and num_gpus > 1:
-        from config.training_config import get_device_map
-        device_map = get_device_map(num_gpus)
+        from config.training_config import get_device_map, get_trainable_groups_from_modality, get_frozen_groups_from_trainable
+        
+        # Use dynamic device mapping based on active modalities
+        trainable_groups = get_trainable_groups_from_modality(active_modalities)
+        frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
+        
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
+        print(f"   Active modalities: {active_modalities}")
     
     # Determine device
     if training_config.use_model_parallel and num_gpus > 1:
@@ -420,8 +426,8 @@ def build_new_model(xoron_config, training_config):
     return model, device
 
 
-def load_model_from_checkpoint(checkpoint_path, xoron_config, training_config):
-    """Load model from a checkpoint."""
+def load_model_from_checkpoint(checkpoint_path, xoron_config, training_config, active_modalities: str = 'all'):
+    """Load model from a checkpoint with dynamic device placement."""
     print("\n" + "=" * 60)
     print(f"📂 LOADING MODEL FROM: {checkpoint_path}")
     print("=" * 60)
@@ -431,9 +437,15 @@ def load_model_from_checkpoint(checkpoint_path, xoron_config, training_config):
     device_map = None
 
     if training_config.use_model_parallel and num_gpus > 1:
-        from config.training_config import get_device_map
-        device_map = get_device_map(num_gpus)
+        from config.training_config import get_device_map, get_trainable_groups_from_modality, get_frozen_groups_from_trainable
+        
+        # Use dynamic device mapping based on active modalities
+        trainable_groups = get_trainable_groups_from_modality(active_modalities)
+        frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
+        
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
+        print(f"   Active modalities: {active_modalities}")
     
     # Determine device
     if training_config.use_model_parallel and num_gpus > 1:
@@ -453,9 +465,9 @@ def load_model_from_checkpoint(checkpoint_path, xoron_config, training_config):
     return model, device
 
 
-def load_model_from_huggingface(hf_model_id, training_config):
+def load_model_from_huggingface(hf_model_id, training_config, active_modalities: str = 'all'):
     """
-    Load model from HuggingFace Hub.
+    Load model from HuggingFace Hub with dynamic device placement.
     
     This downloads the model from HuggingFace and loads it with proper
     vocab size detection and LoRA structure handling.
@@ -467,6 +479,7 @@ def load_model_from_huggingface(hf_model_id, training_config):
     Args:
         hf_model_id: HuggingFace model identifier (e.g., 'Backup-bdg/Xoron-Dev-MultiMoe')
         training_config: Training configuration
+        active_modalities: Which modalities are being trained for dynamic device placement
         
     Returns:
         Tuple of (model, device, xoron_config)
@@ -688,14 +701,20 @@ def load_model_from_huggingface(hf_model_id, training_config):
         # Create XoronConfig from loaded config
         xoron_config = XoronConfig.from_dict(config_dict)
         
-        # Get device map for model parallelism
+        # Get device map for model parallelism - use dynamic placement based on active modalities
         num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         device_map = None
 
         if training_config.use_model_parallel and num_gpus > 1:
-            from config.training_config import get_device_map
-            device_map = get_device_map(num_gpus)
+            from config.training_config import get_device_map, get_trainable_groups_from_modality, get_frozen_groups_from_trainable
+            
+            # Use dynamic device mapping based on active modalities
+            trainable_groups = get_trainable_groups_from_modality(active_modalities)
+            frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
+            
+            device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
             print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
+            print(f"   Active modalities: {active_modalities}")
         
         # Determine device
         if training_config.use_model_parallel and num_gpus > 1:
@@ -1102,12 +1121,12 @@ def run_build_and_train(
         print(f"   Mode: Dual Training ({' + '.join(modality_max_values.keys())})")
         print(f"   Combined max_per_epoch: {training_config.max_per_epoch}")
 
-    # Build or load model
+    # Build or load model - use dynamic device placement based on active modalities
     if checkpoint_path:
-        model, device = load_model_from_checkpoint(checkpoint_path, xoron_config, training_config)
+        model, device = load_model_from_checkpoint(checkpoint_path, xoron_config, training_config, active_modalities)
         xoron_config = model.config
     else:
-        model, device = build_new_model(xoron_config, training_config)
+        model, device = build_new_model(xoron_config, training_config, active_modalities)
     
     # Apply freezing
     if freeze_components or train_only_components:
@@ -1256,13 +1275,13 @@ def run_hf_training(
                         print(f"   ✅ Will resume training from: {path}")
                     break
     
-    # Load model - either from checkpoint or HuggingFace
+    # Load model - either from checkpoint or HuggingFace (with dynamic device placement)
     if resume_from:
         print(f"\n📂 Loading model from checkpoint: {resume_from}")
-        model, device, xoron_config = load_model_from_checkpoint_with_config(resume_from, training_config)
+        model, device, xoron_config = load_model_from_checkpoint_with_config(resume_from, training_config, active_modalities)
     else:
         # Load model from HuggingFace
-        model, device, xoron_config = load_model_from_huggingface(hf_model_id, training_config)
+        model, device, xoron_config = load_model_from_huggingface(hf_model_id, training_config, active_modalities)
     
     # Print configurations
     xoron_config.print_config()
@@ -1375,13 +1394,15 @@ def run_hf_training(
     print("\n🎉 HUGGINGFACE MODEL TRAINING COMPLETE!")
 
 
-def load_model_from_checkpoint_with_config(checkpoint_path, training_config):
+def load_model_from_checkpoint_with_config(checkpoint_path, training_config, active_modalities: str = 'all'):
     """
     Load model from a checkpoint and return the config as well.
+    Uses dynamic device placement based on active modalities.
     
     Args:
         checkpoint_path: Path to checkpoint
         training_config: Training configuration
+        active_modalities: Which modalities are being trained for dynamic device placement
         
     Returns:
         Tuple of (model, device, xoron_config)
@@ -1406,14 +1427,20 @@ def load_model_from_checkpoint_with_config(checkpoint_path, training_config):
         # Fall back to default config
         xoron_config = XoronConfig()
     
-    # Get device map for model parallelism
+    # Get device map for model parallelism - use dynamic placement based on active modalities
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     device_map = None
 
     if training_config.use_model_parallel and num_gpus > 1:
-        from config.training_config import get_device_map
-        device_map = get_device_map(num_gpus)
+        from config.training_config import get_device_map, get_trainable_groups_from_modality, get_frozen_groups_from_trainable
+        
+        # Use dynamic device mapping based on active modalities
+        trainable_groups = get_trainable_groups_from_modality(active_modalities)
+        frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
+        
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
+        print(f"   Active modalities: {active_modalities}")
     
     # Determine device
     if training_config.use_model_parallel and num_gpus > 1:

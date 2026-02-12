@@ -226,54 +226,75 @@ class TrainingConfig:
         return cls(**{k: v for k, v in config_dict.items() if k in cls.__dataclass_fields__})
 
 
-from typing import Dict
+from typing import Dict, List, Optional
 
-def get_device_map(num_gpus: int) -> Dict[str, str]:
-    """
-    Create a device map for Model Parallelism.
-    Distributes model components across available GPUs.
+# Component groups mapped to their individual model attributes
+COMPONENT_TO_ATTRS = {
+    'vision': ['vision_encoder', 'projector'],
+    'video': ['video_encoder', 'video_generator'],
+    'audio': ['audio_encoder', 'audio_decoder', 'audio_projector', 'waveform_decoder'],
+    'image_generation': ['generator'],
+    'video_generation': ['video_generator'],
+    'llm': ['llm'],
+    'cross_attention': ['cross_attention'],
+    'modality_markers': ['modality_markers'],
+}
 
-    Strategy for 2 GPUs (Updated to prevent OOM on GPU 1):
-    ┌─────────────────┬─────────────────────────────────────────┬────────┬──────────┐
-    │ Category        │ Components                              │ Device │ Size     │
-    ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
-    │ Visual Input    │ video_encoder, vision_encoder           │ cuda:0 │ ~5.41 GB │
-    │ Audio Input     │ audio_encoder, audio_projector          │ cuda:0 │ ~0.69 GB │
-    │ Image Output    │ generator (Moved here for balance)      │ cuda:0 │ ~1.26 GB │
-    │ Flow Control    │ projector, video_generator              │ cuda:0 │ ~0.20 GB │
-    ├─────────────────┼─────────────────────────────────────────┼────────┼──────────┤
-    │ Reasoning (LLM) │ llm, modality_markers                   │ cuda:1 │ ~3.01 GB │
-    │ Speech Output   │ audio_decoder, waveform_decoder         │ cuda:1 │ ~2.86 GB │
-    │ Bridge          │ cross_attention                         │ cuda:1 │ ~0.35 GB │
-    └─────────────────┴─────────────────────────────────────────┴────────┴──────────┘
-    GPU 0 Total: ~7.56 GB (Input + Image Gen)
-    GPU 1 Total: ~6.22 GB (Reasoning + Audio Gen)
+# All model component attributes
+ALL_COMPONENT_ATTRS = [
+    'vision_encoder', 'video_encoder', 'audio_encoder', 'audio_decoder',
+    'waveform_decoder', 'projector', 'audio_projector', 'llm',
+    'cross_attention', 'generator', 'video_generator', 'modality_markers'
+]
+
+
+def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, frozen_groups: Optional[List[str]] = None) -> Dict[str, str]:
     """
+    Create a dynamic device map for Model Parallelism.
+    
+    SMART PLACEMENT STRATEGY:
+    - Trainable components -> cuda:0 (primary GPU for training)
+    - Frozen components -> cuda:1 (secondary GPU, just for inference)
+    
+    This maximizes VRAM on the training GPU by offloading frozen weights.
+    
+    Args:
+        num_gpus: Number of available GPUs
+        trainable_groups: List of component group names that will be trained
+                         e.g., ['vision', 'video', 'video_generation', 'llm']
+        frozen_groups: List of component group names that are frozen
+                      e.g., ['audio', 'image_generation']
+    
+    Returns:
+        Device map dict mapping component names to device strings
+    """
+    # Single GPU - everything on cuda:0
     if num_gpus <= 1:
+        device_map = {attr: 'cuda:0' for attr in ALL_COMPONENT_ATTRS}
+        device_map['primary'] = 'cuda:0'
+        return device_map
+    
+    # Multi-GPU with dynamic placement
+    if num_gpus >= 2:
+        # Default: use static layout if no trainable/frozen info provided
+        if trainable_groups is None and frozen_groups is None:
+            return _get_static_device_map(num_gpus)
+        
+        # Dynamic placement based on what's being trained
+        return _get_dynamic_device_map(num_gpus, trainable_groups or [], frozen_groups or [])
+    
+    return _get_static_device_map(num_gpus)
+
+
+def _get_static_device_map(num_gpus: int) -> Dict[str, str]:
+    """Static device map for backwards compatibility."""
+    if num_gpus == 2:
         return {
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
             'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:0',
-            'waveform_decoder': 'cuda:0',
-            'projector': 'cuda:0',
-            'audio_projector': 'cuda:0',
-            'llm': 'cuda:0',
-            'cross_attention': 'cuda:0',
-            'generator': 'cuda:0',
-            'video_generator': 'cuda:0',
-            'modality_markers': 'cuda:0',
-            'primary': 'cuda:0',
-        }
-    elif num_gpus == 2:
-        # Optimized layout for 2 GPUs - REBALANCED to fix voice training OOM
-        # GPU 1 was overloaded (14.3GB used vs 14.5GB total) - moved audio to GPU 0
-        return {
-            'vision_encoder': 'cuda:0',
-            'video_encoder': 'cuda:0',
-            'audio_encoder': 'cuda:0',
-            'audio_decoder': 'cuda:1',      # MOVED from GPU 1 - needs room for optimizer states
-            'waveform_decoder': 'cuda:1',   # MOVED from GPU 1 - needs room for optimizer states
+            'audio_decoder': 'cuda:1',
+            'waveform_decoder': 'cuda:1',
             'audio_projector': 'cuda:0',
             'projector': 'cuda:0',
             'video_generator': 'cuda:0',
@@ -284,7 +305,6 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'primary': 'cuda:0',
         }
     else:
-        # 3+ GPUs: More granular distribution
         return {
             'vision_encoder': 'cuda:0',
             'video_encoder': 'cuda:0',
@@ -300,3 +320,87 @@ def get_device_map(num_gpus: int) -> Dict[str, str]:
             'video_generator': 'cuda:2',
             'primary': 'cuda:0',
         }
+
+
+def _get_dynamic_device_map(num_gpus: int, trainable_groups: List[str], frozen_groups: List[str]) -> Dict[str, str]:
+    """
+    Dynamic device placement: trainable on cuda:0, frozen on cuda:1.
+    
+    Strategy:
+    - cuda:0 (primary): All trainable components + LLM (always trained)
+    - cuda:1 (secondary): All frozen components (just for inference)
+    
+    This maximizes available VRAM on the training GPU by moving
+    frozen weights that don't need gradients to the secondary GPU.
+    """
+    device_map = {}
+    
+    # Determine which component attributes are trainable
+    trainable_attrs = set()
+    
+    # LLM is ALWAYS trained (never frozen)
+    trainable_attrs.update(['llm', 'modality_markers', 'cross_attention'])
+    
+    # Add attributes from trainable groups
+    for group in trainable_groups:
+        if group in COMPONENT_TO_ATTRS:
+            trainable_attrs.update(COMPONENT_TO_ATTRS[group])
+    
+    # Assign devices
+    for attr in ALL_COMPONENT_ATTRS:
+        if attr in trainable_attrs:
+            device_map[attr] = 'cuda:0'  # Primary GPU for training
+        else:
+            device_map[attr] = 'cuda:1'  # Secondary GPU for frozen components
+    
+    device_map['primary'] = 'cuda:0'
+    
+    # Print placement summary
+    train_on_0 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:0']
+    frozen_on_1 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:1']
+    
+    print(f"\n🔀 Dynamic Device Placement:")
+    print(f"   cuda:0 (training): {', '.join(train_on_0)}")
+    if frozen_on_1:
+        print(f"   cuda:1 (frozen): {', '.join(frozen_on_1)}")
+    
+    return device_map
+
+
+def get_trainable_groups_from_modality(active_modalities: str) -> List[str]:
+    """
+    Convert active modality string to list of trainable component groups.
+    
+    Args:
+        active_modalities: One of 'all', 'text', 'image', 'video', 'audio', 'multi'
+    
+    Returns:
+        List of component group names that should be trainable
+    """
+    # LLM is always trainable
+    trainable = ['llm', 'cross_attention', 'modality_markers']
+    
+    if active_modalities == 'all' or active_modalities == 'multi':
+        # All modalities - train everything
+        trainable.extend(['vision', 'video', 'audio', 'image_generation', 'video_generation'])
+    elif active_modalities == 'text':
+        # Text only - just LLM (already added)
+        pass
+    elif active_modalities == 'image':
+        # Image mode - vision encoder + image generation
+        trainable.extend(['vision', 'image_generation'])
+    elif active_modalities == 'video':
+        # Video mode - vision (for frames) + video encoder + video generation
+        trainable.extend(['vision', 'video', 'video_generation'])
+    elif active_modalities == 'audio' or active_modalities == 'voice':
+        # Audio/voice mode - audio components
+        trainable.extend(['audio'])
+    
+    return trainable
+
+
+def get_frozen_groups_from_trainable(trainable_groups: List[str]) -> List[str]:
+    """Get list of frozen component groups given trainable groups."""
+    all_groups = ['vision', 'video', 'audio', 'image_generation', 'video_generation']
+    # LLM, cross_attention, modality_markers are never frozen
+    return [g for g in all_groups if g not in trainable_groups]

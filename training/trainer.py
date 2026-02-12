@@ -144,15 +144,6 @@ class XoronTrainer:
         self.video_frame_scale_probs = getattr(xoron_config, 'video_frame_scale_probs', (0.10, 0.15, 0.30, 0.20, 0.15, 0.10))
         self.multi_scale_strategy = getattr(xoron_config, 'multi_scale_strategy', 'random')
         
-        # Debug: Print multi-scale config
-        print(f"\n📐 Multi-Scale Config Debug:")
-        print(f"   use_multi_scale: {self.use_multi_scale}")
-        print(f"   strategy: {self.multi_scale_strategy}")
-        print(f"   video_scales: {self.video_scales}")
-        print(f"   video_scale_probs: {self.video_scale_probs}")
-        print(f"   image_scales: {self.image_scales}")
-        print(f"   image_scale_probs: {self.image_scale_probs}")
-        
         # Loss weights from config (SOTA: configurable per-modality weights)
         self.llm_loss_weight = getattr(config, 'llm_loss_weight', 1.0)
         self.image_diffusion_loss_weight = getattr(config, 'image_diffusion_loss_weight', 0.1)
@@ -1097,20 +1088,6 @@ class XoronTrainer:
                 print(f"! logits shape: {logits.shape}, dtype: {logits.dtype}")
                 print(f"{'!'*70}")
                 
-                # Get finite values stats
-                finite_mask = torch.isfinite(logits)
-                if finite_mask.any():
-                    finite_vals = logits[finite_mask]
-                    print(f"! Finite values: min={finite_vals.min():.4f}, max={finite_vals.max():.4f}, mean={finite_vals.mean():.4f}")
-                
-                # Deep debug on first occurrence or every 10th
-                if batch_idx < 5 or batch_idx % 10 == 0:
-                    print(f"\n🔬 RUNNING DEEP DEBUG...")
-                    try:
-                        debug_full_forward(self.model, input_ids, attention_mask, labels, max_layers_to_check=3)
-                    except Exception as e:
-                        print(f"❌ Debug failed: {e}")
-                
                 print(f"{'!'*70}\n")
                 num_batches += 1
                 continue
@@ -1219,13 +1196,8 @@ class XoronTrainer:
                     # Sample scale ONLY when we have valid video frames (MULTI-SCALE TRAINING)
                     if self.use_multi_scale:
                         vid_scale_info = self._sample_multi_scale('video', epoch)
-                        # vid_scale_info = ((H, W), num_frames)
                         vid_scale = vid_scale_info[0]  # (H, W) tuple
-                        vid_num_frames = vid_scale_info[1]  # num_frames
                         current_vid_size = vid_scale[0]  # H (assuming square)
-                        # DEBUG: Verify the scale was actually sampled correctly
-                        if num_vid_diff < 5:
-                            print(f"      🔬 DEBUG: vid_scale_info={vid_scale_info}, vid_scale={vid_scale}, current_vid_size={current_vid_size}")
                     else:
                         current_vid_size = self.vid_gen_size
                     
@@ -1235,7 +1207,6 @@ class XoronTrainer:
                     else:
                         video_text_embeds = text_embeds[:video_frames.shape[0]]
                     
-                    # Use batch_video_sample_types which is ALIGNED with video_frames
                     vid_diff_loss = train_video_diffusion_step(
                         self.model.video_generator, video_frames, video_text_embeds, current_vid_size,
                         sample_types=batch_video_sample_types

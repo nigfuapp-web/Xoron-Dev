@@ -652,17 +652,12 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
                     continue  # Skip this sample, try next
                 else:
                     other_error_count += 1
-                    print(f"      ❌ Video training RuntimeError at size={target_size}: {str(e)[:150]}")
                     continue
             except Exception as e:
                 other_error_count += 1
-                print(f"      ❌ Video training error at size={target_size}: {type(e).__name__}: {str(e)[:100]}")
                 continue
         
-        # Log if we had failures
-        if oom_count > 0 or other_error_count > 0:
-            print(f"      ⚠️ Video size={target_size}: {num_processed}/{B} succeeded, {oom_count} OOM, {other_error_count} other errors")
-        
+        # Only return None if no samples succeeded - no verbose logging for partial failures
         if num_processed == 0 or total_loss is None:
             return None
             
