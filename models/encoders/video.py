@@ -10,7 +10,6 @@ Features:
   - AlphaBlender for temporal blending
   - Supports both continuous (KL) and discrete (FSQ) tokenization
   - Causal mode for streaming/autoregressive applications
-- VideoTokenizer: Cross-attention based feature compression (like TiTok for images)
 - Text-Timestamp Alignment for precise event localization
 - Integrated with vision encoder backbone
 - FP16-native numerical stability
@@ -587,83 +586,8 @@ class VidTokTokenizer(nn.Module):
         return x_recon, z
 
 
-# Backward compatibility alias - keep old VideoTokenizer for feature compression
-class VideoTokenizer(nn.Module):
-    """
-    Video Feature Tokenizer: Compresses spatio-temporal video features into efficient 1D tokens.
-    
-    NOTE: This is different from VidTokTokenizer which is a full 3D VAE.
-    This class compresses already-extracted features [B, T*H*W, hidden] -> [B, num_tokens, hidden]
-    using cross-attention, similar to TiTokTokenizer for images.
-    """
-
-    def __init__(
-        self, 
-        hidden_size: int, 
-        num_tokens: int = 64, 
-        max_frames: int = 32,
-        num_spatial_tokens: int = 256,
-    ):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_tokens = num_tokens
-        self.max_frames = max_frames
-        self.num_spatial_tokens = num_spatial_tokens
-        
-        # Learnable compression
-        self.compress = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, hidden_size),
-        )
-        
-        # Learnable token queries
-        self.token_queries = nn.Parameter(torch.randn(1, num_tokens, hidden_size) * 0.02)
-        
-        # Temporal position embeddings
-        self.temporal_pos = nn.Parameter(torch.randn(1, max_frames, hidden_size) * 0.02)
-        
-        # Cross-attention for compression
-        self.compress_attn = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=8,
-            batch_first=True,
-            dropout=0.1,
-        )
-        self.compress_norm = nn.LayerNorm(hidden_size)
-        
-        print(f"   🎬 VideoTokenizer: {num_tokens} tokens (feature compression)")
-
-    def forward(self, x: torch.Tensor, num_frames: Optional[int] = None) -> torch.Tensor:
-        """
-        Compress video features to tokens.
-        
-        Args:
-            x: [B, T*spatial, hidden_size] video features
-            num_frames: Number of frames for temporal position encoding
-            
-        Returns:
-            [B, num_tokens, hidden_size] compressed video tokens
-        """
-        batch_size = x.shape[0]
-        total_patches = x.shape[1]
-        
-        # Add temporal position encoding if frames info provided
-        if num_frames is not None and num_frames > 0:
-            spatial_per_frame = total_patches // num_frames
-            x_frames = x.view(batch_size, num_frames, spatial_per_frame, self.hidden_size)
-            x_frames = x_frames + self.temporal_pos[:, :num_frames].unsqueeze(2)
-            x = x_frames.view(batch_size, total_patches, self.hidden_size)
-        
-        # Expand token queries for batch
-        queries = self.token_queries.expand(batch_size, -1, -1)
-        
-        # Cross-attention compression
-        x_proj = self.compress(x)
-        tokens, _ = self.compress_attn(queries, x_proj, x_proj)
-        tokens = self.compress_norm(queries + tokens)
-        
-        return tokens
+# Backward compatibility alias
+VideoTokenizer = VidTokTokenizer
 
 
 class RoPE3DEncoder(nn.Module):

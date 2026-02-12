@@ -17,7 +17,6 @@ Video Encoder:
   - AlphaBlender for temporal blending
   - Supports both continuous (KL) and discrete (FSQ) tokenization
   - Causal mode for streaming/autoregressive applications
-- VideoTokenizer: Cross-attention based feature compression
 - Text-Timestamp Alignment for precise event localization
 - Integrates with video generator
 
@@ -94,7 +93,7 @@ __all__ = [
     'VidTokTokenizer',  # Full 3D VAE (Microsoft VidTok architecture)
     'VidTokEncoder',
     'VidTokDecoder',
-    'VideoTokenizer',  # Cross-attention feature compression
+    'VideoTokenizer',  # Backward compatibility alias for VidTokTokenizer
     'AlphaBlender',
     'TemporalDownBlock',
     'TemporalUpBlock',
