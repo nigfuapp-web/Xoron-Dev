@@ -50,3 +50,8 @@ huggingface_hub
 
 ## Jinja2 for chat templates
 jinja2
+
+# Other
+nvidia-ml-py
+
+
