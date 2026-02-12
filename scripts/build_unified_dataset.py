@@ -23,9 +23,18 @@ Author: Xoron Team
 import os
 import sys
 
-# Force CPU only - must be set before importing torch
+# Force CPU only - must be set before importing any ML libraries
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["USE_CUDA"] = "0"
+os.environ["NVIDIA_VISIBLE_DEVICES"] = ""
+os.environ["NO_CUDA"] = "1"
+os.environ["FORCE_CPU"] = "1"
+
+# Suppress NVML warnings
+import warnings
+warnings.filterwarnings("ignore", message=".*NVML.*")
+warnings.filterwarnings("ignore", message=".*CUDA.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import json
 import shutil
@@ -50,19 +59,20 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
-# HuggingFace token - set via environment variable or command line
-# On Kaggle, add this as a secret: hf_token
-# Or run: export hf_token="your_token_here"
-HF_TOKEN = os.environ.get("hf_token", "") or os.environ.get("HF_TOKEN", "")
-
-# If running directly and token not set, you can uncomment and set here:
-# HF_TOKEN = "your_huggingface_token_here"
-
-# To use this script on Kaggle:
-# 1. Go to Add-ons -> Secrets
-# 2. Add a secret named hf_token with your HuggingFace token
-# 3. Enable the secret for this notebook
-# 4. The token will be available as os.environ["hf_token"]
+# HuggingFace token - get from Kaggle secrets
+HF_TOKEN = ""
+try:
+    from kaggle_secrets import UserSecretsClient
+    user_secrets = UserSecretsClient()
+    HF_TOKEN = user_secrets.get_secret("HF_TOKEN")
+    print("✅ Got HF_TOKEN from Kaggle secrets")
+except Exception as e:
+    # Fallback to environment variable if not on Kaggle
+    HF_TOKEN = os.environ.get("hf_token", "") or os.environ.get("HF_TOKEN", "")
+    if HF_TOKEN:
+        print("✅ Got HF_TOKEN from environment variable")
+    else:
+        print(f"⚠️ Could not get HF_TOKEN from Kaggle secrets: {e}")
 
 # Dataset name on HuggingFace
 HF_DATASET_NAME = "nigfuapp-web/moe-data"
