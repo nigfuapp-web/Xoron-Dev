@@ -398,7 +398,7 @@ def build_new_model(xoron_config, training_config, active_modalities: str = 'all
         trainable_groups = get_trainable_groups_from_modality(active_modalities)
         frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
         
-        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups, active_modalities=active_modalities)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
         print(f"   Active modalities: {active_modalities}")
     
@@ -443,7 +443,7 @@ def load_model_from_checkpoint(checkpoint_path, xoron_config, training_config, a
         trainable_groups = get_trainable_groups_from_modality(active_modalities)
         frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
         
-        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups, active_modalities=active_modalities)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
         print(f"   Active modalities: {active_modalities}")
     
@@ -712,7 +712,7 @@ def load_model_from_huggingface(hf_model_id, training_config, active_modalities:
             trainable_groups = get_trainable_groups_from_modality(active_modalities)
             frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
             
-            device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
+            device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups, active_modalities=active_modalities)
             print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
             print(f"   Active modalities: {active_modalities}")
         
@@ -1438,7 +1438,7 @@ def load_model_from_checkpoint_with_config(checkpoint_path, training_config, act
         trainable_groups = get_trainable_groups_from_modality(active_modalities)
         frozen_groups = get_frozen_groups_from_trainable(trainable_groups)
         
-        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups)
+        device_map = get_device_map(num_gpus, trainable_groups=trainable_groups, frozen_groups=frozen_groups, active_modalities=active_modalities)
         print(f"⚡ Model Parallelism enabled across {num_gpus} GPUs")
         print(f"   Active modalities: {active_modalities}")
     

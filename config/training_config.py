@@ -248,15 +248,17 @@ ALL_COMPONENT_ATTRS = [
 ]
 
 
-def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, frozen_groups: Optional[List[str]] = None) -> Dict[str, str]:
+def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, frozen_groups: Optional[List[str]] = None, active_modalities: str = 'all') -> Dict[str, str]:
     """
     Create a dynamic device map for Model Parallelism.
     
     SMART PLACEMENT STRATEGY:
-    - Trainable components -> cuda:0 (primary GPU for training)
-    - Frozen components -> cuda:1 (secondary GPU, just for inference)
+    - cuda:0 (primary): Modality-specific components being trained
+    - cuda:1 (secondary): LLM + frozen components
     
-    This maximizes VRAM on the training GPU by offloading frozen weights.
+    EXCEPTION: Text-only mode puts LLM on cuda:0 (since that's the main thing)
+    
+    This maximizes VRAM on the training GPU for video/image generation.
     
     Args:
         num_gpus: Number of available GPUs
@@ -264,6 +266,7 @@ def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, 
                          e.g., ['vision', 'video', 'video_generation', 'llm']
         frozen_groups: List of component group names that are frozen
                       e.g., ['audio', 'image_generation']
+        active_modalities: Which modalities are active ('all', 'text', 'image', 'video', 'audio')
     
     Returns:
         Device map dict mapping component names to device strings
@@ -281,7 +284,8 @@ def get_device_map(num_gpus: int, trainable_groups: Optional[List[str]] = None, 
             return _get_static_device_map(num_gpus)
         
         # Dynamic placement based on what's being trained
-        return _get_dynamic_device_map(num_gpus, trainable_groups or [], frozen_groups or [])
+        text_only = is_text_only_mode(active_modalities)
+        return _get_dynamic_device_map(num_gpus, trainable_groups or [], frozen_groups or [], is_text_only=text_only)
     
     return _get_static_device_map(num_gpus)
 
@@ -322,54 +326,61 @@ def _get_static_device_map(num_gpus: int) -> Dict[str, str]:
         }
 
 
-def _get_dynamic_device_map(num_gpus: int, trainable_groups: List[str], frozen_groups: List[str]) -> Dict[str, str]:
+def _get_dynamic_device_map(num_gpus: int, trainable_groups: List[str], frozen_groups: List[str], is_text_only: bool = False) -> Dict[str, str]:
     """
-    Dynamic device placement: trainable on cuda:0, frozen on cuda:1.
+    Dynamic device placement to maximize VRAM for modality-specific training.
     
     Strategy:
-    - cuda:0 (primary): All trainable components + LLM (always trained)
-    - cuda:1 (secondary): All frozen components (just for inference)
+    - cuda:0 (primary): Modality-specific components being trained (NOT LLM)
+    - cuda:1 (secondary): LLM + frozen components
     
-    This maximizes available VRAM on the training GPU by moving
-    frozen weights that don't need gradients to the secondary GPU.
+    EXCEPTION: Text-only mode puts LLM on cuda:0 since that's the only thing training
+    
+    This maximizes VRAM on the training GPU by keeping LLM (which is large)
+    on the secondary GPU, leaving room for video/image generation at larger scales.
     """
     device_map = {}
     
-    # Determine which component attributes are trainable
-    trainable_attrs = set()
+    # Determine which component attributes go on primary GPU (cuda:0)
+    primary_attrs = set()
     
-    # LLM is ALWAYS trained (never frozen)
-    trainable_attrs.update(['llm', 'modality_markers', 'cross_attention'])
-    
-    # Add attributes from trainable groups
-    for group in trainable_groups:
-        if group in COMPONENT_TO_ATTRS:
-            trainable_attrs.update(COMPONENT_TO_ATTRS[group])
+    if is_text_only:
+        # Text-only mode: LLM is the main thing, put it on primary
+        primary_attrs.update(['llm', 'modality_markers', 'cross_attention'])
+    else:
+        # Non-text mode: Put modality-specific components on primary, LLM on secondary
+        for group in trainable_groups:
+            if group in COMPONENT_TO_ATTRS:
+                # Skip LLM-related groups - they go on secondary
+                if group not in ['llm', 'cross_attention', 'modality_markers']:
+                    primary_attrs.update(COMPONENT_TO_ATTRS[group])
     
     # Assign devices
     for attr in ALL_COMPONENT_ATTRS:
-        if attr in trainable_attrs:
-            device_map[attr] = 'cuda:0'  # Primary GPU for training
+        if attr in primary_attrs:
+            device_map[attr] = 'cuda:0'  # Primary GPU for modality training
         else:
-            device_map[attr] = 'cuda:1'  # Secondary GPU for frozen components
+            device_map[attr] = 'cuda:1'  # Secondary GPU for LLM + frozen
     
     device_map['primary'] = 'cuda:0'
     
     # Print placement summary
-    train_on_0 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:0']
-    frozen_on_1 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:1']
+    on_gpu0 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:0']
+    on_gpu1 = [a for a in ALL_COMPONENT_ATTRS if device_map[a] == 'cuda:1']
     
     print(f"\n🔀 Dynamic Device Placement:")
-    print(f"   cuda:0 (training): {', '.join(train_on_0)}")
-    if frozen_on_1:
-        print(f"   cuda:1 (frozen): {', '.join(frozen_on_1)}")
+    print(f"   cuda:0 (primary): {', '.join(on_gpu0) if on_gpu0 else 'none'}")
+    print(f"   cuda:1 (secondary): {', '.join(on_gpu1) if on_gpu1 else 'none'}")
     
     return device_map
 
 
 def get_trainable_groups_from_modality(active_modalities: str) -> List[str]:
     """
-    Convert active modality string to list of trainable component groups.
+    Convert active modality string to list of component groups to train.
+    
+    NOTE: LLM is always trained but placed on secondary GPU (except text-only mode)
+    to maximize VRAM for modality-specific components on primary GPU.
     
     Args:
         active_modalities: One of 'all', 'text', 'image', 'video', 'audio', 'multi'
@@ -377,26 +388,30 @@ def get_trainable_groups_from_modality(active_modalities: str) -> List[str]:
     Returns:
         List of component group names that should be trainable
     """
-    # LLM is always trainable
-    trainable = ['llm', 'cross_attention', 'modality_markers']
+    trainable = []
     
     if active_modalities == 'all' or active_modalities == 'multi':
         # All modalities - train everything
-        trainable.extend(['vision', 'video', 'audio', 'image_generation', 'video_generation'])
+        trainable = ['vision', 'video', 'audio', 'image_generation', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
     elif active_modalities == 'text':
-        # Text only - just LLM (already added)
-        pass
+        # Text only - just LLM
+        trainable = ['llm', 'cross_attention', 'modality_markers']
     elif active_modalities == 'image':
-        # Image mode - vision encoder + image generation
-        trainable.extend(['vision', 'image_generation'])
+        # Image mode - vision encoder + image generation + LLM
+        trainable = ['vision', 'image_generation', 'llm', 'cross_attention', 'modality_markers']
     elif active_modalities == 'video':
-        # Video mode - vision (for frames) + video encoder + video generation
-        trainable.extend(['vision', 'video', 'video_generation'])
+        # Video mode - vision (for frames) + video encoder + video generation + LLM
+        trainable = ['vision', 'video', 'video_generation', 'llm', 'cross_attention', 'modality_markers']
     elif active_modalities == 'audio' or active_modalities == 'voice':
-        # Audio/voice mode - audio components
-        trainable.extend(['audio'])
+        # Audio/voice mode - audio components + LLM
+        trainable = ['audio', 'llm', 'cross_attention', 'modality_markers']
     
     return trainable
+
+
+def is_text_only_mode(active_modalities: str) -> bool:
+    """Check if we're in text-only training mode."""
+    return active_modalities == 'text'
 
 
 def get_frozen_groups_from_trainable(trainable_groups: List[str]) -> List[str]:
