@@ -48,7 +48,6 @@ from models.encoders.video import (
     VidTokTokenizer,
     VidTokEncoder,
     VidTokDecoder,
-    VideoTokenizer,
     AlphaBlender,
     TemporalDownBlock,
     TemporalUpBlock,
@@ -90,10 +89,9 @@ __all__ = [
     'SIGLIP_MODELS',
     # Video
     'VideoEncoder',
-    'VidTokTokenizer',  # Full 3D VAE (Microsoft VidTok architecture)
+    'VidTokTokenizer',
     'VidTokEncoder',
     'VidTokDecoder',
-    'VideoTokenizer',  # Backward compatibility alias for VidTokTokenizer
     'AlphaBlender',
     'TemporalDownBlock',
     'TemporalUpBlock',

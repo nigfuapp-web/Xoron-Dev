@@ -586,10 +586,6 @@ class VidTokTokenizer(nn.Module):
         return x_recon, z
 
 
-# Backward compatibility alias
-VideoTokenizer = VidTokTokenizer
-
-
 class RoPE3DEncoder(nn.Module):
     """
     3D Rotary Position Embedding for (x, y, t) dimensions.
