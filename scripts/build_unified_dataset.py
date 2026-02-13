@@ -1066,13 +1066,7 @@ def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
     except Exception:
         pass
     
-    # Last resort: just write raw bytes and hope it's a valid format
-    try:
-        with open(target_path, 'wb') as f:
-            f.write(audio_bytes)
-        return target_path
-    except Exception:
-        return None
+    return None
 
 
 def process_audio_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
