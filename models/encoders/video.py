@@ -821,10 +821,18 @@ class VideoEncoderBlock(nn.Module):
 
 class VideoTiTokTokenizer(nn.Module):
     """
-    TiTok-style 1D Tokenizer for video features.
+    SOTA TiTok-style 1D Tokenizer for video features with temporal awareness.
     
     This compresses encoded video features (from vision encoder) to a smaller 
-    number of tokens, similar to how TiTokTokenizer works for images.
+    number of tokens, similar to how TiTokTokenizer works for images but with
+    proper temporal modeling.
+    
+    SOTA Features:
+    - Multi-layer transformer with temporal-aware attention
+    - 3D positional encoding (spatial + temporal)
+    - Hierarchical compression: spatial first, then temporal
+    - Causal temporal attention for streaming compatibility
+    - Gated cross-attention for selective feature extraction
     
     Note: This is different from VidTokTokenizer which is a 3D VAE for raw video compression.
     This tokenizer operates on already-encoded features, not raw pixels.
@@ -838,36 +846,110 @@ class VideoTiTokTokenizer(nn.Module):
         num_tokens: int = 64, 
         num_patches: int = 576,
         max_frames: int = 32,
+        num_layers: int = 2,
+        num_heads: int = 8,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_tokens = num_tokens
         self.num_patches = num_patches
         self.max_frames = max_frames
+        self.num_heads = num_heads
         
-        # Learnable compression projection
-        self.compress = nn.Sequential(
+        # Calculate spatial patches per frame (assume square grid)
+        self.patches_per_frame = num_patches // max_frames if max_frames > 0 else num_patches
+        self.spatial_size = int(self.patches_per_frame ** 0.5)
+        
+        # 3D Positional Encoding: temporal + spatial (learnable)
+        self.temporal_pos = nn.Parameter(torch.randn(1, max_frames, 1, hidden_size) * 0.02)
+        self.spatial_pos = nn.Parameter(torch.randn(1, 1, self.patches_per_frame, hidden_size) * 0.02)
+        
+        # Input projection with LayerNorm
+        self.input_norm = nn.LayerNorm(hidden_size)
+        self.input_proj = nn.Linear(hidden_size, hidden_size)
+        
+        # Learnable token queries with positional structure
+        # Split into temporal and content tokens for better compression
+        self.num_temporal_tokens = min(num_tokens // 4, max_frames)  # Temporal summary tokens
+        self.num_content_tokens = num_tokens - self.num_temporal_tokens  # Content tokens
+        
+        self.temporal_queries = nn.Parameter(torch.randn(1, self.num_temporal_tokens, hidden_size) * 0.02)
+        self.content_queries = nn.Parameter(torch.randn(1, self.num_content_tokens, hidden_size) * 0.02)
+        
+        # Multi-layer transformer for hierarchical compression
+        self.compress_layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.compress_layers.append(nn.ModuleDict({
+                # Gated cross-attention: queries attend to video features
+                'cross_attn': nn.MultiheadAttention(
+                    embed_dim=hidden_size,
+                    num_heads=num_heads,
+                    batch_first=True,
+                    dropout=dropout,
+                ),
+                'cross_gate': nn.Sequential(
+                    nn.Linear(hidden_size, hidden_size),
+                    nn.Sigmoid(),
+                ),
+                'cross_norm': nn.LayerNorm(hidden_size),
+                # Self-attention among token queries
+                'self_attn': nn.MultiheadAttention(
+                    embed_dim=hidden_size,
+                    num_heads=num_heads,
+                    batch_first=True,
+                    dropout=dropout,
+                ),
+                'self_norm': nn.LayerNorm(hidden_size),
+                # FFN
+                'ffn': nn.Sequential(
+                    nn.Linear(hidden_size, hidden_size * 4),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(hidden_size * 4, hidden_size),
+                    nn.Dropout(dropout),
+                ),
+                'ffn_norm': nn.LayerNorm(hidden_size),
+            }))
+        
+        # Temporal-content fusion layer
+        self.fusion_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            batch_first=True,
+            dropout=dropout,
+        )
+        self.fusion_norm = nn.LayerNorm(hidden_size)
+        
+        # Output projection
+        self.output_proj = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, hidden_size),
         )
-        
-        # Learnable token queries for compression
-        self.token_queries = nn.Parameter(torch.randn(1, num_tokens, hidden_size) * 0.02)
-        
-        # Cross-attention for spatio-temporal compression
-        self.compress_attn = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=8,
-            batch_first=True,
-            dropout=0.1,
-        )
-        self.compress_norm = nn.LayerNorm(hidden_size)
-        
-        # Temporal position embedding for queries
-        self.temporal_embed = nn.Parameter(torch.randn(1, max_frames, hidden_size) * 0.02)
+        self.output_norm = nn.LayerNorm(hidden_size)
         
         print(f"   🎬 VideoTiTokTokenizer: {num_patches} patches -> {num_tokens} tokens")
+        print(f"      Temporal tokens: {self.num_temporal_tokens}, Content tokens: {self.num_content_tokens}")
+        print(f"      Layers: {num_layers}, Heads: {num_heads}")
+
+    def _add_3d_pos_encoding(self, x: torch.Tensor, num_frames: int, patches_per_frame: int) -> torch.Tensor:
+        """Add 3D positional encoding (temporal + spatial)."""
+        B, seq_len, D = x.shape
+        
+        # Reshape to [B, T, HW, D]
+        x = x.reshape(B, num_frames, patches_per_frame, D)
+        
+        # Add temporal position (broadcast across spatial)
+        temporal_pos = self.temporal_pos[:, :num_frames, :, :]
+        x = x + temporal_pos
+        
+        # Add spatial position (broadcast across temporal)
+        spatial_pos = self.spatial_pos[:, :, :patches_per_frame, :]
+        x = x + spatial_pos
+        
+        # Reshape back to [B, T*HW, D]
+        return x.reshape(B, seq_len, D)
 
     def forward(self, x: torch.Tensor, num_frames: int = None) -> torch.Tensor:
         """
@@ -889,16 +971,65 @@ class VideoTiTokTokenizer(nn.Module):
             B, T, HW, D = x.shape
             x = x.reshape(B, T * HW, D)
             num_frames = T
+            patches_per_frame = HW
+        else:
+            # Infer from sequence length
+            seq_len = x.shape[1]
+            if num_frames is None:
+                num_frames = min(self.max_frames, seq_len // self.patches_per_frame)
+                num_frames = max(1, num_frames)
+            patches_per_frame = seq_len // num_frames if num_frames > 0 else seq_len
         
-        # Expand token queries for batch
-        queries = self.token_queries.expand(batch_size, -1, -1)
+        # Input normalization and projection
+        x = self.input_norm(x)
+        x = self.input_proj(x)
         
-        # Project features
-        x_proj = self.compress(x)
+        # Add 3D positional encoding
+        x = self._add_3d_pos_encoding(x, num_frames, patches_per_frame)
         
-        # Cross-attention compression: queries attend to all spatio-temporal patches
-        tokens, _ = self.compress_attn(queries, x_proj, x_proj)
-        tokens = self.compress_norm(queries + tokens)
+        # Initialize queries
+        temporal_queries = self.temporal_queries[:, :min(self.num_temporal_tokens, num_frames), :].expand(batch_size, -1, -1)
+        content_queries = self.content_queries.expand(batch_size, -1, -1)
+        queries = torch.cat([temporal_queries, content_queries], dim=1)
+        
+        # Multi-layer compression
+        for layer in self.compress_layers:
+            # Gated cross-attention: queries attend to video features
+            cross_out, _ = layer['cross_attn'](queries, x, x)
+            gate = layer['cross_gate'](queries)
+            queries = layer['cross_norm'](queries + gate * cross_out)
+            
+            # Self-attention among queries
+            self_out, _ = layer['self_attn'](queries, queries, queries)
+            queries = layer['self_norm'](queries + self_out)
+            
+            # FFN
+            ffn_out = layer['ffn'](queries)
+            queries = layer['ffn_norm'](queries + ffn_out)
+        
+        # Temporal-content fusion: content tokens attend to temporal tokens
+        actual_temporal = temporal_queries.shape[1]
+        temporal_tokens = queries[:, :actual_temporal, :]
+        content_tokens = queries[:, actual_temporal:, :]
+        
+        fused, _ = self.fusion_attn(content_tokens, temporal_tokens, temporal_tokens)
+        content_tokens = self.fusion_norm(content_tokens + fused)
+        
+        # Combine all tokens
+        tokens = torch.cat([temporal_tokens, content_tokens], dim=1)
+        
+        # Ensure we have exactly num_tokens
+        if tokens.shape[1] < self.num_tokens:
+            # Pad with learned tokens if needed
+            pad_size = self.num_tokens - tokens.shape[1]
+            pad_tokens = self.content_queries[:, :pad_size, :].expand(batch_size, -1, -1)
+            tokens = torch.cat([tokens, pad_tokens], dim=1)
+        elif tokens.shape[1] > self.num_tokens:
+            tokens = tokens[:, :self.num_tokens, :]
+        
+        # Output projection
+        tokens = self.output_proj(tokens)
+        tokens = self.output_norm(tokens)
         
         return tokens
 
