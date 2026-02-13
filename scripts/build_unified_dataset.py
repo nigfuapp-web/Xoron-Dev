@@ -937,7 +937,9 @@ def process_text_dataset(config: Dict, category: str, max_samples: int) -> List[
     logger.info(f"Processing text dataset: {name}")
     
     try:
-        load_kwargs = {"path": config["path"], "split": config["split"], "streaming": True}
+        # Pull exactly max_samples in one batch (no per-sample HTTP requests)
+        split_str = f"{config['split']}[:{max_samples}]"
+        load_kwargs = {"path": config["path"], "split": split_str, "streaming": False}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
@@ -975,7 +977,9 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing image dataset: {name}")
     
     try:
-        load_kwargs = {"path": config["path"], "split": config["split"], "streaming": True}
+        # Pull exactly max_samples in one batch (no per-sample HTTP requests)
+        split_str = f"{config['split']}[:{max_samples}]"
+        load_kwargs = {"path": config["path"], "split": split_str, "streaming": False}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
