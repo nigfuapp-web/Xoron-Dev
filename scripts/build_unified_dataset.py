@@ -360,17 +360,49 @@ def download_video_direct(url: str, output_path: str, timeout: int = 60) -> Opti
 
 
 def download_video(url: str, output_dir: str, video_id: str) -> Optional[str]:
-    """Download video from URL (YouTube or direct)."""
+    """Download video from URL (YouTube, TikTok, or direct)."""
     output_path = os.path.join(output_dir, f"{video_id}.mp4")
     
     if os.path.exists(output_path):
         return output_path
     
-    # Check if it's YouTube/TikTok
+    # Check if it's YouTube/TikTok - use yt-dlp
     if 'youtube.com' in url or 'youtu.be' in url or 'tiktok.com' in url:
         return download_video_ytdlp(url, output_path)
     else:
-        return download_video_direct(url, output_path)
+        # Try direct download first
+        result = download_video_direct(url, output_path)
+        if result:
+            return result
+        # Fallback to yt-dlp for other sites it supports
+        return download_video_ytdlp(url, output_path)
+
+
+# Vript metadata cache for resolving video IDs to URLs
+_vript_meta_cache = None
+
+def get_vript_video_url(video_id: str) -> Optional[str]:
+    """Look up video URL from Vript metadata (for Vript dataset)."""
+    global _vript_meta_cache
+    
+    if _vript_meta_cache is None:
+        _vript_meta_cache = {}
+        try:
+            import requests
+            # Load Vript short videos metadata
+            short_url = "https://huggingface.co/datasets/Mutonix/Vript/resolve/main/vript_meta/vript_short_videos_meta.json"
+            resp = requests.get(short_url, timeout=60)
+            if resp.status_code == 200:
+                _vript_meta_cache.update(resp.json())
+                logger.info(f"  Loaded Vript metadata: {len(_vript_meta_cache)} entries")
+        except Exception as e:
+            logger.warning(f"  Could not load Vript metadata: {e}")
+    
+    if video_id in _vript_meta_cache:
+        meta = _vript_meta_cache[video_id]
+        return meta.get('original_url') or meta.get('webpage_url')
+    
+    return None
 
 
 def download_audio_direct(url: str, output_path: str, timeout: int = 60) -> Optional[str]:
@@ -797,14 +829,29 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
                 video_url = 'https:' + url if url.startswith('//') else url
                 break
     
-    # YouTube video ID
+    # YouTube/TikTok video ID
     if not video_url:
         for field in ['videoID', 'video_id', 'youtube_id', 'clip_id', 'ytid']:
             if field in sample:
                 vid_id = str(sample[field])
-                if vid_id and len(vid_id) >= 11:
-                    video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
-                    break
+                if vid_id:
+                    # Try Vript metadata first
+                    vript_url = get_vript_video_url(vid_id)
+                    if vript_url:
+                        video_url = vript_url
+                        break
+                    # YouTube ID (11 chars)
+                    if len(vid_id) == 11:
+                        video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                        break
+                    # TikTok ID (long numeric)
+                    if vid_id.isdigit() and len(vid_id) > 15:
+                        video_url = f"https://www.tiktok.com/@user/video/{vid_id}"
+                        break
+                    # Default to YouTube
+                    if len(vid_id) >= 11:
+                        video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
+                        break
     
     return result, video_url
 
