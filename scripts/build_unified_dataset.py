@@ -1361,6 +1361,20 @@ def build_unified_dataset(args):
     # Create HuggingFace datasets with CLEAN standardized schemas
     logger.info("\nCreating HuggingFace datasets with standardized schemas...")
     
+    # Helper function to ensure consistent string types for PyArrow
+    def to_string_or_none(val):
+        """Convert value to string or None to avoid PyArrow type errors."""
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return str(val)
+        if isinstance(val, bytes):
+            try:
+                return val.decode('utf-8')
+            except:
+                return str(val)
+        return str(val) if not isinstance(val, str) else val
+    
     datasets_dict = {}
     
     # TEXT DATASET
@@ -1378,13 +1392,13 @@ def build_unified_dataset(args):
         }
         
         for s in all_samples["text"]:
-            text_data["instruction"].append(s.get("instruction"))
-            text_data["response"].append(s.get("response"))
-            text_data["system"].append(s.get("system"))
-            text_data["conversations"].append(s.get("conversations"))
-            text_data["context"].append(s.get("context"))
-            text_data["category"].append(s.get("category"))
-            text_data["source"].append(s.get("source"))
+            text_data["instruction"].append(to_string_or_none(s.get("instruction")))
+            text_data["response"].append(to_string_or_none(s.get("response")))
+            text_data["system"].append(to_string_or_none(s.get("system")))
+            text_data["conversations"].append(to_string_or_none(s.get("conversations")))
+            text_data["context"].append(to_string_or_none(s.get("context")))
+            text_data["category"].append(to_string_or_none(s.get("category")))
+            text_data["source"].append(to_string_or_none(s.get("source")))
         
         try:
             datasets_dict["text"] = Dataset.from_dict(text_data)
@@ -1419,12 +1433,13 @@ def build_unified_dataset(args):
                 # Double-check path is valid string before adding
                 if isinstance(img_path, str) and os.path.exists(img_path):
                     image_data["image"].append(img_path)
-                    image_data["caption"].append(s.get("caption"))
-                    image_data["question"].append(s.get("question"))
-                    image_data["answer"].append(s.get("answer"))
-                    image_data["choices"].append(s.get("choices"))
-                    image_data["category"].append(s.get("category"))
-                    image_data["source"].append(s.get("source"))
+                    # Convert all metadata to string or None to avoid PyArrow type errors
+                    image_data["caption"].append(to_string_or_none(s.get("caption")))
+                    image_data["question"].append(to_string_or_none(s.get("question")))
+                    image_data["answer"].append(to_string_or_none(s.get("answer")))
+                    image_data["choices"].append(to_string_or_none(s.get("choices")))
+                    image_data["category"].append(to_string_or_none(s.get("category")))
+                    image_data["source"].append(to_string_or_none(s.get("source")))
             
             if image_data["image"]:
                 try:
@@ -1469,18 +1484,20 @@ def build_unified_dataset(args):
                 # Double-check path is valid string before adding
                 if isinstance(audio_path, str) and os.path.exists(audio_path):
                     audio_data["audio"].append(audio_path)
-                    audio_data["text"].append(s.get("text"))
-                    audio_data["speaker_id"].append(s.get("speaker_id"))
-                    audio_data["sampling_rate"].append(s.get("sampling_rate"))
-                    audio_data["gender"].append(s.get("gender"))
-                    audio_data["age"].append(s.get("age"))
-                    audio_data["language"].append(s.get("language"))
-                    audio_data["emotion"].append(s.get("emotion"))
-                    audio_data["arousal"].append(s.get("arousal"))
-                    audio_data["valence"].append(s.get("valence"))
-                    audio_data["dominance"].append(s.get("dominance"))
-                    audio_data["category"].append(s.get("category"))
-                    audio_data["source"].append(s.get("source"))
+                    audio_data["text"].append(to_string_or_none(s.get("text")))
+                    audio_data["speaker_id"].append(to_string_or_none(s.get("speaker_id")))
+                    # sampling_rate should stay as int or None
+                    sr = s.get("sampling_rate")
+                    audio_data["sampling_rate"].append(int(sr) if sr is not None else None)
+                    audio_data["gender"].append(to_string_or_none(s.get("gender")))
+                    audio_data["age"].append(to_string_or_none(s.get("age")))
+                    audio_data["language"].append(to_string_or_none(s.get("language")))
+                    audio_data["emotion"].append(to_string_or_none(s.get("emotion")))
+                    audio_data["arousal"].append(to_string_or_none(s.get("arousal")))
+                    audio_data["valence"].append(to_string_or_none(s.get("valence")))
+                    audio_data["dominance"].append(to_string_or_none(s.get("dominance")))
+                    audio_data["category"].append(to_string_or_none(s.get("category")))
+                    audio_data["source"].append(to_string_or_none(s.get("source")))
             
             if audio_data["audio"]:
                 try:
@@ -1523,16 +1540,16 @@ def build_unified_dataset(args):
                 # Double-check path is valid string before adding
                 if isinstance(video_path, str) and os.path.exists(video_path):
                     video_data["video"].append(video_path)
-                    video_data["caption"].append(s.get("caption"))
-                    video_data["question"].append(s.get("question"))
-                    video_data["answer"].append(s.get("answer"))
-                    video_data["prompt"].append(s.get("prompt"))
-                    video_data["options"].append(s.get("options"))
-                    video_data["duration"].append(s.get("duration"))
-                    video_data["domain"].append(s.get("domain"))
-                    video_data["sub_category"].append(s.get("sub_category"))
-                    video_data["category"].append(s.get("category"))
-                    video_data["source"].append(s.get("source"))
+                    video_data["caption"].append(to_string_or_none(s.get("caption")))
+                    video_data["question"].append(to_string_or_none(s.get("question")))
+                    video_data["answer"].append(to_string_or_none(s.get("answer")))
+                    video_data["prompt"].append(to_string_or_none(s.get("prompt")))
+                    video_data["options"].append(to_string_or_none(s.get("options")))
+                    video_data["duration"].append(to_string_or_none(s.get("duration")))
+                    video_data["domain"].append(to_string_or_none(s.get("domain")))
+                    video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
+                    video_data["category"].append(to_string_or_none(s.get("category")))
+                    video_data["source"].append(to_string_or_none(s.get("source")))
             
             if video_data["video"]:
                 try:
