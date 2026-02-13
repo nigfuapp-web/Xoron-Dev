@@ -475,8 +475,9 @@ class XoronModel(XoronPreTrainedModel):
         """
         Save model to directory in HuggingFace format.
         
-        This saves both the model weights and the custom code files
-        needed for trust_remote_code loading.
+        This saves both the model weights and dynamically builds a self-contained
+        modeling_xoron.py that can be loaded with trust_remote_code=True without
+        requiring the full Xoron-Dev package.
         """
         os.makedirs(save_directory, exist_ok=True)
         
@@ -487,21 +488,18 @@ class XoronModel(XoronPreTrainedModel):
         if self._internal_model is not None:
             self._internal_model.save_pretrained(save_directory)
         
-        # Copy custom code files for trust_remote_code
+        # Copy configuration file
         import shutil
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Files to copy
-        files_to_copy = [
-            'configuration_xoron.py',
-            'modeling_xoron.py',
-        ]
+        config_src = os.path.join(current_dir, 'configuration_xoron.py')
+        config_dst = os.path.join(save_directory, 'configuration_xoron.py')
+        if os.path.exists(config_src):
+            shutil.copy2(config_src, config_dst)
         
-        for filename in files_to_copy:
-            src = os.path.join(current_dir, filename)
-            dst = os.path.join(save_directory, filename)
-            if os.path.exists(src):
-                shutil.copy2(src, dst)
+        # Build self-contained modeling_xoron.py dynamically
+        modeling_dst = os.path.join(save_directory, 'modeling_xoron.py')
+        self._build_self_contained_modeling_file(current_dir, modeling_dst)
         
         # Update config.json with auto_map for trust_remote_code
         config_path = os.path.join(save_directory, 'config.json')
@@ -520,6 +518,284 @@ class XoronModel(XoronPreTrainedModel):
         
         if push_to_hub:
             self.push_to_hub(save_directory, **kwargs)
+    
+    def _build_self_contained_modeling_file(self, repo_root: str, output_path: str):
+        """
+        Build a self-contained modeling_xoron.py by combining all model components.
+        
+        This allows HuggingFace users to load the model with trust_remote_code=True
+        without needing to install the full Xoron-Dev package.
+        """
+        import re
+        
+        # Component files to combine (in dependency order)
+        component_files = [
+            "models/components/lora.py",
+            "models/components/attention.py",
+            "models/components/projectors.py",
+            "models/components/moe.py",
+            "models/encoders/vision.py",
+            "models/encoders/video.py",
+            "models/encoders/audio.py",
+            "models/generators/image.py",
+            "models/generators/video.py",
+            "models/llm/moe_llama.py",
+            "models/xoron.py",
+        ]
+        
+        # Internal imports to remove
+        internal_import_patterns = [
+            r"^from config import.*$",
+            r"^from config\..*import.*$",
+            r"^from models\..*import.*$",
+            r"^from models import.*$",
+        ]
+        
+        def is_internal_import(line):
+            line = line.strip()
+            for pattern in internal_import_patterns:
+                if re.match(pattern, line):
+                    return True
+            return False
+        
+        def is_external_import(line):
+            line = line.strip()
+            return (line.startswith("import ") or 
+                    (line.startswith("from ") and not is_internal_import(line)))
+        
+        def extract_code_body(content):
+            """Extract code body, removing module docstring and imports."""
+            lines = content.split('\n')
+            code_lines = []
+            i = 0
+            
+            # Skip leading whitespace
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            
+            # Skip module docstring if present
+            if i < len(lines):
+                stripped = lines[i].strip()
+                if stripped.startswith('"""') or stripped.startswith("'''"):
+                    docstring_char = stripped[:3]
+                    if stripped.count(docstring_char) >= 2:
+                        i += 1
+                    else:
+                        i += 1
+                        while i < len(lines):
+                            if docstring_char in lines[i]:
+                                i += 1
+                                break
+                            i += 1
+            
+            # Process remaining lines
+            for line in lines[i:]:
+                stripped = line.strip()
+                
+                # Skip empty lines at start
+                if not code_lines and not stripped:
+                    continue
+                
+                # Skip internal imports
+                if is_internal_import(line):
+                    continue
+                
+                # Skip external imports (we'll add our own)
+                if is_external_import(line):
+                    continue
+                
+                # Skip logger setup lines
+                if stripped.startswith("logger = logging.getLogger"):
+                    continue
+                
+                code_lines.append(line)
+            
+            # Remove trailing empty lines
+            while code_lines and not code_lines[-1].strip():
+                code_lines.pop()
+            
+            return '\n'.join(code_lines)
+        
+        # Build the file
+        header = '''"""
+Xoron Model for HuggingFace Transformers - Self-Contained Implementation.
+
+AUTO-GENERATED FILE - Do not edit directly!
+
+This module provides a complete, self-contained HuggingFace-compatible model class
+for the Xoron multimodal model. All components are embedded directly in this file
+to enable loading via AutoModel with trust_remote_code=True WITHOUT requiring
+the full Xoron-Dev package to be installed.
+
+Usage:
+    from transformers import AutoModel, AutoConfig
+    config = AutoConfig.from_pretrained("your-repo/xoron-model", trust_remote_code=True)
+    model = AutoModel.from_pretrained("your-repo/xoron-model", trust_remote_code=True)
+"""
+
+import os
+import math
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List, Union, Tuple, Any
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+try:
+    from safetensors.torch import save_model, load_model
+except ImportError:
+    save_model, load_model = None, None
+
+from transformers import PreTrainedModel, LlamaConfig, LlamaModel, LlamaForCausalLM
+from transformers.modeling_outputs import CausalLMOutputWithPast, BaseModelOutputWithPast
+
+try:
+    from transformers.models.llama.modeling_llama import (
+        LlamaAttention, LlamaDecoderLayer, LlamaRMSNorm, LlamaMLP,
+        LlamaRotaryEmbedding, apply_rotary_pos_emb, repeat_kv
+    )
+except ImportError:
+    LlamaAttention = LlamaDecoderLayer = LlamaRMSNorm = LlamaMLP = None
+    LlamaRotaryEmbedding = apply_rotary_pos_emb = repeat_kv = None
+
+# Import configuration
+try:
+    from .configuration_xoron import XoronConfig
+except ImportError:
+    from configuration_xoron import XoronConfig
+
+logger = logging.getLogger(__name__)
+
+'''
+        
+        all_code = [header]
+        
+        # Process each component file
+        for filepath in component_files:
+            full_path = os.path.join(repo_root, filepath)
+            if not os.path.exists(full_path):
+                continue
+            
+            with open(full_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            code = extract_code_body(content)
+            if code.strip():
+                section_name = filepath.replace('/', '.').replace('.py', '').upper()
+                section_header = f"\n\n# {'='*78}\n# {section_name}\n# {'='*78}\n\n"
+                all_code.append(section_header + code)
+        
+        # Add HuggingFace wrapper classes
+        hf_wrapper = '''
+
+# ==============================================================================
+# HUGGINGFACE WRAPPER CLASSES
+# ==============================================================================
+
+class XoronPreTrainedModel(PreTrainedModel):
+    """Base class for Xoron models providing HuggingFace integration."""
+    
+    config_class = XoronConfig
+    base_model_prefix = "xoron"
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["XoronMultimodalModel"]
+    _skip_keys_device_placement = "past_key_values"
+    
+    def _init_weights(self, module):
+        std = 0.02
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+
+class XoronModel(XoronPreTrainedModel):
+    """Xoron Multimodal Model for HuggingFace."""
+    
+    def __init__(self, config: XoronConfig):
+        super().__init__(config)
+        self.config = config
+        self._internal_model = XoronMultimodalModel(config)
+        self.post_init()
+    
+    @property
+    def internal_model(self):
+        return self._internal_model
+    
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        pixel_values: Optional[torch.Tensor] = None,
+        video_frames: Optional[torch.Tensor] = None,
+        audio_features: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
+        outputs = self._internal_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            images=pixel_values,
+            video=video_frames,
+            audio=audio_features,
+            labels=labels,
+        )
+        
+        if return_dict:
+            return CausalLMOutputWithPast(
+                loss=outputs.get('loss'),
+                logits=outputs.get('logits'),
+                past_key_values=outputs.get('past_key_values'),
+                hidden_states=outputs.get('hidden_states'),
+                attentions=outputs.get('attentions'),
+            )
+        
+        return (outputs.get('loss'), outputs.get('logits'))
+    
+    def generate_image(self, prompt_embeds: torch.Tensor, **kwargs):
+        return self._internal_model.generate_image(prompt_embeds, **kwargs)
+    
+    def generate_video(self, prompt_embeds: torch.Tensor, **kwargs):
+        return self._internal_model.generate_video(prompt_embeds, **kwargs)
+    
+    def generate_speech(self, text_embeds: torch.Tensor, **kwargs):
+        return self._internal_model.generate_speech(text_embeds, **kwargs)
+
+
+class XoronForCausalLM(XoronModel):
+    """Alias for XoronModel for compatibility."""
+    pass
+
+
+# Register for AutoClass
+XoronConfig.register_for_auto_class()
+XoronModel.register_for_auto_class("AutoModel")
+XoronForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+'''
+        all_code.append(hf_wrapper)
+        
+        # Write output file
+        final_content = '\n'.join(all_code)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(final_content)
+        
+        line_count = final_content.count('\n')
+        print(f"   📦 Built self-contained modeling_xoron.py ({line_count:,} lines)")
 
 
 class XoronForCausalLM(XoronModel):
