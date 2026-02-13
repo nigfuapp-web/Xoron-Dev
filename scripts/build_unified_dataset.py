@@ -450,125 +450,255 @@ def save_image_pil(image, output_path: str) -> Optional[str]:
 
 
 # ============================================================================
-# SAMPLE EXTRACTION FUNCTIONS
+# SAMPLE EXTRACTION FUNCTIONS - STANDARDIZED SCHEMAS
 # ============================================================================
 
-def serialize_value(val: Any) -> Any:
-    """Serialize a value to be JSON-compatible for the dataset."""
-    if val is None:
-        return None
-    if isinstance(val, (str, int, float, bool)):
-        return val
-    if isinstance(val, (list, tuple)):
-        return [serialize_value(v) for v in val]
-    if isinstance(val, dict):
-        return {k: serialize_value(v) for k, v in val.items()}
-    # For PIL images, bytes, etc - skip (handled separately)
-    return str(val) if val else None
+# Standardized schemas for each modality
+# Text: instruction, response, system, conversations, context
+# Image: image, caption, question, answer, choices
+# Audio: audio, transcription, speaker_id, duration, language
+# Video: video, caption, question, answer, duration
+
+def get_field(sample: Dict, field_names: List[str], default=None):
+    """Get first matching field from sample."""
+    for name in field_names:
+        if name in sample and sample[name] is not None:
+            val = sample[name]
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            elif not isinstance(val, str) and val:
+                return val
+    return default
 
 
-def extract_all_metadata(sample: Dict, skip_fields: List[str] = None) -> Dict:
-    """Extract ALL metadata fields from a sample, preserving original columns."""
-    skip_fields = skip_fields or []
-    # Fields that contain binary/media data - handle separately
-    media_fields = ['image', 'img', 'audio', 'video', 'speech', 'waveform', 'photo', 'picture']
+def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Dict]:
+    """Extract text sample with standardized schema."""
+    result = {
+        "instruction": None,
+        "response": None,
+        "system": None,
+        "conversations": None,
+        "context": None,
+        "category": category,
+        "source": source,
+    }
     
-    metadata = {}
-    for key, val in sample.items():
-        if key in skip_fields:
-            continue
-        if key.lower() in media_fields:
-            continue
-        
-        # Serialize the value
+    # Try to get instruction/prompt
+    result["instruction"] = get_field(sample, [
+        'instruction', 'prompt', 'query', 'question', 'input', 'user', 'human'
+    ])
+    
+    # Try to get response/answer
+    result["response"] = get_field(sample, [
+        'response', 'output', 'answer', 'completion', 'assistant', 'gpt', 'solution'
+    ])
+    
+    # Try to get system prompt
+    result["system"] = get_field(sample, ['system', 'system_prompt', 'system_message'])
+    
+    # Try to get context
+    result["context"] = get_field(sample, ['context', 'document', 'passage', 'text'])
+    
+    # Handle conversation format
+    convs = get_field(sample, ['conversations', 'messages', 'dialogue', 'chat'])
+    if convs and isinstance(convs, list):
         try:
-            serialized = serialize_value(val)
-            if serialized is not None:
-                metadata[key] = serialized
-        except Exception:
-            # If we can't serialize, convert to string
-            try:
-                metadata[key] = str(val)
-            except:
-                pass
+            result["conversations"] = json.dumps(convs)
+        except:
+            result["conversations"] = str(convs)
+        
+        # Also try to extract first instruction/response from conversations
+        if not result["instruction"] and len(convs) >= 1:
+            first = convs[0]
+            if isinstance(first, dict):
+                result["instruction"] = first.get('content', first.get('value', first.get('text', '')))
+        if not result["response"] and len(convs) >= 2:
+            second = convs[1]
+            if isinstance(second, dict):
+                result["response"] = second.get('content', second.get('value', second.get('text', '')))
     
-    return metadata
+    # Handle code-specific fields
+    if not result["instruction"]:
+        result["instruction"] = get_field(sample, ['problem', 'task', 'description'])
+    if not result["response"]:
+        result["response"] = get_field(sample, ['code', 'solution', 'canonical_solution'])
+    
+    # Skip if we have nothing useful
+    if not result["instruction"] and not result["response"] and not result["conversations"] and not result["context"]:
+        return None
+    
+    return result
 
 
-def extract_video_url(sample: Dict) -> Optional[str]:
-    """Extract video URL from sample."""
-    url_fields = [
-        'Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url',
-        'media_url', 'contentUrl', 'video1', 'column1'
-    ]
+def extract_image_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[Any], Optional[str]]:
+    """Extract image sample with standardized schema. Returns (metadata, image_data, image_url)."""
+    result = {
+        "caption": None,
+        "question": None,
+        "answer": None,
+        "choices": None,
+        "category": category,
+        "source": source,
+    }
+    
+    # Get caption/description
+    result["caption"] = get_field(sample, [
+        'caption', 'description', 'text', 'label', 'title', 'sentence'
+    ])
+    
+    # Get question (for VQA)
+    result["question"] = get_field(sample, ['question', 'query', 'prompt'])
+    
+    # Get answer (for VQA)
+    result["answer"] = get_field(sample, ['answer', 'response', 'label', 'output'])
+    
+    # Get choices (for multiple choice)
+    choices = get_field(sample, ['choices', 'options', 'candidates'])
+    if choices:
+        try:
+            result["choices"] = json.dumps(choices) if isinstance(choices, list) else str(choices)
+        except:
+            result["choices"] = str(choices)
+    
+    # Extract image data
+    image_data = None
+    image_url = None
+    
+    image_fields = ['image', 'img', 'picture', 'photo', 'source_image', 'input_image']
+    for field in image_fields:
+        if field in sample and sample[field] is not None:
+            image_data = sample[field]
+            break
+    
+    if not image_data:
+        url_fields = ['image_url', 'url', 'img_url', 'picture_url']
+        for field in url_fields:
+            if field in sample:
+                url = sample[field]
+                if isinstance(url, str) and url.startswith('http'):
+                    image_url = url
+                    break
+    
+    return result, image_data, image_url
+
+
+def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[Any], Optional[str]]:
+    """Extract audio sample with standardized schema. Returns (metadata, audio_data, audio_path)."""
+    result = {
+        "transcription": None,
+        "speaker_id": None,
+        "duration": None,
+        "language": None,
+        "gender": None,
+        "category": category,
+        "source": source,
+    }
+    
+    # Get transcription
+    result["transcription"] = get_field(sample, [
+        'transcription', 'transcript', 'text', 'sentence', 'normalized_text', 
+        'raw_text', 'caption', 'description'
+    ])
+    
+    # Get speaker info
+    result["speaker_id"] = get_field(sample, ['speaker_id', 'speaker', 'spk_id', 'client_id'])
+    result["gender"] = get_field(sample, ['gender', 'sex'])
+    result["language"] = get_field(sample, ['language', 'lang', 'locale'])
+    
+    # Get duration
+    duration = get_field(sample, ['duration', 'length', 'audio_length'])
+    if duration is not None:
+        try:
+            result["duration"] = float(duration)
+        except:
+            result["duration"] = None
+    
+    # Extract audio data
+    audio_data = None
+    audio_path = None
+    
+    audio_fields = ['audio', 'speech', 'sound', 'waveform']
+    for field in audio_fields:
+        if field in sample and sample[field] is not None:
+            audio = sample[field]
+            if isinstance(audio, dict):
+                if 'bytes' in audio and audio['bytes']:
+                    audio_data = audio['bytes']
+                    break
+                elif 'array' in audio:
+                    audio_data = audio
+                    break
+                elif 'path' in audio and audio['path']:
+                    audio_path = audio['path']
+                    break
+            else:
+                audio_data = audio
+                break
+    
+    return result, audio_data, audio_path
+
+
+def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[str]]:
+    """Extract video sample with standardized schema. Returns (metadata, video_url)."""
+    result = {
+        "caption": None,
+        "question": None,
+        "answer": None,
+        "prompt": None,
+        "duration": None,
+        "category": category,
+        "source": source,
+    }
+    
+    # Get caption/description
+    result["caption"] = get_field(sample, [
+        'caption', 'description', 'text', 'title', 'name'
+    ])
+    
+    # Get prompt (for generation)
+    result["prompt"] = get_field(sample, ['prompt', 'instruction', 'query'])
+    
+    # Get question/answer (for QA)
+    result["question"] = get_field(sample, ['question', 'query'])
+    result["answer"] = get_field(sample, ['answer', 'response'])
+    
+    # Get duration
+    duration = get_field(sample, ['duration', 'length', 'video_length'])
+    if duration is not None:
+        try:
+            result["duration"] = float(duration)
+        except:
+            result["duration"] = None
+    
+    # Extract video URL
+    video_url = None
+    url_fields = ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'media_url', 'contentUrl']
     
     for field in url_fields:
         if field in sample:
             url = sample[field]
             if isinstance(url, str) and (url.startswith('http') or url.startswith('//')):
-                if url.startswith('//'):
-                    url = 'https:' + url
-                return url
+                video_url = 'https:' + url if url.startswith('//') else url
+                break
     
     # Check for YouTube video ID
-    for field in ['video_id', 'youtube_id', 'clip_id', 'ytid']:
-        if field in sample:
-            vid_id = str(sample[field])
-            if vid_id and len(vid_id) == 11:
-                return f"https://www.youtube.com/watch?v={vid_id}"
+    if not video_url:
+        for field in ['video_id', 'youtube_id', 'clip_id', 'ytid']:
+            if field in sample:
+                vid_id = str(sample[field])
+                if vid_id and len(vid_id) >= 11:
+                    video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
+                    break
     
-    return None
-
-
-def extract_image_data(sample: Dict) -> Tuple[Optional[Any], Optional[str]]:
-    """Extract image data or URL from sample. Returns (image_data, url)."""
-    image_fields = ['image', 'img', 'picture', 'photo', 'source_image', 'input_image']
-    url_fields = ['image_url', 'url', 'img_url', 'picture_url']
-    
-    # Check for PIL image or bytes
-    for field in image_fields:
-        if field in sample:
-            img = sample[field]
-            if img is not None:
-                return (img, None)
-    
-    # Check for URL
-    for field in url_fields:
-        if field in sample:
-            url = sample[field]
-            if isinstance(url, str) and url.startswith('http'):
-                return (None, url)
-    
-    return (None, None)
-
-
-def extract_audio_data(sample: Dict) -> Tuple[Optional[Any], Optional[str]]:
-    """Extract audio data or URL from sample. Returns (audio_data, url)."""
-    audio_fields = ['audio', 'speech', 'sound', 'waveform']
-    
-    for field in audio_fields:
-        if field in sample:
-            audio = sample[field]
-            if audio is not None:
-                # HuggingFace audio format
-                if isinstance(audio, dict):
-                    if 'bytes' in audio:
-                        return (audio['bytes'], None)
-                    if 'path' in audio and audio['path']:
-                        return (None, audio['path'])
-                    if 'array' in audio:
-                        return (audio, None)
-                return (audio, None)
-    
-    return (None, None)
+    return result, video_url
 
 
 # ============================================================================
-# DATASET PROCESSING
+# DATASET PROCESSING - CLEAN STANDARDIZED OUTPUT
 # ============================================================================
 
 def process_text_dataset(config: Dict, category: str, max_samples: int) -> List[Dict]:
-    """Process a text dataset and extract ALL columns/metadata."""
+    """Process a text dataset with standardized schema."""
     from datasets import load_dataset
     
     samples = []
@@ -587,31 +717,22 @@ def process_text_dataset(config: Dict, category: str, max_samples: int) -> List[
             if count >= max_samples:
                 break
             
-            # Extract ALL metadata from the sample
-            sample_data = extract_all_metadata(sample)
-            
-            # Skip empty samples
-            if not sample_data:
-                continue
-            
-            # Add our tracking fields
-            sample_data['_category'] = category
-            sample_data['_source_dataset'] = name
-            sample_data['_modality'] = 'text'
-            
-            samples.append(sample_data)
-            count += 1
+            # Extract with standardized schema
+            extracted = extract_text_sample(sample, category, name)
+            if extracted:
+                samples.append(extracted)
+                count += 1
         
-        logger.info(f"  Extracted {len(samples)} text samples from {name}")
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
     except Exception as e:
-        logger.error(f"  Error processing {name}: {e}")
+        logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
     
     return samples
 
 
 def process_image_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process an image dataset, download images, and extract ALL metadata."""
+    """Process an image dataset with standardized schema."""
     from datasets import load_dataset
     from PIL import Image
     
@@ -634,8 +755,10 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
             if count >= max_samples:
                 break
             
-            img_data, img_url = extract_image_data(sample)
+            # Extract with standardized schema
+            metadata, img_data, img_url = extract_image_sample(sample, category, name)
             
+            # Save image
             img_path = None
             if img_data is not None:
                 img_filename = f"{idx:06d}.jpg"
@@ -652,34 +775,31 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
                             f.write(img_data)
                     except:
                         img_path = None
+                elif hasattr(img_data, 'save'):
+                    try:
+                        img_data.save(img_path)
+                    except:
+                        img_path = None
             elif img_url:
                 img_filename = f"{idx:06d}.jpg"
                 img_path = os.path.join(img_dir, img_filename)
                 img_path = download_image(img_url, img_path)
             
             if img_path and os.path.exists(img_path):
-                # Extract ALL metadata from the sample
-                sample_data = extract_all_metadata(sample)
-                
-                # Add image path and tracking fields
-                sample_data['_image_path'] = img_path
-                sample_data['_category'] = category
-                sample_data['_source_dataset'] = name
-                sample_data['_modality'] = 'image'
-                
-                samples.append(sample_data)
+                metadata['image_path'] = img_path
+                samples.append(metadata)
                 count += 1
         
-        logger.info(f"  Extracted {len(samples)} image samples from {name}")
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
     except Exception as e:
-        logger.error(f"  Error processing {name}: {e}")
+        logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
     
     return samples
 
 
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process a video dataset, download videos, and extract ALL metadata."""
+    """Process a video dataset with standardized schema."""
     from datasets import load_dataset
     
     samples = []
@@ -705,14 +825,16 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                 break
             
             if failed > max_samples * 2:
-                logger.warning(f"  Too many download failures for {name}, stopping")
+                logger.warning(f"  Too many failures, stopping {name}")
                 break
             
-            video_url = extract_video_url(sample)
+            # Extract with standardized schema
+            metadata, video_url = extract_video_sample(sample, category, name)
             
             if not video_url:
                 continue
             
+            # Download video
             video_id = f"{idx:06d}"
             video_path = download_video(video_url, vid_dir, video_id)
             
@@ -723,31 +845,23 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                     failed += 1
                     continue
                 
-                # Extract ALL metadata from the sample
-                sample_data = extract_all_metadata(sample)
-                
-                # Add video path and tracking fields
-                sample_data['_video_path'] = video_path
-                sample_data['_category'] = category
-                sample_data['_source_dataset'] = name
-                sample_data['_modality'] = 'video'
-                
-                samples.append(sample_data)
+                metadata['video_path'] = video_path
+                samples.append(metadata)
                 count += 1
                 downloaded += 1
             else:
                 failed += 1
         
-        logger.info(f"  Extracted {len(samples)} video samples from {name} (downloaded: {downloaded}, failed: {failed})")
+        logger.info(f"  ✓ {len(samples)} samples from {name} (downloaded: {downloaded}, failed: {failed})")
     except Exception as e:
-        logger.error(f"  Error processing {name}: {e}")
+        logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
     
     return samples
 
 
 def process_audio_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process an audio dataset, save audio files, and extract ALL metadata."""
+    """Process an audio dataset with standardized schema."""
     from datasets import load_dataset
     import soundfile as sf
     import numpy as np
@@ -771,7 +885,8 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             if count >= max_samples:
                 break
             
-            audio_data, audio_url = extract_audio_data(sample)
+            # Extract with standardized schema
+            metadata, audio_data, audio_src_path = extract_audio_sample(sample, category, name)
             
             audio_path = None
             audio_filename = f"{idx:06d}.wav"
@@ -783,26 +898,20 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                         with open(target_path, 'wb') as f:
                             f.write(audio_data)
                         audio_path = target_path
-                    elif isinstance(audio_data, dict):
-                        if 'bytes' in audio_data and audio_data['bytes']:
-                            with open(target_path, 'wb') as f:
-                                f.write(audio_data['bytes'])
-                            audio_path = target_path
-                        elif 'array' in audio_data:
-                            arr = np.array(audio_data['array'])
-                            sr = audio_data.get('sampling_rate', 16000)
-                            sf.write(target_path, arr, sr)
-                            audio_path = target_path
-                        elif 'path' in audio_data and audio_data['path']:
-                            src = audio_data['path']
-                            if os.path.exists(src):
-                                shutil.copy(src, target_path)
-                                audio_path = target_path
+                    elif isinstance(audio_data, dict) and 'array' in audio_data:
+                        arr = np.array(audio_data['array'])
+                        sr = audio_data.get('sampling_rate', 16000)
+                        sf.write(target_path, arr, sr)
+                        audio_path = target_path
                 except Exception as e:
                     logger.warning(f"  Error saving audio {idx}: {e}")
                     audio_path = None
-            elif audio_url:
-                audio_path = download_audio_direct(audio_url, target_path)
+            elif audio_src_path and os.path.exists(audio_src_path):
+                try:
+                    shutil.copy(audio_src_path, target_path)
+                    audio_path = target_path
+                except:
+                    audio_path = None
             
             if audio_path and os.path.exists(audio_path):
                 size_mb = get_file_size_mb(audio_path)
@@ -810,21 +919,13 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                     os.remove(audio_path)
                     continue
                 
-                # Extract ALL metadata from the sample
-                sample_data = extract_all_metadata(sample)
-                
-                # Add audio path and tracking fields
-                sample_data['_audio_path'] = audio_path
-                sample_data['_category'] = category
-                sample_data['_source_dataset'] = name
-                sample_data['_modality'] = 'audio'
-                
-                samples.append(sample_data)
+                metadata['audio_path'] = audio_path
+                samples.append(metadata)
                 count += 1
         
-        logger.info(f"  Extracted {len(samples)} audio samples from {name}")
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
     except Exception as e:
-        logger.error(f"  Error processing {name}: {e}")
+        logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
     
     return samples
@@ -980,120 +1081,151 @@ def build_unified_dataset(args):
     for modality, samples in all_samples.items():
         logger.info(f"  {modality}: {len(samples)} samples")
     
-    # Create HuggingFace datasets
-    logger.info("\nCreating HuggingFace datasets...")
+    # Create HuggingFace datasets with CLEAN standardized schemas
+    logger.info("\nCreating HuggingFace datasets with standardized schemas...")
     
     datasets_dict = {}
     
-    def samples_to_dataset(samples: List[Dict], modality: str) -> Optional[Dataset]:
-        """Convert samples with varying columns to a Dataset, preserving ALL columns."""
-        if not samples:
-            return None
-        
-        # Collect ALL unique keys across all samples
-        all_keys = set()
-        for s in samples:
-            all_keys.update(s.keys())
-        
-        # Build column data - each column is a list
-        column_data = {key: [] for key in all_keys}
-        
-        for s in samples:
-            for key in all_keys:
-                # Get value or None if missing
-                val = s.get(key, None)
-                # Convert complex types to JSON strings for storage
-                if isinstance(val, (list, dict)):
-                    try:
-                        val = json.dumps(val)
-                    except:
-                        val = str(val)
-                column_data[key].append(val)
-        
-        # Fix mixed types - convert all values in a column to strings if there's a mix
-        for key in all_keys:
-            values = column_data[key]
-            # Check if we have mixed types (excluding None)
-            types_found = set()
-            for v in values:
-                if v is not None:
-                    types_found.add(type(v).__name__)
-            
-            # If mixed types (e.g., int and str), convert all to string
-            if len(types_found) > 1:
-                column_data[key] = [str(v) if v is not None else None for v in values]
-        
-        # Create dataset
-        try:
-            ds = Dataset.from_dict(column_data)
-            return ds
-        except Exception as e:
-            logger.error(f"Error creating {modality} dataset: {e}")
-            # Try converting everything to strings as fallback
-            try:
-                logger.info(f"  Retrying with all columns as strings...")
-                for key in column_data:
-                    column_data[key] = [str(v) if v is not None else None for v in column_data[key]]
-                ds = Dataset.from_dict(column_data)
-                return ds
-            except Exception as e2:
-                logger.error(f"  Still failed: {e2}")
-                return None
-    
-    # Text split - keep ALL original columns
+    # TEXT DATASET
+    # Schema: instruction, response, system, conversations, context, category, source
     if all_samples["text"]:
-        ds = samples_to_dataset(all_samples["text"], "text")
-        if ds:
-            datasets_dict["text"] = ds
-            logger.info(f"  Text dataset: {len(ds)} samples, {len(ds.column_names)} columns")
-            logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
+        logger.info("\n📝 Creating TEXT dataset...")
+        text_data = {
+            "instruction": [],
+            "response": [],
+            "system": [],
+            "conversations": [],
+            "context": [],
+            "category": [],
+            "source": [],
+        }
+        
+        for s in all_samples["text"]:
+            text_data["instruction"].append(s.get("instruction"))
+            text_data["response"].append(s.get("response"))
+            text_data["system"].append(s.get("system"))
+            text_data["conversations"].append(s.get("conversations"))
+            text_data["context"].append(s.get("context"))
+            text_data["category"].append(s.get("category"))
+            text_data["source"].append(s.get("source"))
+        
+        try:
+            datasets_dict["text"] = Dataset.from_dict(text_data)
+            logger.info(f"  ✓ Text: {len(datasets_dict['text'])} samples")
+            logger.info(f"    Columns: {datasets_dict['text'].column_names}")
+        except Exception as e:
+            logger.error(f"  ✗ Failed to create text dataset: {e}")
     
-    # Image split - keep ALL original columns + image
+    # IMAGE DATASET
+    # Schema: image, caption, question, answer, choices, category, source
     if all_samples["image"]:
-        # Filter to only samples with valid image paths
+        logger.info("\n🖼️ Creating IMAGE dataset...")
         valid_samples = [s for s in all_samples["image"] 
-                        if s.get("_image_path") and os.path.exists(s.get("_image_path", ""))]
+                        if s.get("image_path") and os.path.exists(s.get("image_path", ""))]
         
         if valid_samples:
-            ds = samples_to_dataset(valid_samples, "image")
-            if ds and "_image_path" in ds.column_names:
-                # Rename _image_path to image and cast to Image type
-                ds = ds.rename_column("_image_path", "image")
+            image_data = {
+                "image": [],
+                "caption": [],
+                "question": [],
+                "answer": [],
+                "choices": [],
+                "category": [],
+                "source": [],
+            }
+            
+            for s in valid_samples:
+                image_data["image"].append(s.get("image_path"))
+                image_data["caption"].append(s.get("caption"))
+                image_data["question"].append(s.get("question"))
+                image_data["answer"].append(s.get("answer"))
+                image_data["choices"].append(s.get("choices"))
+                image_data["category"].append(s.get("category"))
+                image_data["source"].append(s.get("source"))
+            
+            try:
+                ds = Dataset.from_dict(image_data)
                 ds = ds.cast_column("image", HFImage())
                 datasets_dict["image"] = ds
-                logger.info(f"  Image dataset: {len(ds)} samples, {len(ds.column_names)} columns")
-                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
+                logger.info(f"  ✓ Image: {len(ds)} samples")
+                logger.info(f"    Columns: {ds.column_names}")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to create image dataset: {e}")
     
-    # Audio split - keep ALL original columns + audio
+    # AUDIO DATASET
+    # Schema: audio, transcription, speaker_id, duration, language, gender, category, source
     if all_samples["audio"]:
-        # Filter to only samples with valid audio paths
+        logger.info("\n🔊 Creating AUDIO dataset...")
         valid_samples = [s for s in all_samples["audio"]
-                        if s.get("_audio_path") and os.path.exists(s.get("_audio_path", ""))]
+                        if s.get("audio_path") and os.path.exists(s.get("audio_path", ""))]
         
         if valid_samples:
-            ds = samples_to_dataset(valid_samples, "audio")
-            if ds and "_audio_path" in ds.column_names:
-                # Rename _audio_path to audio and cast to Audio type
-                ds = ds.rename_column("_audio_path", "audio")
+            audio_data = {
+                "audio": [],
+                "transcription": [],
+                "speaker_id": [],
+                "duration": [],
+                "language": [],
+                "gender": [],
+                "category": [],
+                "source": [],
+            }
+            
+            for s in valid_samples:
+                audio_data["audio"].append(s.get("audio_path"))
+                audio_data["transcription"].append(s.get("transcription"))
+                audio_data["speaker_id"].append(s.get("speaker_id"))
+                audio_data["duration"].append(s.get("duration"))
+                audio_data["language"].append(s.get("language"))
+                audio_data["gender"].append(s.get("gender"))
+                audio_data["category"].append(s.get("category"))
+                audio_data["source"].append(s.get("source"))
+            
+            try:
+                ds = Dataset.from_dict(audio_data)
                 ds = ds.cast_column("audio", HFAudio())
                 datasets_dict["audio"] = ds
-                logger.info(f"  Audio dataset: {len(ds)} samples, {len(ds.column_names)} columns")
-                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
+                logger.info(f"  ✓ Audio: {len(ds)} samples")
+                logger.info(f"    Columns: {ds.column_names}")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to create audio dataset: {e}")
     
-    # Video split - keep ALL original columns + video path
+    # VIDEO DATASET
+    # Schema: video, caption, question, answer, prompt, duration, category, source
     if all_samples["video"]:
-        # Filter to only samples with valid video paths
+        logger.info("\n🎬 Creating VIDEO dataset...")
         valid_samples = [s for s in all_samples["video"]
-                        if s.get("_video_path") and os.path.exists(s.get("_video_path", ""))]
+                        if s.get("video_path") and os.path.exists(s.get("video_path", ""))]
         
         if valid_samples:
-            ds = samples_to_dataset(valid_samples, "video")
-            if ds and "_video_path" in ds.column_names:
-                # Rename _video_path to video_path for clarity
-                ds = ds.rename_column("_video_path", "video")
-                datasets_dict["video"] = ds
-                logger.info(f"  Video dataset: {len(ds)} samples, {len(ds.column_names)} columns")
-                logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
+            video_data = {
+                "video": [],
+                "caption": [],
+                "question": [],
+                "answer": [],
+                "prompt": [],
+                "duration": [],
+                "category": [],
+                "source": [],
+            }
+            
+            for s in valid_samples:
+                video_data["video"].append(s.get("video_path"))
+                video_data["caption"].append(s.get("caption"))
+                video_data["question"].append(s.get("question"))
+                video_data["answer"].append(s.get("answer"))
+                video_data["prompt"].append(s.get("prompt"))
+                video_data["duration"].append(s.get("duration"))
+                video_data["category"].append(s.get("category"))
+                video_data["source"].append(s.get("source"))
+            
+            try:
+                # Note: Video stays as path string - HF doesn't have native Video type
+                datasets_dict["video"] = Dataset.from_dict(video_data)
+                logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples")
+                logger.info(f"    Columns: {datasets_dict['video'].column_names}")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to create video dataset: {e}")
     
     # Merge with existing datasets if --hf flag was used
     if existing_datasets:
