@@ -1168,6 +1168,19 @@ class XoronModel(XoronPreTrainedModel):
                     if component is not None:
                         with safe_open(comp_path, framework="pt") as f:
                             state_dict = {k: f.get_tensor(k) for k in f.keys()}
+                        
+                        # Handle vocab size mismatch for LLM component
+                        if comp_name == 'llm':
+                            # Check if embed_tokens size differs
+                            embed_key = 'model.embed_tokens.weight'
+                            if embed_key in state_dict:
+                                saved_vocab_size = state_dict[embed_key].shape[0]
+                                current_vocab_size = component.model.embed_tokens.weight.shape[0]
+                                
+                                if saved_vocab_size != current_vocab_size:
+                                    print(f"   📐 Resizing embeddings: {current_vocab_size} -> {saved_vocab_size}")
+                                    component.resize_token_embeddings(saved_vocab_size)
+                        
                         component.load_state_dict(state_dict, strict=False)
                         print(f"   ✅ Loaded {comp_name}")
             
