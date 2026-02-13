@@ -516,16 +516,18 @@ def train_image_diffusion_step(generator, images, text_context, target_size=256,
         return None
 
 
-def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None):
+def train_video_diffusion_step(video_generator, video_frames, text_context, target_size=256, sample_types=None, video_sample_indices=None):
     """
     Train video diffusion on video data with multi-scale support.
     
     Args:
         video_generator: The video generator model
         video_frames: Video tensor [B, T, C, H, W] from collate (pre-filtered to valid videos)
-        text_context: Text embeddings [B_full, seq_len, dim] (may be larger than video_frames batch)
+        text_context: Text embeddings - should be pre-aligned by caller using video_sample_indices
+                     If passed from trainer, this is already video_text_embeds[batch_video_sample_indices]
         target_size: Target spatial size for this training step (multi-scale)
         sample_types: List of sample types ALIGNED with video_frames (from batch['video_sample_types'])
+        video_sample_indices: Optional - indices into full text_context if not pre-aligned by caller
     """
     if video_generator is None or video_frames is None:
         return None
@@ -545,18 +547,25 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         video_frames = video_frames.to(device=gen_device, dtype=gen_dtype)
         
         # Handle text_context alignment:
-        # - video_frames has B_video samples (already filtered by collate)
-        # - text_context may have B_full samples (full batch)
-        # - sample_types should be aligned with video_frames (B_video)
+        # The trainer already pre-aligns text_context using video_sample_indices before calling this function.
+        # But in case text_context is not pre-aligned, we handle it here.
         B_video = video_frames.shape[0]
         
-        # Filter text_context to match video_frames size if needed
-        # When sample_types is provided and aligned, we assume text_context needs slicing
         if text_context.shape[0] != B_video:
-            # text_context is larger - take first B_video samples
-            # (This assumes video samples are at the start, which may not be true in all cases)
-            # Better: use video_sample_indices passed from collate, but for now truncate
-            text_context = text_context[:B_video]
+            if video_sample_indices is not None and len(video_sample_indices) == B_video:
+                # Use the indices to select the correct text embeddings
+                indices = torch.tensor(video_sample_indices, dtype=torch.long, device=text_context.device)
+                # Ensure indices are valid
+                indices = indices.clamp(0, text_context.shape[0] - 1)
+                text_context = text_context[indices]
+            elif text_context.shape[0] > B_video:
+                # Warning: This is a fallback - proper indexing should be used
+                # Truncate to match video batch size
+                text_context = text_context[:B_video]
+            else:
+                # text_context is smaller than video batch - can't proceed safely
+                print(f"      ⚠️ text_context ({text_context.shape[0]}) < video_frames ({B_video}), skipping!")
+                return None
         
         text_context = text_context.to(device=gen_device, dtype=gen_dtype)
 
@@ -587,12 +596,15 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         if C != 3 or T < 1:
             return None
         
-        # Limit frames during training (max 16 frames)
-        max_train_frames = 16
-        if T > max_train_frames:
-            frame_indices = torch.linspace(0, T - 1, max_train_frames, device=gen_device).long()
+        # Continuous-scale training: Use the model's configured max_frames
+        # This respects video_max_frames from XoronConfig (default 24)
+        # Only limit if T exceeds model capacity (num_frames attribute)
+        model_max_frames = getattr(video_generator, 'num_frames', None) or getattr(video_generator, 'max_frames', 32)
+        if T > model_max_frames:
+            # Subsample frames uniformly to fit model capacity
+            frame_indices = torch.linspace(0, T - 1, model_max_frames, device=gen_device).long()
             video_frames = video_frames[:, :, frame_indices]
-            T = max_train_frames
+            T = model_max_frames
 
         # Filter to valid (non-zero) video frames
         frame_means = video_frames.abs().mean(dim=(1, 2, 3, 4))
@@ -676,16 +688,17 @@ def train_video_diffusion_step(video_generator, video_frames, text_context, targ
         return None
 
 
-def _truncate_audio_for_memory(audio_features: torch.Tensor, max_samples: int = 80000) -> torch.Tensor:
+def _truncate_audio_for_memory(audio_features: torch.Tensor, max_samples: int = 160000) -> torch.Tensor:
     """
     Truncate audio to save GPU memory during training.
     
-    For raw waveform at 16kHz, 80000 samples = 5 seconds of audio.
-    This is enough for training while preventing OOM.
+    For raw waveform at 16kHz:
+    - 160000 samples = 10 seconds of audio (default, supports voice cloning)
+    - 80000 samples = 5 seconds (for encoder training if memory limited)
     
     Args:
         audio_features: [B, T] raw waveform or [B, mel_bins, time] mel spectrogram
-        max_samples: Maximum number of samples/frames to keep
+        max_samples: Maximum number of samples/frames to keep (default: 160000 = 10 seconds)
         
     Returns:
         Truncated audio tensor
@@ -731,8 +744,8 @@ def train_voice_asr_step(audio_encoder, audio_features, text_embeds, sample_type
         enc_dtype = next(audio_encoder.parameters()).dtype
         
         # MEMORY OPTIMIZATION: Truncate long audio to prevent OOM
-        # 80000 samples = 5 seconds at 16kHz - enough for training
-        audio_features = _truncate_audio_for_memory(audio_features, max_samples=80000)
+        # 160000 samples = 10 seconds at 16kHz - supports voice cloning
+        audio_features = _truncate_audio_for_memory(audio_features, max_samples=160000)
         
         # Match input dtype to model dtype to avoid "Input type (float) and bias type (c10::Half)" errors
         audio_features = audio_features.to(device=enc_device, dtype=enc_dtype)
@@ -848,8 +861,8 @@ def train_voice_tts_step(
         dec_dtype = next(audio_decoder.parameters()).dtype
         
         # MEMORY OPTIMIZATION: Truncate long audio to prevent OOM
-        # 80000 samples = 5 seconds at 16kHz - enough for training
-        target_audio = _truncate_audio_for_memory(target_audio, max_samples=80000)
+        # 160000 samples = 10 seconds at 16kHz - supports longer speech generation
+        target_audio = _truncate_audio_for_memory(target_audio, max_samples=160000)
         
         # Match input dtype to model dtype to avoid "mat1 and mat2 must have the same dtype" errors
         target_audio = target_audio.to(device=dec_device, dtype=dec_dtype)
@@ -1047,9 +1060,9 @@ def train_waveform_decoder_step(
             return None
         
         # MEMORY OPTIMIZATION: Truncate waveform to prevent OOM
-        # 48000 samples = 3 seconds at 16kHz for waveform decoder (smaller than encoder)
-        # Waveform decoder is most memory-intensive, so use shorter clips
-        target_waveform = _truncate_audio_for_memory(target_waveform, max_samples=48000)
+        # 160000 samples = 10 seconds at 16kHz for waveform decoder
+        # Supports up to 10 seconds of audio for voice cloning and longer speech generation
+        target_waveform = _truncate_audio_for_memory(target_waveform, max_samples=160000)
         
         # Get waveform decoder device and dtype
         dec_device = next(waveform_decoder.parameters()).device

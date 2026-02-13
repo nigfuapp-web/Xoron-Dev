@@ -149,7 +149,8 @@ class XoronConfig:
     # Audio Configuration (SOTA: Raw Waveform Tokenizer, MAS, RMLA, Zero-Shot Cloning)
     audio_sample_rate: int = 16000
     audio_n_mels: int = 80
-    audio_max_length: int = 1000  # Max audio sequence length (frames)
+    audio_max_length: int = 625  # Max audio sequence length (frames) - 10 seconds at 16kHz with hop=256
+    audio_max_waveform_samples: int = 160000  # Max raw waveform samples (10 seconds at 16kHz)
     audio_num_speakers: int = 256  # Speaker embedding size
     use_raw_waveform: bool = True  # Use raw waveform tokenizer instead of mel spectrogram
     audio_kv_lora_rank: int = 256  # KV compression rank for RMLA
@@ -270,6 +271,7 @@ class XoronConfig:
             'audio_sample_rate': self.audio_sample_rate,
             'audio_n_mels': self.audio_n_mels,
             'audio_max_length': self.audio_max_length,
+            'audio_max_waveform_samples': self.audio_max_waveform_samples,
             'audio_num_speakers': self.audio_num_speakers,
             'use_raw_waveform': self.use_raw_waveform,
             'audio_kv_lora_rank': self.audio_kv_lora_rank,

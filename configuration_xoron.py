@@ -155,7 +155,8 @@ class XoronConfig(PreTrainedConfig):
         # Audio Configuration
         audio_sample_rate: int = 16000,
         audio_n_mels: int = 80,
-        audio_max_length: int = 1000,
+        audio_max_length: int = 625,  # Max mel frames (10 seconds at 16kHz with hop=256)
+        audio_max_waveform_samples: int = 160000,  # Max raw waveform (10 seconds at 16kHz)
         audio_num_speakers: int = 256,
         use_raw_waveform: bool = True,
         audio_kv_lora_rank: int = 256,
@@ -304,6 +305,7 @@ class XoronConfig(PreTrainedConfig):
         self.audio_sample_rate = audio_sample_rate
         self.audio_n_mels = audio_n_mels
         self.audio_max_length = audio_max_length
+        self.audio_max_waveform_samples = audio_max_waveform_samples
         self.audio_num_speakers = audio_num_speakers
         self.use_raw_waveform = use_raw_waveform
         self.audio_kv_lora_rank = audio_kv_lora_rank
