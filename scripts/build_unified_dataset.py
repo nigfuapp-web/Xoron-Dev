@@ -1247,14 +1247,15 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing audio dataset: {name}")
     
     try:
-        # Use split slicing to ONLY download the samples we need (not the whole dataset)
-        # e.g., "train[:50]" only downloads first 50 samples
-        split_with_limit = f"{config['split']}[:{max_samples}]"
+        # Download MORE than needed to account for invalid/failed samples
+        # We want max_samples VALID samples, so download 3x to have buffer
+        download_limit = max_samples * 3
+        split_with_limit = f"{config['split']}[:{download_limit}]"
         load_kwargs = {"path": config["path"], "split": split_with_limit, "streaming": False}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
-        logger.info(f"  ⬇️ Downloading {name} (only first {max_samples} samples)...")
+        logger.info(f"  ⬇️ Downloading {name} (up to {download_limit} samples, need {max_samples} valid)...")
         ds = load_dataset(**load_kwargs)
         
         # Disable automatic audio decoding - use our custom soundfile/librosa decoder
@@ -1268,6 +1269,7 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
         
         count = 0
         for idx, sample in enumerate(ds):
+            # Stop once we have enough VALID samples
             if count >= max_samples:
                 break
             
