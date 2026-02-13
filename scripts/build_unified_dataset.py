@@ -100,7 +100,7 @@ except Exception as e:
         print(f"⚠️ Could not get HF_TOKEN from Kaggle secrets: {e}")
 
 # Dataset name on HuggingFace
-HF_DATASET_NAME = "nigfuapp-web/moe-data"
+HF_DATASET_NAME = "Backup-bdg/moe-training"
 
 # Base directory for temporary storage (Kaggle uses /tmp with 150GB)
 BASE_DIR = "/tmp/xoron_dataset_build"
