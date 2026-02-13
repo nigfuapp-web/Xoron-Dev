@@ -1247,18 +1247,15 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing audio dataset: {name}")
     
     try:
-        # NO STREAMING - download in batch (way faster than per-sample HTTP requests)
-        load_kwargs = {"path": config["path"], "split": config["split"], "streaming": False}
+        # Use split slicing to ONLY download the samples we need (not the whole dataset)
+        # e.g., "train[:50]" only downloads first 50 samples
+        split_with_limit = f"{config['split']}[:{max_samples}]"
+        load_kwargs = {"path": config["path"], "split": split_with_limit, "streaming": False}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
-        logger.info(f"  ⬇️ Downloading {name} (batch mode - faster than streaming)...")
+        logger.info(f"  ⬇️ Downloading {name} (only first {max_samples} samples)...")
         ds = load_dataset(**load_kwargs)
-        
-        # Limit dataset size BEFORE processing
-        if len(ds) > max_samples:
-            ds = ds.select(range(max_samples))
-            logger.info(f"  📊 Limited to {max_samples} samples")
         
         # Disable automatic audio decoding - use our custom soundfile/librosa decoder
         # This avoids torchcodec dependency
