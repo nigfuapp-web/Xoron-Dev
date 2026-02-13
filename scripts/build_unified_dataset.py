@@ -450,14 +450,35 @@ def save_image_pil(image, output_path: str) -> Optional[str]:
 
 
 # ============================================================================
-# SAMPLE EXTRACTION FUNCTIONS - STANDARDIZED SCHEMAS
+# SAMPLE EXTRACTION - MATCHING YOUR EXISTING CODE'S EXPECTED COLUMNS
 # ============================================================================
 
-# Standardized schemas for each modality
-# Text: instruction, response, system, conversations, context
-# Image: image, caption, question, answer, choices
-# Audio: audio, transcription, speaker_id, duration, language
-# Video: video, caption, question, answer, duration
+# Standardized column names that match your formatters.py and dataset.py:
+#
+# TEXT: instruction, response, system, conversations, context, category, source
+#
+# IMAGE: image, caption, question, answer, choices, category, source
+#   - caption: from caption, text, caption_1, image_description, image_uncanny_description
+#   - question: from question
+#   - answer: from answer (can be int index into choices)
+#   - choices: from choices (list)
+#
+# AUDIO: audio, text, speaker_id, sampling_rate, gender, age, language, emotion, category, source
+#   - text: from text, transcript, transcription, sentence, normalized_text, text_normalized, raw_text
+#   - speaker_id: from speaker_id, speaker, spk_id, speaker_name (also extract from path)
+#   - sampling_rate: from sampling_rate, sample_rate
+#   - gender: from gender, sex
+#   - age: from age
+#   - language: from language, lang, locale
+#   - emotion: from emotion, label, emotion_label
+#
+# VIDEO: video, caption, prompt, question, answer, options, duration, category, source
+#   - caption: from caption, text, description, name, page_dir
+#   - prompt: from Prompt, prompt, caption, text, description
+#   - question: from question
+#   - answer: from answer, a
+#   - options: from options (list like ["A. text", "B. text"])
+#   - duration: from duration
 
 def get_field(sample: Dict, field_names: List[str], default=None):
     """Get first matching field from sample."""
@@ -472,7 +493,7 @@ def get_field(sample: Dict, field_names: List[str], default=None):
 
 
 def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Dict]:
-    """Extract text sample with standardized schema."""
+    """Extract text sample matching your code's expected format."""
     result = {
         "instruction": None,
         "response": None,
@@ -483,23 +504,23 @@ def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Di
         "source": source,
     }
     
-    # Try to get instruction/prompt
+    # Instruction/prompt fields
     result["instruction"] = get_field(sample, [
-        'instruction', 'prompt', 'query', 'question', 'input', 'user', 'human'
+        'instruction', 'prompt', 'query', 'question', 'input', 'user', 'human', 'problem', 'task'
     ])
     
-    # Try to get response/answer
+    # Response/answer fields  
     result["response"] = get_field(sample, [
-        'response', 'output', 'answer', 'completion', 'assistant', 'gpt', 'solution'
+        'response', 'output', 'answer', 'completion', 'assistant', 'gpt', 'solution', 'code', 'canonical_solution'
     ])
     
-    # Try to get system prompt
+    # System prompt
     result["system"] = get_field(sample, ['system', 'system_prompt', 'system_message'])
     
-    # Try to get context
-    result["context"] = get_field(sample, ['context', 'document', 'passage', 'text'])
+    # Context/document
+    result["context"] = get_field(sample, ['context', 'document', 'passage', 'text', 'description'])
     
-    # Handle conversation format
+    # Conversations (multi-turn)
     convs = get_field(sample, ['conversations', 'messages', 'dialogue', 'chat'])
     if convs and isinstance(convs, list):
         try:
@@ -507,7 +528,7 @@ def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Di
         except:
             result["conversations"] = str(convs)
         
-        # Also try to extract first instruction/response from conversations
+        # Extract first turn as instruction/response if not already set
         if not result["instruction"] and len(convs) >= 1:
             first = convs[0]
             if isinstance(first, dict):
@@ -517,13 +538,7 @@ def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Di
             if isinstance(second, dict):
                 result["response"] = second.get('content', second.get('value', second.get('text', '')))
     
-    # Handle code-specific fields
-    if not result["instruction"]:
-        result["instruction"] = get_field(sample, ['problem', 'task', 'description'])
-    if not result["response"]:
-        result["response"] = get_field(sample, ['code', 'solution', 'canonical_solution'])
-    
-    # Skip if we have nothing useful
+    # Skip empty
     if not result["instruction"] and not result["response"] and not result["conversations"] and not result["context"]:
         return None
     
@@ -531,28 +546,27 @@ def extract_text_sample(sample: Dict, category: str, source: str) -> Optional[Di
 
 
 def extract_image_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[Any], Optional[str]]:
-    """Extract image sample with standardized schema. Returns (metadata, image_data, image_url)."""
+    """Extract image sample matching your formatters (format_image_caption_sample, format_image_vqa_sample)."""
     result = {
         "caption": None,
-        "question": None,
+        "question": None, 
         "answer": None,
         "choices": None,
         "category": category,
         "source": source,
     }
     
-    # Get caption/description
+    # Caption fields (matching format_image_caption_sample)
     result["caption"] = get_field(sample, [
-        'caption', 'description', 'text', 'label', 'title', 'sentence'
+        'caption', 'text', 'caption_1', 'image_description', 'image_uncanny_description',
+        'description', 'label', 'title', 'sentence'
     ])
     
-    # Get question (for VQA)
+    # VQA fields (matching format_image_vqa_sample)
     result["question"] = get_field(sample, ['question', 'query', 'prompt'])
-    
-    # Get answer (for VQA)
     result["answer"] = get_field(sample, ['answer', 'response', 'label', 'output'])
     
-    # Get choices (for multiple choice)
+    # Choices for multiple choice VQA
     choices = get_field(sample, ['choices', 'options', 'candidates'])
     if choices:
         try:
@@ -564,15 +578,13 @@ def extract_image_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
     image_data = None
     image_url = None
     
-    image_fields = ['image', 'img', 'picture', 'photo', 'source_image', 'input_image']
-    for field in image_fields:
+    for field in ['image', 'img', 'picture', 'photo', 'source_image', 'input_image']:
         if field in sample and sample[field] is not None:
             image_data = sample[field]
             break
     
     if not image_data:
-        url_fields = ['image_url', 'url', 'img_url', 'picture_url']
-        for field in url_fields:
+        for field in ['image_url', 'url', 'img_url', 'picture_url']:
             if field in sample:
                 url = sample[field]
                 if isinstance(url, str) and url.startswith('http'):
@@ -583,50 +595,118 @@ def extract_image_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
 
 
 def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[Any], Optional[str]]:
-    """Extract audio sample with standardized schema. Returns (metadata, audio_data, audio_path)."""
+    """
+    Extract audio sample matching your formatters:
+    - format_voice_asr_sample: uses text, transcript, transcription, sentence
+    - format_voice_tts_sample: uses text_normalized, text, transcript, normalized_text, sentence
+                               speaker_id, speaker, spk_id, speaker_name (+ path extraction)
+    - format_voice_emotion_sample: uses text, raw_text, normalized_text, transcript
+                                   speaker_id, audio_id, gender, age, language
+                                   emotion, label, emotion_label, arousal, valence, dominance
+    """
     result = {
-        "transcription": None,
-        "speaker_id": None,
-        "duration": None,
-        "language": None,
+        # Transcription - ALL the field names your code checks
+        "text": None,  # Primary field your code uses
+        
+        # Speaker info - ALL fields your code checks  
+        "speaker_id": None,  # Unified: speaker_id, speaker, spk_id, speaker_name all -> speaker_id
+        
+        # Audio metadata
+        "sampling_rate": None,
         "gender": None,
+        "age": None,
+        "language": None,
+        
+        # Emotion fields (for voice_emotion)
+        "emotion": None,
+        "arousal": None,
+        "valence": None,
+        "dominance": None,
+        
+        # Tracking
         "category": category,
         "source": source,
     }
     
-    # Get transcription
-    result["transcription"] = get_field(sample, [
-        'transcription', 'transcript', 'text', 'sentence', 'normalized_text', 
-        'raw_text', 'caption', 'description'
+    # Text/transcription - try all fields your code uses
+    result["text"] = get_field(sample, [
+        'text', 'text_normalized', 'normalized_text', 'transcript', 'transcription', 
+        'sentence', 'raw_text', 'caption', 'description'
     ])
     
-    # Get speaker info
-    result["speaker_id"] = get_field(sample, ['speaker_id', 'speaker', 'spk_id', 'client_id'])
+    # Speaker ID - unify all variations to speaker_id
+    speaker = get_field(sample, ['speaker_id', 'speaker', 'spk_id', 'speaker_name', 'audio_id', 'client_id'])
+    
+    # Also try to extract from audio path (LibriTTS format: speaker/chapter/utterance)
+    if speaker is None:
+        audio_info = sample.get('audio', {})
+        if isinstance(audio_info, dict):
+            audio_path = audio_info.get('path', '')
+            if isinstance(audio_path, str) and '/' in audio_path:
+                parts = audio_path.split('/')
+                if len(parts) >= 3:
+                    speaker = parts[-3]
+                elif len(parts) >= 2:
+                    speaker = parts[-2]
+    
+    if speaker is not None:
+        result["speaker_id"] = str(speaker)
+    
+    # Sampling rate
+    sr = get_field(sample, ['sampling_rate', 'sample_rate'])
+    if sr is not None:
+        try:
+            result["sampling_rate"] = int(sr)
+        except:
+            pass
+    
+    # Gender, age, language
     result["gender"] = get_field(sample, ['gender', 'sex'])
+    result["age"] = get_field(sample, ['age'])
     result["language"] = get_field(sample, ['language', 'lang', 'locale'])
     
-    # Get duration
-    duration = get_field(sample, ['duration', 'length', 'audio_length'])
-    if duration is not None:
+    # Emotion fields
+    result["emotion"] = get_field(sample, ['emotion', 'label', 'emotion_label'])
+    
+    arousal = get_field(sample, ['arousal', 'activation'])
+    if arousal is not None:
         try:
-            result["duration"] = float(duration)
+            result["arousal"] = float(arousal)
         except:
-            result["duration"] = None
+            pass
+    
+    valence = get_field(sample, ['valence', 'pleasure'])
+    if valence is not None:
+        try:
+            result["valence"] = float(valence)
+        except:
+            pass
+            
+    dominance = get_field(sample, ['dominance', 'power'])
+    if dominance is not None:
+        try:
+            result["dominance"] = float(dominance)
+        except:
+            pass
     
     # Extract audio data
     audio_data = None
     audio_path = None
     
-    audio_fields = ['audio', 'speech', 'sound', 'waveform']
-    for field in audio_fields:
+    for field in ['audio', 'speech', 'sound', 'waveform']:
         if field in sample and sample[field] is not None:
             audio = sample[field]
             if isinstance(audio, dict):
                 if 'bytes' in audio and audio['bytes']:
                     audio_data = audio['bytes']
+                    # Also get sampling_rate from audio dict
+                    if result["sampling_rate"] is None and 'sampling_rate' in audio:
+                        result["sampling_rate"] = audio['sampling_rate']
                     break
                 elif 'array' in audio:
                     audio_data = audio
+                    if result["sampling_rate"] is None and 'sampling_rate' in audio:
+                        result["sampling_rate"] = audio['sampling_rate']
                     break
                 elif 'path' in audio and audio['path']:
                     audio_path = audio['path']
@@ -639,51 +719,87 @@ def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
 
 
 def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Extract video sample with standardized schema. Returns (metadata, video_url)."""
+    """
+    Extract video sample matching your formatters:
+    - format_video_caption_sample: question, options, answer/a, domain, sub_category, duration
+    - format_video_generation_sample: caption, text, description, Prompt, prompt, name, page_dir
+    - format_image_to_video_sample: Text_Prompt, prompt, short_caption, dense_caption, 
+                                     Brief Description, Detailed Description, etc.
+    """
     result = {
+        # Caption/prompt fields
         "caption": None,
+        "prompt": None,
+        
+        # QA fields (Video-MME style)
         "question": None,
         "answer": None,
-        "prompt": None,
+        "options": None,  # List like ["A. text", "B. text"]
+        
+        # Metadata
         "duration": None,
+        "domain": None,
+        "sub_category": None,
+        
+        # Tracking
         "category": category,
         "source": source,
     }
     
-    # Get caption/description
+    # Caption - for video description
     result["caption"] = get_field(sample, [
-        'caption', 'description', 'text', 'title', 'name'
+        'caption', 'text', 'description', 'title', 'name', 'short_caption', 'dense_caption',
+        'Brief Description', 'Detailed Description', 'Summarized Description'
     ])
     
-    # Get prompt (for generation)
-    result["prompt"] = get_field(sample, ['prompt', 'instruction', 'query'])
+    # Handle caption dict (Vript format)
+    if result["caption"] is None:
+        caption_obj = sample.get('caption')
+        if isinstance(caption_obj, dict):
+            result["caption"] = caption_obj.get('content', caption_obj.get('shot_type', ''))
     
-    # Get question/answer (for QA)
+    # Prompt - for generation
+    result["prompt"] = get_field(sample, [
+        'Prompt', 'prompt', 'Text_Prompt', 'instruction', 'query'
+    ])
+    
+    # QA fields (Video-MME format)
     result["question"] = get_field(sample, ['question', 'query'])
-    result["answer"] = get_field(sample, ['answer', 'response'])
+    result["answer"] = get_field(sample, ['answer', 'a'])
     
-    # Get duration
+    # Options list
+    options = get_field(sample, ['options', 'choices'])
+    if options:
+        try:
+            result["options"] = json.dumps(options) if isinstance(options, list) else str(options)
+        except:
+            result["options"] = str(options)
+    
+    # Metadata
+    result["domain"] = get_field(sample, ['domain', 'category'])
+    result["sub_category"] = get_field(sample, ['sub_category', 'subcategory'])
+    
     duration = get_field(sample, ['duration', 'length', 'video_length'])
     if duration is not None:
         try:
-            result["duration"] = float(duration)
+            result["duration"] = str(duration)
         except:
-            result["duration"] = None
+            pass
     
     # Extract video URL
     video_url = None
-    url_fields = ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'media_url', 'contentUrl']
     
-    for field in url_fields:
+    # Direct URL fields
+    for field in ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'media_url', 'contentUrl', 'column1']:
         if field in sample:
             url = sample[field]
             if isinstance(url, str) and (url.startswith('http') or url.startswith('//')):
                 video_url = 'https:' + url if url.startswith('//') else url
                 break
     
-    # Check for YouTube video ID
+    # YouTube video ID
     if not video_url:
-        for field in ['video_id', 'youtube_id', 'clip_id', 'ytid']:
+        for field in ['videoID', 'video_id', 'youtube_id', 'clip_id', 'ytid']:
             if field in sample:
                 vid_id = str(sample[field])
                 if vid_id and len(vid_id) >= 11:
@@ -1153,7 +1269,7 @@ def build_unified_dataset(args):
                 logger.error(f"  ✗ Failed to create image dataset: {e}")
     
     # AUDIO DATASET
-    # Schema: audio, transcription, speaker_id, duration, language, gender, category, source
+    # Schema: audio, text, speaker_id, sampling_rate, gender, age, language, emotion, arousal, valence, dominance, category, source
     if all_samples["audio"]:
         logger.info("\n🔊 Creating AUDIO dataset...")
         valid_samples = [s for s in all_samples["audio"]
@@ -1162,22 +1278,32 @@ def build_unified_dataset(args):
         if valid_samples:
             audio_data = {
                 "audio": [],
-                "transcription": [],
+                "text": [],  # Unified transcription field
                 "speaker_id": [],
-                "duration": [],
-                "language": [],
+                "sampling_rate": [],
                 "gender": [],
+                "age": [],
+                "language": [],
+                "emotion": [],
+                "arousal": [],
+                "valence": [],
+                "dominance": [],
                 "category": [],
                 "source": [],
             }
             
             for s in valid_samples:
                 audio_data["audio"].append(s.get("audio_path"))
-                audio_data["transcription"].append(s.get("transcription"))
+                audio_data["text"].append(s.get("text"))
                 audio_data["speaker_id"].append(s.get("speaker_id"))
-                audio_data["duration"].append(s.get("duration"))
-                audio_data["language"].append(s.get("language"))
+                audio_data["sampling_rate"].append(s.get("sampling_rate"))
                 audio_data["gender"].append(s.get("gender"))
+                audio_data["age"].append(s.get("age"))
+                audio_data["language"].append(s.get("language"))
+                audio_data["emotion"].append(s.get("emotion"))
+                audio_data["arousal"].append(s.get("arousal"))
+                audio_data["valence"].append(s.get("valence"))
+                audio_data["dominance"].append(s.get("dominance"))
                 audio_data["category"].append(s.get("category"))
                 audio_data["source"].append(s.get("source"))
             
@@ -1185,13 +1311,13 @@ def build_unified_dataset(args):
                 ds = Dataset.from_dict(audio_data)
                 ds = ds.cast_column("audio", HFAudio())
                 datasets_dict["audio"] = ds
-                logger.info(f"  ✓ Audio: {len(ds)} samples")
+                logger.info(f"  ✓ Audio: {len(ds)} samples (with embedded audio files)")
                 logger.info(f"    Columns: {ds.column_names}")
             except Exception as e:
                 logger.error(f"  ✗ Failed to create audio dataset: {e}")
     
     # VIDEO DATASET
-    # Schema: video, caption, question, answer, prompt, duration, category, source
+    # Schema: video, caption, question, answer, prompt, options, duration, domain, sub_category, category, source
     if all_samples["video"]:
         logger.info("\n🎬 Creating VIDEO dataset...")
         valid_samples = [s for s in all_samples["video"]
@@ -1204,7 +1330,10 @@ def build_unified_dataset(args):
                 "question": [],
                 "answer": [],
                 "prompt": [],
+                "options": [],
                 "duration": [],
+                "domain": [],
+                "sub_category": [],
                 "category": [],
                 "source": [],
             }
@@ -1215,15 +1344,26 @@ def build_unified_dataset(args):
                 video_data["question"].append(s.get("question"))
                 video_data["answer"].append(s.get("answer"))
                 video_data["prompt"].append(s.get("prompt"))
+                video_data["options"].append(s.get("options"))
                 video_data["duration"].append(s.get("duration"))
+                video_data["domain"].append(s.get("domain"))
+                video_data["sub_category"].append(s.get("sub_category"))
                 video_data["category"].append(s.get("category"))
                 video_data["source"].append(s.get("source"))
             
             try:
-                # Note: Video stays as path string - HF doesn't have native Video type
+                # Use HF Video type to store actual video files
+                from datasets import Video as HFVideo
+                ds = Dataset.from_dict(video_data)
+                ds = ds.cast_column("video", HFVideo())
+                datasets_dict["video"] = ds
+                logger.info(f"  ✓ Video: {len(ds)} samples (with embedded .mp4 files)")
+                logger.info(f"    Columns: {ds.column_names}")
+            except ImportError:
+                # Fallback if Video type not available (older datasets version)
+                logger.warning("  ⚠ HF Video type not available, storing as paths")
                 datasets_dict["video"] = Dataset.from_dict(video_data)
-                logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples")
-                logger.info(f"    Columns: {datasets_dict['video'].column_names}")
+                logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples (as paths)")
             except Exception as e:
                 logger.error(f"  ✗ Failed to create video dataset: {e}")
     
