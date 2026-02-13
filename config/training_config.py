@@ -93,7 +93,7 @@ class TrainingConfig:
     
     logging_steps: int = 50  # Used in trainer_state.json for HuggingFace compatibility
     
-    max_per_dataset_eval: int = 2  # Samples per dataset for eval (e.g., 2 from each dataset)
+    max_per_dataset_eval: int = 1  # Samples per dataset for eval (e.g., 2 from each dataset)
 
     # Device settings
     device: str = field(default_factory=lambda: "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
