@@ -1171,15 +1171,31 @@ class XoronModel(XoronPreTrainedModel):
                         
                         # Handle vocab size mismatch for LLM component
                         if comp_name == 'llm':
-                            # Check if embed_tokens size differs
                             embed_key = 'model.embed_tokens.weight'
+                            lm_head_key = 'lm_head.weight'
+                            
                             if embed_key in state_dict:
                                 saved_vocab_size = state_dict[embed_key].shape[0]
+                                hidden_size = state_dict[embed_key].shape[1]
                                 current_vocab_size = component.model.embed_tokens.weight.shape[0]
                                 
                                 if saved_vocab_size != current_vocab_size:
                                     print(f"   📐 Resizing embeddings: {current_vocab_size} -> {saved_vocab_size}")
-                                    component.resize_token_embeddings(saved_vocab_size)
+                                    # Manually resize embed_tokens
+                                    new_embed = nn.Embedding(saved_vocab_size, hidden_size)
+                                    new_embed.weight.data = state_dict[embed_key]
+                                    component.model.embed_tokens = new_embed
+                                    
+                                    # Manually resize lm_head if present
+                                    if lm_head_key in state_dict:
+                                        new_lm_head = nn.Linear(hidden_size, saved_vocab_size, bias=False)
+                                        new_lm_head.weight.data = state_dict[lm_head_key]
+                                        component.lm_head = new_lm_head
+                                    
+                                    # Remove these keys from state_dict since we already loaded them
+                                    del state_dict[embed_key]
+                                    if lm_head_key in state_dict:
+                                        del state_dict[lm_head_key]
                         
                         component.load_state_dict(state_dict, strict=False)
                         print(f"   ✅ Loaded {comp_name}")
