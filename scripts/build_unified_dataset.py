@@ -612,10 +612,27 @@ def extract_image_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
     
     for field in ['image', 'img', 'picture', 'photo', 'source_image', 'input_image']:
         if field in sample and sample[field] is not None:
-            image_data = sample[field]
+            val = sample[field]
+            # Skip integers, floats, and plain strings (these are IDs or paths, not image data)
+            # Valid image data types: PIL Image, bytes, dict with 'bytes'/'path' key, or objects with 'save' method
+            if isinstance(val, (int, float)):
+                continue
+            if isinstance(val, str) and not val.startswith('http'):
+                # It's a local path, not actual image data - skip
+                continue
+            if isinstance(val, dict):
+                # Check if it's a valid HuggingFace image dict
+                if 'bytes' in val or 'path' in val:
+                    image_data = val
+                    break
+                # Skip other dict types
+                continue
+            # PIL Image, bytes, or object with save method
+            image_data = val
             break
     
-    if not image_data:
+    # If no valid image data, try to get URL
+    if image_data is None:
         for field in ['image_url', 'url', 'img_url', 'picture_url']:
             if field in sample:
                 url = sample[field]
@@ -938,12 +955,32 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
                             f.write(img_data)
                     except:
                         img_path = None
+                # Handle dict with 'bytes' key (HuggingFace Image format)
+                elif isinstance(img_data, dict) and 'bytes' in img_data and img_data['bytes'] is not None:
+                    try:
+                        with open(img_path, 'wb') as f:
+                            f.write(img_data['bytes'])
+                    except:
+                        img_path = None
+                # Handle dict with 'path' key
+                elif isinstance(img_data, dict) and 'path' in img_data and img_data['path']:
+                    try:
+                        src_path = img_data['path']
+                        if os.path.exists(src_path):
+                            shutil.copy(src_path, img_path)
+                        else:
+                            img_path = None
+                    except:
+                        img_path = None
                 elif hasattr(img_data, 'save'):
                     try:
                         img_data.save(img_path)
                     except:
                         img_path = None
-            elif img_url:
+                # Skip integers and other non-image types
+                elif isinstance(img_data, (int, float, str)):
+                    img_path = None
+            if img_path is None and img_url:
                 img_filename = f"{idx:06d}.jpg"
                 img_path = os.path.join(img_dir, img_filename)
                 img_path = download_image(img_url, img_path)
