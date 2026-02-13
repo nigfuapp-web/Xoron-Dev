@@ -93,7 +93,11 @@ class TrainingConfig:
     
     logging_steps: int = 50  # Used in trainer_state.json for HuggingFace compatibility
     
-    max_per_dataset_eval: int = 1  # Samples per dataset for eval (e.g., 2 from each dataset)
+    # Validation settings
+    # WARNING: Video validation is EXTREMELY SLOW because yt-dlp downloads from YouTube
+    # Each sample can take 30-180 seconds for YouTube videos. Skip validation by default.
+    skip_validation: bool = True  # Skip validation entirely (YouTube/yt-dlp is too slow)
+    max_per_dataset_eval: int = 1  # Samples per dataset for eval (only if skip_validation=False)
 
     # Device settings
     device: str = field(default_factory=lambda: "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")

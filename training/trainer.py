@@ -889,8 +889,14 @@ class XoronTrainer:
             train_losses = self._train_epoch(train_loader, epoch, batch_times, training_start_time)
 
             # Run validation at end of each epoch if eval_dataset is provided
+            # NOTE: Video validation is EXTREMELY SLOW due to yt-dlp YouTube downloads
+            # Each sample can take 30-180 seconds. Skip by default with skip_validation=True
             eval_losses = None
-            if self.eval_dataset is not None:
+            skip_validation = getattr(self.config, 'skip_validation', True)
+            
+            if skip_validation:
+                print(f"\n⏭️ Skipping validation (skip_validation=True - video downloads too slow)", flush=True)
+            elif self.eval_dataset is not None:
                 # Reset eval dataset for new epoch - advances to NEW samples (not clear_state)
                 # Both train and eval get fresh samples each epoch
                 if hasattr(self.eval_dataset, 'reset'):
