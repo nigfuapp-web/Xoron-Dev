@@ -1062,6 +1062,7 @@ class XoronPreTrainedModel(PreTrainedModel):
     supports_gradient_checkpointing = True
     _no_split_modules = ["XoronMultimodalModel"]
     _skip_keys_device_placement = "past_key_values"
+    _supports_flash_attn_2 = True
     
     def _init_weights(self, module):
         std = 0.02
@@ -1084,12 +1085,106 @@ class XoronModel(XoronPreTrainedModel):
     def __init__(self, config: XoronConfig):
         super().__init__(config)
         self.config = config
-        self._internal_model = XoronMultimodalModel(config)
-        self.post_init()
+        # Delay internal model creation - will be built on first forward or explicitly
+        self._internal_model = None
+        self._model_initialized = False
+    
+    def _ensure_model_initialized(self):
+        """Lazily initialize the internal model to avoid meta device conflicts."""
+        if not self._model_initialized:
+            self._internal_model = XoronMultimodalModel(self.config)
+            self._model_initialized = True
     
     @property
     def internal_model(self):
+        self._ensure_model_initialized()
         return self._internal_model
+    
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        """
+        Load pretrained Xoron model from HuggingFace Hub or local path.
+        
+        This override ensures proper initialization without meta device conflicts.
+        """
+        # Remove problematic kwargs that can cause meta device issues
+        kwargs.pop('device_map', None)  # We handle device placement ourselves
+        
+        # Get config first
+        config = kwargs.pop('config', None)
+        if config is None:
+            config = XoronConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        
+        # Create model instance (without initializing heavy components yet)
+        model = cls(config)
+        
+        # Now initialize the internal model
+        model._internal_model = XoronMultimodalModel(config)
+        model._model_initialized = True
+        
+        # Load weights from safetensors files
+        import os
+        from safetensors import safe_open
+        
+        # Check if it's a local path or HF hub
+        if os.path.isdir(pretrained_model_name_or_path):
+            model_path = pretrained_model_name_or_path
+        else:
+            from huggingface_hub import snapshot_download
+            model_path = snapshot_download(repo_id=pretrained_model_name_or_path)
+        
+        # Load component weights
+        components_json = os.path.join(model_path, "components.json")
+        if os.path.exists(components_json):
+            with open(components_json, 'r') as f:
+                manifest = json.load(f)
+            
+            component_map = {
+                'llm': model._internal_model.llm,
+                'vision_encoder': model._internal_model.vision_encoder,
+                'video_encoder': model._internal_model.video_encoder,
+                'audio_encoder': model._internal_model.audio_encoder,
+                'audio_decoder': model._internal_model.audio_decoder,
+                'projector': model._internal_model.projector,
+                'audio_projector': model._internal_model.audio_projector,
+            }
+            
+            if model._internal_model.cross_attention_layers is not None:
+                component_map['cross_attention'] = model._internal_model.cross_attention_layers
+            if model._internal_model.generator is not None:
+                component_map['generator'] = model._internal_model.generator
+            if model._internal_model.video_generator is not None:
+                component_map['video_generator'] = model._internal_model.video_generator
+            if hasattr(model._internal_model, 'waveform_decoder') and model._internal_model.waveform_decoder is not None:
+                component_map['waveform_decoder'] = model._internal_model.waveform_decoder
+            
+            for comp_name in manifest.get('components', []):
+                if comp_name == 'modality_markers':
+                    continue
+                    
+                comp_path = os.path.join(model_path, f"{comp_name}.safetensors")
+                if os.path.exists(comp_path) and comp_name in component_map:
+                    component = component_map[comp_name]
+                    if component is not None:
+                        with safe_open(comp_path, framework="pt") as f:
+                            state_dict = {k: f.get_tensor(k) for k in f.keys()}
+                        component.load_state_dict(state_dict, strict=False)
+                        print(f"   ✅ Loaded {comp_name}")
+            
+            # Load modality markers
+            markers_path = os.path.join(model_path, "modality_markers.safetensors")
+            if os.path.exists(markers_path):
+                with safe_open(markers_path, framework="pt") as f:
+                    model._internal_model.image_start.data = f.get_tensor('image_start')
+                    model._internal_model.image_end.data = f.get_tensor('image_end')
+                    model._internal_model.video_start.data = f.get_tensor('video_start')
+                    model._internal_model.video_end.data = f.get_tensor('video_end')
+                    model._internal_model.audio_start.data = f.get_tensor('audio_start')
+                    model._internal_model.audio_end.data = f.get_tensor('audio_end')
+                print(f"   ✅ Loaded modality markers")
+        
+        print(f"✅ Xoron model loaded from {pretrained_model_name_or_path}")
+        return model
     
     def forward(
         self,
@@ -1104,6 +1199,7 @@ class XoronModel(XoronPreTrainedModel):
         return_dict: Optional[bool] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        self._ensure_model_initialized()
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         
         outputs = self._internal_model(
@@ -1127,12 +1223,15 @@ class XoronModel(XoronPreTrainedModel):
         return (outputs.get("loss"), outputs.get("logits"))
     
     def generate_image(self, prompt_embeds: torch.Tensor, **kwargs):
+        self._ensure_model_initialized()
         return self._internal_model.generate_image(prompt_embeds, **kwargs)
     
     def generate_video(self, prompt_embeds: torch.Tensor, **kwargs):
+        self._ensure_model_initialized()
         return self._internal_model.generate_video(prompt_embeds, **kwargs)
     
     def generate_speech(self, text_embeds: torch.Tensor, **kwargs):
+        self._ensure_model_initialized()
         return self._internal_model.generate_speech(text_embeds, **kwargs)
 
 
