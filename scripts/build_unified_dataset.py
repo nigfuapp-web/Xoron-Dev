@@ -9,7 +9,31 @@ proper splits for each modality.
 Designed to run on Kaggle with /tmp storage (150GB available).
 
 Usage (on Kaggle):
+    # Build everything at once
     python build_unified_dataset.py
+    
+    # Build only audio first
+    python build_unified_dataset.py --audio
+    
+    # Then add text (loads existing dataset from HF first)
+    python build_unified_dataset.py --text --hf
+    
+    # Then add images
+    python build_unified_dataset.py --image --hf
+    
+    # Then add videos
+    python build_unified_dataset.py --video --hf
+    
+    # Or combine: build text and audio together
+    python build_unified_dataset.py --text --audio
+
+Flags:
+    --text   : Process text datasets only
+    --image  : Process image datasets only
+    --video  : Process video datasets only
+    --audio  : Process audio datasets only
+    --hf     : Load existing dataset from HuggingFace first, then merge new data
+    --all    : Process all modalities (default if no flags)
 
 The script will:
 1. Download samples from all HuggingFace datasets in the config
@@ -42,6 +66,7 @@ import tempfile
 import subprocess
 import hashlib
 import logging
+import argparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -806,17 +831,76 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
 
 
 # ============================================================================
+# COMMAND LINE ARGUMENTS
+# ============================================================================
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Build unified multimodal dataset for Xoron",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Build everything at once
+    python build_unified_dataset.py
+    
+    # Build only audio first
+    python build_unified_dataset.py --audio
+    
+    # Then add text (loads existing dataset from HF first)
+    python build_unified_dataset.py --text --hf
+    
+    # Build multiple modalities
+    python build_unified_dataset.py --text --audio
+        """
+    )
+    
+    parser.add_argument("--text", action="store_true", help="Process text datasets")
+    parser.add_argument("--image", action="store_true", help="Process image datasets")
+    parser.add_argument("--video", action="store_true", help="Process video datasets")
+    parser.add_argument("--audio", action="store_true", help="Process audio datasets")
+    parser.add_argument("--hf", action="store_true", help="Load existing dataset from HuggingFace first, then merge")
+    parser.add_argument("--all", action="store_true", help="Process all modalities (default)")
+    
+    args = parser.parse_args()
+    
+    # If no modality flags specified, default to all
+    if not any([args.text, args.image, args.video, args.audio, args.all]):
+        args.all = True
+    
+    return args
+
+
+# ============================================================================
 # MAIN DATASET BUILDER
 # ============================================================================
 
-def build_unified_dataset():
+def build_unified_dataset(args):
     """Build the unified multimodal dataset."""
-    from datasets import Dataset, DatasetDict, Features, Value, Image as HFImage, Audio as HFAudio
+    from datasets import Dataset, DatasetDict, Features, Value, Image as HFImage, Audio as HFAudio, load_dataset, concatenate_datasets
     from huggingface_hub import HfApi, login
     
     logger.info("=" * 60)
     logger.info("XORON UNIFIED MULTIMODAL DATASET BUILDER")
     logger.info("=" * 60)
+    
+    # Show what we're building
+    modalities_to_build = []
+    if args.all:
+        modalities_to_build = ["text", "image", "video", "audio"]
+    else:
+        if args.text:
+            modalities_to_build.append("text")
+        if args.image:
+            modalities_to_build.append("image")
+        if args.video:
+            modalities_to_build.append("video")
+        if args.audio:
+            modalities_to_build.append("audio")
+    
+    logger.info(f"Building modalities: {modalities_to_build}")
+    if args.hf:
+        logger.info(f"Will load existing dataset from HF: {HF_DATASET_NAME}")
     
     # Validate HF token
     if not HF_TOKEN:
@@ -833,6 +917,23 @@ def build_unified_dataset():
     logger.info("Logging into HuggingFace...")
     login(token=HF_TOKEN)
     
+    # Load existing dataset from HF if --hf flag is set
+    existing_datasets = {}
+    if args.hf:
+        logger.info(f"\nLoading existing dataset from HuggingFace: {HF_DATASET_NAME}")
+        try:
+            existing_ds = load_dataset(HF_DATASET_NAME, token=HF_TOKEN)
+            if isinstance(existing_ds, DatasetDict):
+                for split_name in existing_ds:
+                    existing_datasets[split_name] = existing_ds[split_name]
+                    logger.info(f"  Loaded existing '{split_name}' split: {len(existing_ds[split_name])} samples")
+            else:
+                existing_datasets["train"] = existing_ds
+                logger.info(f"  Loaded existing dataset: {len(existing_ds)} samples")
+        except Exception as e:
+            logger.warning(f"Could not load existing dataset (may not exist yet): {e}")
+            logger.info("Will create new dataset from scratch")
+    
     # Collect samples by modality
     all_samples = {
         "text": [],
@@ -841,9 +942,14 @@ def build_unified_dataset():
         "audio": [],
     }
     
-    # Process each category
+    # Process each category (only for selected modalities)
     for category, configs in DATASET_CONFIGS.items():
         modality = MODALITY_MAP.get(category, "text")
+        
+        # Skip if this modality is not selected
+        if modality not in modalities_to_build:
+            continue
+        
         logger.info(f"\n{'='*40}")
         logger.info(f"Processing category: {category} (modality: {modality})")
         logger.info(f"{'='*40}")
@@ -967,12 +1073,41 @@ def build_unified_dataset():
                 logger.info(f"  Video dataset: {len(ds)} samples, {len(ds.column_names)} columns")
                 logger.info(f"    Columns: {ds.column_names[:10]}{'...' if len(ds.column_names) > 10 else ''}")
     
+    # Merge with existing datasets if --hf flag was used
+    if existing_datasets:
+        logger.info("\nMerging with existing datasets from HuggingFace...")
+        for split_name, existing_ds in existing_datasets.items():
+            if split_name in datasets_dict:
+                # We have new data for this split - need to merge
+                # Note: Can only merge if columns are compatible
+                logger.info(f"  Split '{split_name}' exists in both - merging...")
+                try:
+                    new_ds = datasets_dict[split_name]
+                    # Try to concatenate
+                    merged = concatenate_datasets([existing_ds, new_ds])
+                    datasets_dict[split_name] = merged
+                    logger.info(f"    Merged: {len(existing_ds)} + {len(new_ds)} = {len(merged)} samples")
+                except Exception as e:
+                    logger.warning(f"    Could not merge '{split_name}': {e}")
+                    logger.info(f"    Keeping new data only ({len(new_ds)} samples)")
+            else:
+                # No new data for this split - keep existing
+                datasets_dict[split_name] = existing_ds
+                logger.info(f"  Keeping existing '{split_name}' split: {len(existing_ds)} samples")
+    
     if not datasets_dict:
         logger.error("No datasets created! Check for errors above.")
         return
     
     # Create DatasetDict
     final_dataset = DatasetDict(datasets_dict)
+    
+    # Print final summary
+    logger.info("\n" + "=" * 60)
+    logger.info("FINAL DATASET SUMMARY")
+    logger.info("=" * 60)
+    for split_name, ds in final_dataset.items():
+        logger.info(f"  {split_name}: {len(ds)} samples, {len(ds.column_names)} columns")
     
     # Save locally first
     local_save_path = os.path.join(OUTPUT_DIR, "xoron_unified_dataset")
@@ -1007,4 +1142,5 @@ def build_unified_dataset():
 # ============================================================================
 
 if __name__ == "__main__":
-    build_unified_dataset()
+    args = parse_args()
+    build_unified_dataset(args)
