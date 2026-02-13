@@ -1023,9 +1023,66 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
     return samples
 
 
+def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
+    """
+    Decode audio bytes using soundfile/librosa (NOT torchcodec).
+    This is our custom audio decoder that avoids torchcodec dependency.
+    
+    Args:
+        audio_bytes: Raw audio bytes
+        target_path: Path to save the decoded audio
+        
+    Returns:
+        Path to saved audio file or None if failed
+    """
+    import io
+    import numpy as np
+    
+    # Try soundfile first (preferred - fast and reliable)
+    try:
+        import soundfile as sf
+        audio_buffer = io.BytesIO(audio_bytes)
+        array, sr = sf.read(audio_buffer)
+        
+        # Ensure float32 and handle stereo -> mono
+        array = np.array(array, dtype=np.float32)
+        if array.ndim > 1:
+            array = array.mean(axis=1)  # Convert stereo to mono
+        
+        sf.write(target_path, array, sr)
+        return target_path
+    except Exception:
+        pass
+    
+    # Try librosa as fallback (handles more formats)
+    try:
+        import librosa
+        audio_buffer = io.BytesIO(audio_bytes)
+        array, sr = librosa.load(audio_buffer, sr=None, mono=True)
+        
+        import soundfile as sf
+        sf.write(target_path, array, sr)
+        return target_path
+    except Exception:
+        pass
+    
+    # Last resort: just write raw bytes and hope it's a valid format
+    try:
+        with open(target_path, 'wb') as f:
+            f.write(audio_bytes)
+        return target_path
+    except Exception:
+        return None
+
+
 def process_audio_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process an audio dataset with standardized schema."""
-    from datasets import load_dataset
+    """
+    Process an audio dataset with standardized schema.
+    
+    Uses custom audio decoding (soundfile/librosa) instead of torchcodec.
+    Disables HuggingFace's automatic audio decoding to avoid torchcodec dependency.
+    """
+    from datasets import load_dataset, Audio
     import soundfile as sf
     import numpy as np
     
@@ -1043,6 +1100,15 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
         
         ds = load_dataset(**load_kwargs)
         
+        # Disable automatic audio decoding - use our custom soundfile/librosa decoder
+        # This avoids torchcodec dependency
+        try:
+            ds = ds.cast_column('audio', Audio(decode=False))
+            logger.info(f"  📝 Using custom audio decoder (soundfile/librosa), NOT torchcodec")
+        except Exception:
+            # Column might not exist or already in different format
+            pass
+        
         count = 0
         for idx, sample in enumerate(ds):
             if count >= max_samples:
@@ -1057,18 +1123,35 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             
             if audio_data is not None:
                 try:
+                    # Handle bytes (from decode=False or raw bytes)
                     if isinstance(audio_data, bytes):
-                        with open(target_path, 'wb') as f:
-                            f.write(audio_data)
-                        audio_path = target_path
+                        audio_path = decode_audio_bytes(audio_data, target_path)
+                    
+                    # Handle dict with 'bytes' key (from Audio(decode=False))
+                    elif isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
+                        audio_path = decode_audio_bytes(audio_data['bytes'], target_path)
+                    
+                    # Handle dict with 'array' key (if decode=True was used somehow)
                     elif isinstance(audio_data, dict) and 'array' in audio_data:
-                        arr = np.array(audio_data['array'])
+                        arr = np.array(audio_data['array'], dtype=np.float32)
                         sr = audio_data.get('sampling_rate', 16000)
+                        # Handle stereo -> mono
+                        if arr.ndim > 1:
+                            arr = arr.mean(axis=1)
                         sf.write(target_path, arr, sr)
                         audio_path = target_path
+                    
+                    # Handle dict with 'path' key
+                    elif isinstance(audio_data, dict) and 'path' in audio_data and audio_data['path']:
+                        src_path = audio_data['path']
+                        if os.path.exists(src_path):
+                            shutil.copy(src_path, target_path)
+                            audio_path = target_path
+                
                 except Exception as e:
                     logger.warning(f"  Error saving audio {idx}: {e}")
                     audio_path = None
+            
             elif audio_src_path and os.path.exists(audio_src_path):
                 try:
                     shutil.copy(audio_src_path, target_path)
