@@ -914,6 +914,7 @@ class XoronMultimodalModel(nn.Module):
             lines = content.split('\n')
             code_lines = []
             i = 0
+            in_multiline_import = False
             
             # Skip leading whitespace
             while i < len(lines) and not lines[i].strip():
@@ -942,12 +943,17 @@ class XoronMultimodalModel(nn.Module):
                 if not code_lines and not stripped:
                     continue
                 
-                # Skip internal imports
-                if is_internal_import(line):
+                # Handle multi-line imports - skip continuation lines
+                if in_multiline_import:
+                    if ')' in stripped:
+                        in_multiline_import = False
                     continue
                 
-                # Skip external imports (we'll add our own)
-                if is_external_import(line):
+                # Check if this starts a multi-line import that should be skipped
+                if is_internal_import(line) or is_external_import(line):
+                    # Check if it's a multi-line import (has opening paren but no closing)
+                    if '(' in stripped and ')' not in stripped:
+                        in_multiline_import = True
                     continue
                 
                 # Skip logger setup lines
