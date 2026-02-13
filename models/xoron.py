@@ -904,13 +904,18 @@ class XoronMultimodalModel(nn.Module):
                     return True
             return False
         
-        def is_external_import(line):
-            line = line.strip()
-            return (line.startswith("import ") or 
-                    (line.startswith("from ") and not is_internal_import(line)))
+        def is_module_level_import(line):
+            """Check if this is a module-level import (no indentation)."""
+            stripped = line.strip()
+            # Only consider it a module-level import if:
+            # 1. Line starts with no indentation (module level)
+            # 2. Line starts with 'import' or 'from'
+            if line and not line[0].isspace():
+                return (stripped.startswith("import ") or stripped.startswith("from "))
+            return False
         
         def extract_code_body(content):
-            """Extract code body, removing module docstring and imports."""
+            """Extract code body, removing module docstring and module-level imports only."""
             lines = content.split('\n')
             code_lines = []
             i = 0
@@ -943,21 +948,22 @@ class XoronMultimodalModel(nn.Module):
                 if not code_lines and not stripped:
                     continue
                 
-                # Handle multi-line imports - skip continuation lines
+                # Handle multi-line module-level imports - skip continuation lines
                 if in_multiline_import:
                     if ')' in stripped:
                         in_multiline_import = False
                     continue
                 
-                # Check if this starts a multi-line import that should be skipped
-                if is_internal_import(line) or is_external_import(line):
+                # Only skip MODULE-LEVEL imports (no indentation)
+                # Keep inline/function-level imports like: from transformers import X
+                if is_module_level_import(line):
                     # Check if it's a multi-line import (has opening paren but no closing)
                     if '(' in stripped and ')' not in stripped:
                         in_multiline_import = True
                     continue
                 
-                # Skip logger setup lines
-                if stripped.startswith("logger = logging.getLogger"):
+                # Skip logger setup lines at module level only
+                if stripped.startswith("logger = logging.getLogger") and not line[0].isspace():
                     continue
                 
                 code_lines.append(line)
