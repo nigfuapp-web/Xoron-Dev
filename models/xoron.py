@@ -1250,6 +1250,44 @@ XoronForCausalLM.register_for_auto_class("AutoModelForCausalLM")
         with open(os.path.join(path, "components.json"), "w") as f:
             json.dump(manifest, f, indent=2)
         
+        # Generate model.safetensors.index.json for HuggingFace compatibility
+        # This allows AutoModel.from_pretrained to find all the component files
+        weight_map = {}
+        total_bytes = 0
+        
+        for comp_name, component in component_map.items():
+            if component is None:
+                continue
+            comp_state = component.state_dict()
+            if not comp_state:
+                continue
+            safetensor_file = f"{comp_name}.safetensors"
+            for key in comp_state.keys():
+                # Prefix the key with the component name to match state_dict() format
+                full_key = f"{comp_name}.{key}"
+                weight_map[full_key] = safetensor_file
+                total_bytes += comp_state[key].numel() * comp_state[key].element_size()
+        
+        # Add modality markers to weight map
+        marker_names = ['image_start', 'image_end', 'video_start', 'video_end', 'audio_start', 'audio_end']
+        for marker_name in marker_names:
+            weight_map[marker_name] = "modality_markers.safetensors"
+            marker_tensor = getattr(self, marker_name)
+            total_bytes += marker_tensor.numel() * marker_tensor.element_size()
+        
+        index = {
+            "metadata": {
+                "total_size": total_bytes,
+                "format": "components",
+            },
+            "weight_map": weight_map,
+        }
+        
+        index_path = os.path.join(path, "model.safetensors.index.json")
+        with open(index_path, "w") as f:
+            json.dump(index, f, indent=2)
+        
+        print(f"   📋 Saved model.safetensors.index.json for HuggingFace compatibility")
         print(f"   📋 Total size: {total_size:.1f} MB across {len(saved_files)} components")
 
     def _save_sharded(self, path: str, max_shard_size: int):
@@ -1420,6 +1458,44 @@ XoronForCausalLM.register_for_auto_class("AutoModelForCausalLM")
         with open(os.path.join(path, "components.json"), "w") as f:
             json.dump(manifest, f, indent=2)
         
+        # Generate model.safetensors.index.json for HuggingFace compatibility
+        # This allows AutoModel.from_pretrained to find all the component files
+        weight_map = {}
+        total_bytes = 0
+        
+        for comp_name, component in component_map.items():
+            if component is None:
+                continue
+            comp_state = component.state_dict()
+            if not comp_state:
+                continue
+            safetensor_file = f"{comp_name}.safetensors"
+            for key in comp_state.keys():
+                # Prefix the key with the component name to match state_dict() format
+                full_key = f"{comp_name}.{key}"
+                weight_map[full_key] = safetensor_file
+                total_bytes += comp_state[key].numel() * comp_state[key].element_size()
+        
+        # Add modality markers to weight map
+        marker_names = ['image_start', 'image_end', 'video_start', 'video_end', 'audio_start', 'audio_end']
+        for marker_name in marker_names:
+            weight_map[marker_name] = "modality_markers.safetensors"
+            marker_tensor = getattr(self, marker_name)
+            total_bytes += marker_tensor.numel() * marker_tensor.element_size()
+        
+        index = {
+            "metadata": {
+                "total_size": total_bytes,
+                "format": "components",
+            },
+            "weight_map": weight_map,
+        }
+        
+        index_path = os.path.join(path, "model.safetensors.index.json")
+        with open(index_path, "w") as f:
+            json.dump(index, f, indent=2)
+        
+        print(f"   📋 Saved model.safetensors.index.json for HuggingFace compatibility")
         print(f"✅ Components saved to {path}")
 
     @classmethod
