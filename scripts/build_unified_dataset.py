@@ -359,23 +359,44 @@ def download_video_direct(url: str, output_path: str, timeout: int = 60) -> Opti
         return None
 
 
+def get_video_extension(url: str) -> str:
+    """Get video extension from URL, defaulting to .mp4"""
+    # Supported video formats by HuggingFace
+    SUPPORTED_VIDEO_EXTS = {'.mp4', '.gif', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v', '.ogv'}
+    
+    # Extract extension from URL (before query params)
+    url_path = url.split('?')[0].lower()
+    for ext in SUPPORTED_VIDEO_EXTS:
+        if url_path.endswith(ext):
+            return ext
+    return '.mp4'  # Default
+
+
 def download_video(url: str, output_dir: str, video_id: str) -> Optional[str]:
-    """Download video from URL (YouTube, TikTok, or direct)."""
-    output_path = os.path.join(output_dir, f"{video_id}.mp4")
+    """Download video from URL (YouTube, TikTok, or direct). Supports multiple formats including .gif"""
+    # Get appropriate extension from URL
+    ext = get_video_extension(url)
+    output_path = os.path.join(output_dir, f"{video_id}{ext}")
     
-    if os.path.exists(output_path):
-        return output_path
+    # Check if file already exists with any supported extension
+    SUPPORTED_VIDEO_EXTS = ['.mp4', '.gif', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v', '.ogv']
+    for check_ext in SUPPORTED_VIDEO_EXTS:
+        check_path = os.path.join(output_dir, f"{video_id}{check_ext}")
+        if os.path.exists(check_path):
+            return check_path
     
-    # Check if it's YouTube/TikTok - use yt-dlp
+    # Check if it's YouTube/TikTok - use yt-dlp (always outputs mp4)
     if 'youtube.com' in url or 'youtu.be' in url or 'tiktok.com' in url:
-        return download_video_ytdlp(url, output_path)
+        mp4_path = os.path.join(output_dir, f"{video_id}.mp4")
+        return download_video_ytdlp(url, mp4_path)
     else:
-        # Try direct download first
+        # Try direct download first (preserves original format)
         result = download_video_direct(url, output_path)
         if result:
             return result
         # Fallback to yt-dlp for other sites it supports
-        return download_video_ytdlp(url, output_path)
+        mp4_path = os.path.join(output_dir, f"{video_id}.mp4")
+        return download_video_ytdlp(url, mp4_path)
 
 
 # Vript metadata cache for resolving video IDs to URLs
@@ -767,13 +788,17 @@ def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
     return result, audio_data, audio_path
 
 
-def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[str]]:
+def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Optional[Dict], Optional[Any], Optional[str]]:
     """
     Extract video sample matching your formatters:
     - format_video_caption_sample: question, options, answer/a, domain, sub_category, duration
     - format_video_generation_sample: caption, text, description, Prompt, prompt, name, page_dir
     - format_image_to_video_sample: Text_Prompt, prompt, short_caption, dense_caption, 
                                      Brief Description, Detailed Description, etc.
+    
+    Returns: (metadata_dict, video_data, video_url)
+    - video_data: bytes, dict with 'bytes'/'path', or None
+    - video_url: URL string or None
     """
     result = {
         # Caption/prompt fields
@@ -835,19 +860,45 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
         except:
             pass
     
-    # Extract video URL
+    # Extract video data (bytes/dict) and URL
+    video_data = None
     video_url = None
     
-    # Direct URL fields
-    for field in ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'media_url', 'contentUrl', 'column1']:
-        if field in sample:
-            url = sample[field]
-            if isinstance(url, str) and (url.startswith('http') or url.startswith('//')):
-                video_url = 'https:' + url if url.startswith('//') else url
+    # First try to get actual video data (bytes or dict with bytes/path)
+    for field in ['video', 'Video', 'clip', 'media']:
+        if field in sample and sample[field] is not None:
+            val = sample[field]
+            # Skip integers, floats (these are IDs, not video data)
+            if isinstance(val, (int, float)):
+                continue
+            # Check for dict with bytes or path (HuggingFace Video format)
+            if isinstance(val, dict):
+                if 'bytes' in val or 'path' in val:
+                    video_data = val
+                    break
+            # Raw bytes
+            elif isinstance(val, bytes):
+                video_data = val
                 break
+            # String could be URL or path
+            elif isinstance(val, str):
+                if val.startswith('http') or val.startswith('//'):
+                    video_url = 'https:' + val if val.startswith('//') else val
+                # Skip local paths for now, will be handled below
+                continue
+    
+    # If no video data, try to get URL
+    if video_data is None and video_url is None:
+        # Direct URL fields
+        for field in ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'gif_url', 'media_url', 'contentUrl', 'column1']:
+            if field in sample:
+                url = sample[field]
+                if isinstance(url, str) and (url.startswith('http') or url.startswith('//')):
+                    video_url = 'https:' + url if url.startswith('//') else url
+                    break
     
     # YouTube/TikTok video ID
-    if not video_url:
+    if video_data is None and video_url is None:
         for field in ['videoID', 'video_id', 'youtube_id', 'clip_id', 'ytid']:
             if field in sample:
                 vid_id = str(sample[field])
@@ -870,7 +921,7 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
                         video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
                         break
     
-    return result, video_url
+    return result, video_data, video_url
 
 
 # ============================================================================
@@ -998,8 +1049,18 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
     return samples
 
 
+def get_video_ext_from_path(path: str) -> str:
+    """Get video extension from path, defaulting to .mp4"""
+    SUPPORTED_VIDEO_EXTS = ['.mp4', '.gif', '.webm', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v', '.ogv']
+    path_lower = path.lower()
+    for ext in SUPPORTED_VIDEO_EXTS:
+        if path_lower.endswith(ext):
+            return ext
+    return '.mp4'
+
+
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process a video dataset with standardized schema."""
+    """Process a video dataset with standardized schema. Supports .mp4, .gif, .webm and other formats."""
     from datasets import load_dataset
     
     samples = []
@@ -1028,15 +1089,57 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                 logger.warning(f"  Too many failures, stopping {name}")
                 break
             
-            # Extract with standardized schema
-            metadata, video_url = extract_video_sample(sample, category, name)
+            # Extract with standardized schema (now returns video_data too)
+            metadata, video_data, video_url = extract_video_sample(sample, category, name)
             
-            if not video_url:
-                continue
-            
-            # Download video
+            video_path = None
             video_id = f"{idx:06d}"
-            video_path = download_video(video_url, vid_dir, video_id)
+            
+            # First try to save video data directly (bytes or dict)
+            if video_data is not None:
+                try:
+                    # Handle dict with 'bytes' key (HuggingFace Video format)
+                    if isinstance(video_data, dict) and 'bytes' in video_data and video_data['bytes'] is not None:
+                        # Try to detect format from bytes magic numbers
+                        video_bytes = video_data['bytes']
+                        ext = '.mp4'  # default
+                        if video_bytes[:4] == b'GIF8' or video_bytes[:6] == b'GIF89a' or video_bytes[:6] == b'GIF87a':
+                            ext = '.gif'
+                        elif video_bytes[:4] == b'\x1a\x45\xdf\xa3':  # webm/mkv
+                            ext = '.webm'
+                        target_path = os.path.join(vid_dir, f"{video_id}{ext}")
+                        with open(target_path, 'wb') as f:
+                            f.write(video_bytes)
+                        video_path = target_path
+                    
+                    # Handle dict with 'path' key
+                    elif isinstance(video_data, dict) and 'path' in video_data and video_data['path']:
+                        src_path = video_data['path']
+                        if os.path.exists(src_path):
+                            ext = get_video_ext_from_path(src_path)
+                            target_path = os.path.join(vid_dir, f"{video_id}{ext}")
+                            shutil.copy(src_path, target_path)
+                            video_path = target_path
+                    
+                    # Handle raw bytes
+                    elif isinstance(video_data, bytes):
+                        ext = '.mp4'  # default
+                        if video_data[:4] == b'GIF8' or video_data[:6] == b'GIF89a' or video_data[:6] == b'GIF87a':
+                            ext = '.gif'
+                        elif video_data[:4] == b'\x1a\x45\xdf\xa3':  # webm/mkv
+                            ext = '.webm'
+                        target_path = os.path.join(vid_dir, f"{video_id}{ext}")
+                        with open(target_path, 'wb') as f:
+                            f.write(video_data)
+                        video_path = target_path
+                
+                except Exception as e:
+                    logger.warning(f"  Error saving video {idx}: {e}")
+                    video_path = None
+            
+            # If no video data saved, try downloading from URL
+            if video_path is None and video_url:
+                video_path = download_video(video_url, vid_dir, video_id)
             
             if video_path and os.path.exists(video_path):
                 size_mb = get_file_size_mb(video_path)
