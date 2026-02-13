@@ -1010,13 +1010,35 @@ def build_unified_dataset(args):
                         val = str(val)
                 column_data[key].append(val)
         
+        # Fix mixed types - convert all values in a column to strings if there's a mix
+        for key in all_keys:
+            values = column_data[key]
+            # Check if we have mixed types (excluding None)
+            types_found = set()
+            for v in values:
+                if v is not None:
+                    types_found.add(type(v).__name__)
+            
+            # If mixed types (e.g., int and str), convert all to string
+            if len(types_found) > 1:
+                column_data[key] = [str(v) if v is not None else None for v in values]
+        
         # Create dataset
         try:
             ds = Dataset.from_dict(column_data)
             return ds
         except Exception as e:
             logger.error(f"Error creating {modality} dataset: {e}")
-            return None
+            # Try converting everything to strings as fallback
+            try:
+                logger.info(f"  Retrying with all columns as strings...")
+                for key in column_data:
+                    column_data[key] = [str(v) if v is not None else None for v in column_data[key]]
+                ds = Dataset.from_dict(column_data)
+                return ds
+            except Exception as e2:
+                logger.error(f"  Still failed: {e2}")
+                return None
     
     # Text split - keep ALL original columns
     if all_samples["text"]:
