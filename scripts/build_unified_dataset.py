@@ -1283,8 +1283,11 @@ def build_unified_dataset(args):
     # Schema: image, caption, question, answer, choices, category, source
     if all_samples["image"]:
         logger.info("\n🖼️ Creating IMAGE dataset...")
+        # Validate: image_path must be a string and file must exist
         valid_samples = [s for s in all_samples["image"] 
-                        if s.get("image_path") and os.path.exists(s.get("image_path", ""))]
+                        if s.get("image_path") 
+                        and isinstance(s.get("image_path"), str)
+                        and os.path.exists(s.get("image_path", ""))]
         
         if valid_samples:
             image_data = {
@@ -1298,29 +1301,37 @@ def build_unified_dataset(args):
             }
             
             for s in valid_samples:
-                image_data["image"].append(s.get("image_path"))
-                image_data["caption"].append(s.get("caption"))
-                image_data["question"].append(s.get("question"))
-                image_data["answer"].append(s.get("answer"))
-                image_data["choices"].append(s.get("choices"))
-                image_data["category"].append(s.get("category"))
-                image_data["source"].append(s.get("source"))
+                img_path = s.get("image_path")
+                # Double-check path is valid string before adding
+                if isinstance(img_path, str) and os.path.exists(img_path):
+                    image_data["image"].append(img_path)
+                    image_data["caption"].append(s.get("caption"))
+                    image_data["question"].append(s.get("question"))
+                    image_data["answer"].append(s.get("answer"))
+                    image_data["choices"].append(s.get("choices"))
+                    image_data["category"].append(s.get("category"))
+                    image_data["source"].append(s.get("source"))
             
-            try:
-                ds = Dataset.from_dict(image_data)
-                ds = ds.cast_column("image", HFImage())
-                datasets_dict["image"] = ds
-                logger.info(f"  ✓ Image: {len(ds)} samples")
-                logger.info(f"    Columns: {ds.column_names}")
-            except Exception as e:
-                logger.error(f"  ✗ Failed to create image dataset: {e}")
+            if image_data["image"]:
+                try:
+                    ds = Dataset.from_dict(image_data)
+                    ds = ds.cast_column("image", HFImage())
+                    datasets_dict["image"] = ds
+                    logger.info(f"  ✓ Image: {len(ds)} samples")
+                    logger.info(f"    Columns: {ds.column_names}")
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to create image dataset: {e}")
+                    traceback.print_exc()
     
     # AUDIO DATASET
     # Schema: audio, text, speaker_id, sampling_rate, gender, age, language, emotion, arousal, valence, dominance, category, source
     if all_samples["audio"]:
         logger.info("\n🔊 Creating AUDIO dataset...")
+        # Validate: audio_path must be a string and file must exist
         valid_samples = [s for s in all_samples["audio"]
-                        if s.get("audio_path") and os.path.exists(s.get("audio_path", ""))]
+                        if s.get("audio_path") 
+                        and isinstance(s.get("audio_path"), str)
+                        and os.path.exists(s.get("audio_path", ""))]
         
         if valid_samples:
             audio_data = {
@@ -1340,35 +1351,43 @@ def build_unified_dataset(args):
             }
             
             for s in valid_samples:
-                audio_data["audio"].append(s.get("audio_path"))
-                audio_data["text"].append(s.get("text"))
-                audio_data["speaker_id"].append(s.get("speaker_id"))
-                audio_data["sampling_rate"].append(s.get("sampling_rate"))
-                audio_data["gender"].append(s.get("gender"))
-                audio_data["age"].append(s.get("age"))
-                audio_data["language"].append(s.get("language"))
-                audio_data["emotion"].append(s.get("emotion"))
-                audio_data["arousal"].append(s.get("arousal"))
-                audio_data["valence"].append(s.get("valence"))
-                audio_data["dominance"].append(s.get("dominance"))
-                audio_data["category"].append(s.get("category"))
-                audio_data["source"].append(s.get("source"))
+                audio_path = s.get("audio_path")
+                # Double-check path is valid string before adding
+                if isinstance(audio_path, str) and os.path.exists(audio_path):
+                    audio_data["audio"].append(audio_path)
+                    audio_data["text"].append(s.get("text"))
+                    audio_data["speaker_id"].append(s.get("speaker_id"))
+                    audio_data["sampling_rate"].append(s.get("sampling_rate"))
+                    audio_data["gender"].append(s.get("gender"))
+                    audio_data["age"].append(s.get("age"))
+                    audio_data["language"].append(s.get("language"))
+                    audio_data["emotion"].append(s.get("emotion"))
+                    audio_data["arousal"].append(s.get("arousal"))
+                    audio_data["valence"].append(s.get("valence"))
+                    audio_data["dominance"].append(s.get("dominance"))
+                    audio_data["category"].append(s.get("category"))
+                    audio_data["source"].append(s.get("source"))
             
-            try:
-                ds = Dataset.from_dict(audio_data)
-                ds = ds.cast_column("audio", HFAudio())
-                datasets_dict["audio"] = ds
-                logger.info(f"  ✓ Audio: {len(ds)} samples (with embedded audio files)")
-                logger.info(f"    Columns: {ds.column_names}")
-            except Exception as e:
-                logger.error(f"  ✗ Failed to create audio dataset: {e}")
+            if audio_data["audio"]:
+                try:
+                    ds = Dataset.from_dict(audio_data)
+                    ds = ds.cast_column("audio", HFAudio())
+                    datasets_dict["audio"] = ds
+                    logger.info(f"  ✓ Audio: {len(ds)} samples (with embedded audio files)")
+                    logger.info(f"    Columns: {ds.column_names}")
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to create audio dataset: {e}")
+                    traceback.print_exc()
     
     # VIDEO DATASET
     # Schema: video, caption, question, answer, prompt, options, duration, domain, sub_category, category, source
     if all_samples["video"]:
         logger.info("\n🎬 Creating VIDEO dataset...")
+        # Validate: video_path must be a string and file must exist
         valid_samples = [s for s in all_samples["video"]
-                        if s.get("video_path") and os.path.exists(s.get("video_path", ""))]
+                        if s.get("video_path") 
+                        and isinstance(s.get("video_path"), str)
+                        and os.path.exists(s.get("video_path", ""))]
         
         if valid_samples:
             video_data = {
@@ -1386,33 +1405,38 @@ def build_unified_dataset(args):
             }
             
             for s in valid_samples:
-                video_data["video"].append(s.get("video_path"))
-                video_data["caption"].append(s.get("caption"))
-                video_data["question"].append(s.get("question"))
-                video_data["answer"].append(s.get("answer"))
-                video_data["prompt"].append(s.get("prompt"))
-                video_data["options"].append(s.get("options"))
-                video_data["duration"].append(s.get("duration"))
-                video_data["domain"].append(s.get("domain"))
-                video_data["sub_category"].append(s.get("sub_category"))
-                video_data["category"].append(s.get("category"))
-                video_data["source"].append(s.get("source"))
+                video_path = s.get("video_path")
+                # Double-check path is valid string before adding
+                if isinstance(video_path, str) and os.path.exists(video_path):
+                    video_data["video"].append(video_path)
+                    video_data["caption"].append(s.get("caption"))
+                    video_data["question"].append(s.get("question"))
+                    video_data["answer"].append(s.get("answer"))
+                    video_data["prompt"].append(s.get("prompt"))
+                    video_data["options"].append(s.get("options"))
+                    video_data["duration"].append(s.get("duration"))
+                    video_data["domain"].append(s.get("domain"))
+                    video_data["sub_category"].append(s.get("sub_category"))
+                    video_data["category"].append(s.get("category"))
+                    video_data["source"].append(s.get("source"))
             
-            try:
-                # Use HF Video type to store actual video files
-                from datasets import Video as HFVideo
-                ds = Dataset.from_dict(video_data)
-                ds = ds.cast_column("video", HFVideo())
-                datasets_dict["video"] = ds
-                logger.info(f"  ✓ Video: {len(ds)} samples (with embedded .mp4 files)")
-                logger.info(f"    Columns: {ds.column_names}")
-            except ImportError:
-                # Fallback if Video type not available (older datasets version)
-                logger.warning("  ⚠ HF Video type not available, storing as paths")
-                datasets_dict["video"] = Dataset.from_dict(video_data)
-                logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples (as paths)")
-            except Exception as e:
-                logger.error(f"  ✗ Failed to create video dataset: {e}")
+            if video_data["video"]:
+                try:
+                    # Use HF Video type to store actual video files
+                    from datasets import Video as HFVideo
+                    ds = Dataset.from_dict(video_data)
+                    ds = ds.cast_column("video", HFVideo())
+                    datasets_dict["video"] = ds
+                    logger.info(f"  ✓ Video: {len(ds)} samples (with embedded .mp4 files)")
+                    logger.info(f"    Columns: {ds.column_names}")
+                except ImportError:
+                    # Fallback if Video type not available (older datasets version)
+                    logger.warning("  ⚠ HF Video type not available, storing as paths")
+                    datasets_dict["video"] = Dataset.from_dict(video_data)
+                    logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples (as paths)")
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to create video dataset: {e}")
+                    traceback.print_exc()
     
     # Merge with existing datasets if --hf flag was used
     if existing_datasets:
