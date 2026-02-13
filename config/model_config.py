@@ -25,8 +25,15 @@ class XoronConfig:
     - Conformer audio encoder/decoder
     - FP16-native numerical stability
     - Multi-scale training for variable resolution handling
+    
+    HuggingFace Integration:
+    - model_type = "xoron" for AutoConfig/AutoModel support
+    - Compatible with trust_remote_code=True loading
     """
 
+    # HuggingFace model type (required for AutoClass integration)
+    model_type: str = "xoron"
+    
     # Model name
     model_name: str = "Xoron-Dev-MultiMoE"
 
@@ -187,6 +194,7 @@ class XoronConfig:
     def to_dict(self) -> dict:
         """Convert config to dictionary."""
         return {
+            'model_type': self.model_type,
             'model_name': self.model_name,
             'hidden_size': self.hidden_size,
             'num_layers': self.num_layers,

@@ -803,9 +803,19 @@ class XoronMultimodalModel(nn.Module):
         config_dict['has_cross_attention'] = hasattr(self, 'cross_attention_layers') and self.cross_attention_layers is not None
         config_dict['lora_applied'] = self.lora_applied
         config_dict['architecture_version'] = 2  # Version 2 = includes waveform_decoder
+        
+        # HuggingFace auto_map for trust_remote_code loading
+        config_dict['auto_map'] = {
+            'AutoConfig': 'configuration_xoron.XoronConfig',
+            'AutoModel': 'modeling_xoron.XoronModel',
+            'AutoModelForCausalLM': 'modeling_xoron.XoronForCausalLM',
+        }
 
         with open(os.path.join(path, "config.json"), "w") as f:
             json.dump(config_dict, f, indent=2)
+        
+        # Copy HuggingFace custom code files for trust_remote_code support
+        self._copy_huggingface_files(path)
 
         if optimizer is not None or scheduler is not None:
             training_state = {
@@ -822,6 +832,39 @@ class XoronMultimodalModel(nn.Module):
             print(f"   💾 Training state saved (step {global_step}, epoch {epoch})")
 
         print(f"✅ Model saved to {path}")
+    
+    def _copy_huggingface_files(self, path: str):
+        """
+        Copy HuggingFace custom code files for trust_remote_code support.
+        
+        These files allow the model to be loaded from HuggingFace Hub with:
+            model = AutoModel.from_pretrained("repo/model", trust_remote_code=True)
+        
+        Args:
+            path: Directory to save the files
+        """
+        import shutil
+        
+        # Get the root directory of the Xoron project
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        
+        # Files to copy from project root
+        hf_files = [
+            'configuration_xoron.py',
+            'modeling_xoron.py',
+        ]
+        
+        for filename in hf_files:
+            src = os.path.join(project_root, filename)
+            dst = os.path.join(path, filename)
+            if os.path.exists(src):
+                shutil.copy2(src, dst)
+                print(f"   📄 Copied {filename} for trust_remote_code")
+            else:
+                logger.warning(f"HuggingFace file not found: {src}")
+        
+        print(f"   ✅ HuggingFace custom code files copied")
 
     def _save_single_file_safe(self, path: str):
         """
