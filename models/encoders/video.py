@@ -819,6 +819,90 @@ class VideoEncoderBlock(nn.Module):
         return x
 
 
+class VideoTiTokTokenizer(nn.Module):
+    """
+    TiTok-style 1D Tokenizer for video features.
+    
+    This compresses encoded video features (from vision encoder) to a smaller 
+    number of tokens, similar to how TiTokTokenizer works for images.
+    
+    Note: This is different from VidTokTokenizer which is a 3D VAE for raw video compression.
+    This tokenizer operates on already-encoded features, not raw pixels.
+    
+    Converts [B, T*H*W, hidden_size] -> [B, num_tokens, hidden_size]
+    """
+
+    def __init__(
+        self, 
+        hidden_size: int, 
+        num_tokens: int = 64, 
+        num_patches: int = 576,
+        max_frames: int = 32,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_tokens = num_tokens
+        self.num_patches = num_patches
+        self.max_frames = max_frames
+        
+        # Learnable compression projection
+        self.compress = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        
+        # Learnable token queries for compression
+        self.token_queries = nn.Parameter(torch.randn(1, num_tokens, hidden_size) * 0.02)
+        
+        # Cross-attention for spatio-temporal compression
+        self.compress_attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=8,
+            batch_first=True,
+            dropout=0.1,
+        )
+        self.compress_norm = nn.LayerNorm(hidden_size)
+        
+        # Temporal position embedding for queries
+        self.temporal_embed = nn.Parameter(torch.randn(1, max_frames, hidden_size) * 0.02)
+        
+        print(f"   🎬 VideoTiTokTokenizer: {num_patches} patches -> {num_tokens} tokens")
+
+    def forward(self, x: torch.Tensor, num_frames: int = None) -> torch.Tensor:
+        """
+        Compress video patch features to TiTok-style 1D tokens.
+        
+        Args:
+            x: [B, T*H*W, hidden_size] video patch features (flattened spatial-temporal)
+               or [B, T, H*W, hidden_size] video patch features per frame
+            num_frames: Number of frames (optional, for temporal embedding)
+            
+        Returns:
+            [B, num_tokens, hidden_size] compressed token features
+        """
+        batch_size = x.shape[0]
+        
+        # Handle different input shapes
+        if x.dim() == 4:
+            # [B, T, H*W, hidden_size] -> [B, T*H*W, hidden_size]
+            B, T, HW, D = x.shape
+            x = x.reshape(B, T * HW, D)
+            num_frames = T
+        
+        # Expand token queries for batch
+        queries = self.token_queries.expand(batch_size, -1, -1)
+        
+        # Project features
+        x_proj = self.compress(x)
+        
+        # Cross-attention compression: queries attend to all spatio-temporal patches
+        tokens, _ = self.compress_attn(queries, x_proj, x_proj)
+        tokens = self.compress_norm(queries + tokens)
+        
+        return tokens
+
+
 class VideoEncoder(nn.Module):
     """
     SOTA Video Encoder with 3D-RoPE, 3D Causal Attention, Temporal Expert Routing, and VidTokTokenizer.
@@ -886,9 +970,11 @@ class VideoEncoder(nn.Module):
         if use_temporal_moe:
             print(f"   🎯 Temporal MoE: {num_experts} experts per layer")
 
-        # VidTokTokenizer for efficient video token compression (like TiTok for images)
+        # VideoTiTokTokenizer for efficient video token compression (like TiTok for images)
+        # Note: This is different from VidTokTokenizer which is a 3D VAE for video compression
+        # This tokenizer compresses encoded features to fewer tokens, similar to TiTok
         if use_video_tokenizer:
-            self.vidtok = VidTokTokenizer(
+            self.vidtok = VideoTiTokTokenizer(
                 hidden_size=self.hidden_size,
                 num_tokens=num_video_tokens,
                 num_patches=self.num_spatial_tokens * max_frames,  # T * H * W

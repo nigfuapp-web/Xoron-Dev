@@ -45,6 +45,7 @@ from models.encoders.vision import (
 )
 from models.encoders.video import (
     VideoEncoder,
+    VideoTiTokTokenizer,
     VidTokTokenizer,
     VidTokEncoder,
     VidTokDecoder,
@@ -89,6 +90,7 @@ __all__ = [
     'SIGLIP_MODELS',
     # Video
     'VideoEncoder',
+    'VideoTiTokTokenizer',
     'VidTokTokenizer',
     'VidTokEncoder',
     'VidTokDecoder',
