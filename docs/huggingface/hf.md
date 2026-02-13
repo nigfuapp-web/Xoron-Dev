@@ -108,6 +108,7 @@ datasets:
 
 </div>
 
+# ![Xoron-Dev Logo](assets/IMG_2925.PNG)
 **Xoron-Dev** is a unified, multimodal AI model designed to understand and generate text, images, video, and audio within a single architecture. It leverages a **Mixture of Experts (MoE)** backbone with DeepSeek-style shared expert isolation and integrates SOTA encoders (SigLIP-2 with TiTok + Dual-Stream Attention) and generators (MoE-DiT with Flow Matching) for comprehensive any-to-any capabilities.
 
 ## 🌟 Model Highlights
