@@ -1168,8 +1168,6 @@ def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
     Decode audio bytes using soundfile/librosa (NOT torchcodec).
     This is our custom audio decoder that avoids torchcodec dependency.
     
-    OPTIMIZED: Uses fast path for common formats and avoids unnecessary conversions.
-    
     Args:
         audio_bytes: Raw audio bytes
         target_path: Path to save the decoded audio
@@ -1179,18 +1177,6 @@ def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
     """
     import io
     import numpy as np
-    
-    # FAST PATH: If bytes are already WAV/FLAC, just write directly
-    # WAV magic: b'RIFF' at 0, b'WAVE' at 8
-    # FLAC magic: b'fLaC' at 0
-    if len(audio_bytes) > 12:
-        if (audio_bytes[:4] == b'RIFF' and audio_bytes[8:12] == b'WAVE') or audio_bytes[:4] == b'fLaC':
-            try:
-                with open(target_path, 'wb') as f:
-                    f.write(audio_bytes)
-                return target_path
-            except Exception:
-                pass
     
     # Try soundfile first (preferred - fast and reliable)
     try:
@@ -1208,12 +1194,10 @@ def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
     except Exception:
         pass
     
-    # Try librosa as fallback (handles more formats like MP3)
-    # NOTE: librosa is SLOW - avoid if possible
+    # Try librosa as fallback (handles more formats)
     try:
         import librosa
         audio_buffer = io.BytesIO(audio_bytes)
-        # Use sr=None to preserve original sample rate, mono=True for consistency
         array, sr = librosa.load(audio_buffer, sr=None, mono=True)
         
         import soundfile as sf
@@ -1231,9 +1215,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     
     Uses custom audio decoding (soundfile/librosa) instead of torchcodec.
     Disables HuggingFace's automatic audio decoding to avoid torchcodec dependency.
-    
-    NOTE: Uses streaming=False to batch download (MUCH faster than streaming=True
-    which makes individual HTTP requests per sample).
     """
     from datasets import load_dataset, Audio
     import soundfile as sf
@@ -1247,15 +1228,10 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing audio dataset: {name}")
     
     try:
-        # Download MORE than needed to account for invalid/failed samples
-        # We want max_samples VALID samples, so download 3x to have buffer
-        download_limit = max_samples * 3
-        split_with_limit = f"{config['split']}[:{download_limit}]"
-        load_kwargs = {"path": config["path"], "split": split_with_limit, "streaming": False}
+        load_kwargs = {"path": config["path"], "split": config["split"], "streaming": True}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
-        logger.info(f"  ⬇️ Downloading {name} (up to {download_limit} samples, need {max_samples} valid)...")
         ds = load_dataset(**load_kwargs)
         
         # Disable automatic audio decoding - use our custom soundfile/librosa decoder
@@ -1269,7 +1245,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
         
         count = 0
         for idx, sample in enumerate(ds):
-            # Stop once we have enough VALID samples
             if count >= max_samples:
                 break
             
@@ -1607,21 +1582,11 @@ def build_unified_dataset(args):
                 "source": [],
             }
             
-            logger.info(f"  📦 Embedding {len(valid_samples)} audio files as bytes...")
             for s in valid_samples:
                 audio_path = s.get("audio_path")
                 # Double-check path is valid string before adding
                 if isinstance(audio_path, str) and os.path.exists(audio_path):
-                    # READ THE ACTUAL AUDIO BYTES - this ensures they get embedded in the dataset
-                    try:
-                        with open(audio_path, 'rb') as f:
-                            audio_bytes = f.read()
-                        # Store as dict with bytes - HuggingFace Audio format
-                        audio_data["audio"].append({"bytes": audio_bytes, "path": None})
-                    except Exception as e:
-                        logger.warning(f"  ⚠ Could not read audio {audio_path}: {e}")
-                        continue
-                    
+                    audio_data["audio"].append(audio_path)
                     audio_data["text"].append(to_string_or_none(s.get("text")))
                     audio_data["speaker_id"].append(to_string_or_none(s.get("speaker_id")))
                     # sampling_rate should stay as int or None
@@ -1642,7 +1607,7 @@ def build_unified_dataset(args):
                     ds = Dataset.from_dict(audio_data)
                     ds = ds.cast_column("audio", HFAudio())
                     datasets_dict["audio"] = ds
-                    logger.info(f"  ✓ Audio: {len(ds)} samples (with embedded audio bytes)")
+                    logger.info(f"  ✓ Audio: {len(ds)} samples (with embedded audio files)")
                     logger.info(f"    Columns: {ds.column_names}")
                 except Exception as e:
                     logger.error(f"  ✗ Failed to create audio dataset: {e}")
@@ -1673,21 +1638,11 @@ def build_unified_dataset(args):
                 "source": [],
             }
             
-            logger.info(f"  📦 Embedding {len(valid_samples)} video files as bytes...")
             for s in valid_samples:
                 video_path = s.get("video_path")
                 # Double-check path is valid string before adding
                 if isinstance(video_path, str) and os.path.exists(video_path):
-                    # READ THE ACTUAL VIDEO BYTES - this ensures they get embedded in the dataset
-                    try:
-                        with open(video_path, 'rb') as f:
-                            video_bytes = f.read()
-                        # Store as dict with bytes - HuggingFace Video format
-                        video_data["video"].append({"bytes": video_bytes, "path": None})
-                    except Exception as e:
-                        logger.warning(f"  ⚠ Could not read video {video_path}: {e}")
-                        continue
-                    
+                    video_data["video"].append(video_path)
                     video_data["caption"].append(to_string_or_none(s.get("caption")))
                     video_data["question"].append(to_string_or_none(s.get("question")))
                     video_data["answer"].append(to_string_or_none(s.get("answer")))
@@ -1701,18 +1656,18 @@ def build_unified_dataset(args):
             
             if video_data["video"]:
                 try:
-                    # Use HF Video type to store actual video files with embedded bytes
+                    # Use HF Video type to store actual video files
                     from datasets import Video as HFVideo
                     ds = Dataset.from_dict(video_data)
                     ds = ds.cast_column("video", HFVideo())
                     datasets_dict["video"] = ds
-                    logger.info(f"  ✓ Video: {len(ds)} samples (with embedded video bytes)")
+                    logger.info(f"  ✓ Video: {len(ds)} samples (with embedded .mp4 files)")
                     logger.info(f"    Columns: {ds.column_names}")
                 except ImportError:
                     # Fallback if Video type not available (older datasets version)
-                    logger.warning("  ⚠ HF Video type not available, storing as dicts with bytes")
+                    logger.warning("  ⚠ HF Video type not available, storing as paths")
                     datasets_dict["video"] = Dataset.from_dict(video_data)
-                    logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples")
+                    logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples (as paths)")
                 except Exception as e:
                     logger.error(f"  ✗ Failed to create video dataset: {e}")
                     traceback.print_exc()
