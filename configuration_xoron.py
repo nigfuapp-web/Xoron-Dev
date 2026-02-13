@@ -51,6 +51,7 @@ class XoronConfig(PreTrainedConfig):
         - 3D-RoPE + 3D Causal Transformers for video generation
         - TiTok-style 1D tokenization for vision encoding
         - VidTok-style 1D tokenization for video encoding
+        - VideoTiTokTokenizer for efficient video token compression
         - Dual-stream attention for symmetric processing
         - Conformer audio encoder/decoder
         - FP16-native numerical stability
@@ -112,6 +113,13 @@ class XoronConfig(PreTrainedConfig):
         vidtok_spatial_compression: int = 8,
         vidtok_causal: bool = True,
         vidtok_use_fsq: bool = False,
+        
+        # VideoTiTokTokenizer Configuration (SOTA: TiTok-style 1D tokenization for video)
+        use_video_titok: bool = True,
+        num_video_titok_tokens: int = 64,
+        num_video_titok_layers: int = 2,
+        num_video_titok_heads: int = 8,
+        video_titok_dropout: float = 0.1,
         
         # Continuous-Scale Training Configuration
         use_multi_scale: bool = True,
@@ -261,6 +269,13 @@ class XoronConfig(PreTrainedConfig):
         self.vidtok_spatial_compression = vidtok_spatial_compression
         self.vidtok_causal = vidtok_causal
         self.vidtok_use_fsq = vidtok_use_fsq
+        
+        # VideoTiTokTokenizer Configuration
+        self.use_video_titok = use_video_titok
+        self.num_video_titok_tokens = num_video_titok_tokens
+        self.num_video_titok_layers = num_video_titok_layers
+        self.num_video_titok_heads = num_video_titok_heads
+        self.video_titok_dropout = video_titok_dropout
         
         # Continuous-Scale Training Configuration
         self.use_multi_scale = use_multi_scale
