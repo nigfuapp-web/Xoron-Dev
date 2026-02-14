@@ -1745,41 +1745,33 @@ def build_unified_dataset(args):
                 video_path = s.get("video_path")
                 # Double-check path is valid string before adding
                 if isinstance(video_path, str) and os.path.exists(video_path):
-                    # Pass file path - HuggingFace will upload as separate file (shows thumbnails)
-                    video_data["video"].append(video_path)
-                    video_data["caption"].append(to_string_or_none(s.get("caption")))
-                    video_data["question"].append(to_string_or_none(s.get("question")))
-                    video_data["answer"].append(to_string_or_none(s.get("answer")))
-                    video_data["prompt"].append(to_string_or_none(s.get("prompt")))
-                    video_data["options"].append(to_string_or_none(s.get("options")))
-                    video_data["duration"].append(to_string_or_none(s.get("duration")))
-                    video_data["domain"].append(to_string_or_none(s.get("domain")))
-                    video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
-                    video_data["category"].append(to_string_or_none(s.get("category")))
-                    video_data["source"].append(to_string_or_none(s.get("source")))
+                    # Read actual video bytes - store the real video data, not paths
+                    try:
+                        with open(video_path, 'rb') as f:
+                            video_bytes = f.read()
+                        video_data["video"].append({"bytes": video_bytes, "path": None})
+                        video_data["caption"].append(to_string_or_none(s.get("caption")))
+                        video_data["question"].append(to_string_or_none(s.get("question")))
+                        video_data["answer"].append(to_string_or_none(s.get("answer")))
+                        video_data["prompt"].append(to_string_or_none(s.get("prompt")))
+                        video_data["options"].append(to_string_or_none(s.get("options")))
+                        video_data["duration"].append(to_string_or_none(s.get("duration")))
+                        video_data["domain"].append(to_string_or_none(s.get("domain")))
+                        video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
+                        video_data["category"].append(to_string_or_none(s.get("category")))
+                        video_data["source"].append(to_string_or_none(s.get("source")))
+                    except Exception as e:
+                        logger.warning(f"  Could not read video file {video_path}: {e}")
+                        continue
             
             if video_data["video"]:
                 try:
-                    # Convert local paths to repo paths BEFORE creating the dataset
-                    # This avoids needing .map() on Video column which triggers torchcodec
-                    updated_video_paths = []
-                    for local_path in video_data["video"]:
-                        if isinstance(local_path, str):
-                            # Convert /tmp/.../output/videos/Dataset/000001.mp4 -> videos/Dataset/000001.mp4
-                            rel_path = local_path.replace(OUTPUT_DIR + "/", "")
-                            updated_video_paths.append(rel_path)
-                        else:
-                            updated_video_paths.append(local_path)
-                    video_data["video"] = updated_video_paths
-                    
-                    # Create dataset with string paths first
-                    ds = Dataset.from_dict(video_data)
-                    
-                    # Cast to HF Video type so videos work properly for users
+                    # Create dataset with actual video bytes embedded
                     from datasets import Video as HFVideo
-                    ds = ds.cast_column("video", HFVideo())
+                    ds = Dataset.from_dict(video_data)
+                    ds = ds.cast_column("video", HFVideo(decode=False))
                     datasets_dict["video"] = ds
-                    logger.info(f"  ✓ Video: {len(ds)} samples (with HF Video type, paths pre-converted)")
+                    logger.info(f"  ✓ Video: {len(ds)} samples (actual video data embedded)")
                     logger.info(f"    Columns: {ds.column_names}")
                 except Exception as e:
                     logger.error(f"  ✗ Failed to create video dataset: {e}")
@@ -1838,22 +1830,10 @@ def build_unified_dataset(args):
         except Exception:
             pass
         
-        # Upload videos folder separately so they're in /videos/ not /data/
-        videos_dir = os.path.join(OUTPUT_DIR, "videos")
-        if os.path.exists(videos_dir):
-            logger.info("  📹 Uploading videos folder...")
-            api.upload_folder(
-                folder_path=videos_dir,
-                path_in_repo="videos",
-                repo_id=HF_DATASET_NAME,
-                repo_type="dataset",
-                token=HF_TOKEN,
-            )
-            logger.info("  ✓ Videos uploaded to /videos/")
-            # Note: Video paths already converted to repo paths during dataset creation
-            # to avoid .map() call on Video column which triggers torchcodec
+        # Videos are embedded directly in the dataset as bytes (no separate folder needed)
+        # This ensures users get actual video data, not paths
         
-        # Now push the dataset (parquet files go to /data/)
+        # Push the dataset to HuggingFace
         final_dataset.push_to_hub(
             HF_DATASET_NAME,
             token=HF_TOKEN,
