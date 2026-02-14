@@ -1065,7 +1065,7 @@ def get_video_ext_from_path(path: str) -> str:
 
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
     """Process a video dataset with standardized schema. Supports .mp4, .gif, .webm and other formats."""
-    from datasets import load_dataset
+    from datasets import load_dataset, Video
     
     samples = []
     name = config['name']
@@ -1082,6 +1082,17 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             load_kwargs["name"] = config["config"]
         
         ds = load_dataset(**load_kwargs)
+        
+        # Disable automatic video decoding to prevent downloading entire video files upfront
+        # This is critical for large video datasets - only download when we actually need the sample
+        for col in ds.column_names:
+            if col.lower() in ['video', 'clip', 'media']:
+                try:
+                    ds = ds.cast_column(col, Video(decode=False))
+                    logger.info(f"  📝 Disabled auto-decoding for column '{col}' to prevent full dataset download")
+                    break
+                except Exception:
+                    pass
         
         count = 0
         downloaded = 0
