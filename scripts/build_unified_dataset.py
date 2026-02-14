@@ -1877,13 +1877,9 @@ def build_unified_dataset(args):
     for split_name, ds in final_dataset.items():
         logger.info(f"  {split_name}: {len(ds)} samples, {len(ds.column_names)} columns")
     
-    # Save locally first
-    local_save_path = os.path.join(OUTPUT_DIR, "xoron_unified_dataset")
-    logger.info(f"\nSaving dataset locally to {local_save_path}...")
-    final_dataset.save_to_disk(local_save_path)
-    
-    # Upload to HuggingFace
-    logger.info(f"\nUploading to HuggingFace Hub: {HF_DATASET_NAME}...")
+    # Upload directly to HuggingFace (skip local save to conserve disk space)
+    logger.info(f"\nUploading directly to HuggingFace Hub: {HF_DATASET_NAME}...")
+    logger.info("(Skipping local save to conserve disk space)")
     try:
         from huggingface_hub import HfApi, create_repo
         api = HfApi()
@@ -1894,7 +1890,7 @@ def build_unified_dataset(args):
         except Exception:
             pass
         
-        # Push dataset (videos are embedded as bytes in the video column)
+        # Push dataset directly (no local save needed)
         if datasets_dict:
             final_dataset.push_to_hub(
                 HF_DATASET_NAME,
@@ -1903,13 +1899,26 @@ def build_unified_dataset(args):
             )
         logger.info("✅ Dataset uploaded successfully!")
         logger.info(f"   View at: https://huggingface.co/datasets/{HF_DATASET_NAME}")
+        
+        # Cleanup downloaded files after successful upload to free space
+        logger.info("\nCleaning up temporary files to free disk space...")
+        try:
+            if os.path.exists(DOWNLOAD_DIR):
+                shutil.rmtree(DOWNLOAD_DIR)
+                logger.info(f"  Cleaned: {DOWNLOAD_DIR}")
+            if os.path.exists(OUTPUT_DIR):
+                shutil.rmtree(OUTPUT_DIR)
+                logger.info(f"  Cleaned: {OUTPUT_DIR}")
+            if os.path.exists(CACHE_DIR):
+                shutil.rmtree(CACHE_DIR)
+                logger.info(f"  Cleaned: {CACHE_DIR}")
+        except Exception as cleanup_err:
+            logger.warning(f"  Cleanup warning: {cleanup_err}")
+        
     except Exception as e:
         logger.error(f"Failed to upload to HuggingFace: {e}")
         traceback.print_exc()
-    
-    # Cleanup (optional - comment out to keep local files)
-    # logger.info("Cleaning up temporary files...")
-    # shutil.rmtree(BASE_DIR)
+        logger.info("Note: Downloaded files kept in case you want to retry")
     
     logger.info("\n" + "=" * 60)
     logger.info("DATASET BUILD COMPLETE")
