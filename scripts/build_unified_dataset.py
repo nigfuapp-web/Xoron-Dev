@@ -898,41 +898,69 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
     
     # If no video data, try to get URL
     if video_data is None and video_url is None:
-        # Direct URL fields
-        for field in ['Video', 'video_url', 'video', 'url', 'video_link', 'mp4_url', 'gif_url', 'media_url', 'contentUrl', 'column1']:
+        # Direct URL fields (matches dataset.py)
+        for field in ['Video', 'video_url', 'video1', 'column1', 'contentUrl', 'url', 'video_link', 'mp4_url', 'gif_url', 'media_url']:
             if field in sample:
                 url = sample[field]
                 if isinstance(url, str) and (url.startswith('http') or url.startswith('//')):
-                    video_url = 'https:' + url if url.startswith('//') else url
-                    break
+                    # Skip placeholder values
+                    if url not in ['content_loc', 'thumbnail_loc', 'url', 'video_url']:
+                        video_url = 'https:' + url if url.startswith('//') else url
+                        break
     
-    # YouTube/TikTok video ID
+    # clip_id -> YouTube URL (with alphanumeric validation like dataset.py)
     if video_data is None and video_url is None:
-        for field in ['videoID', 'video_id', 'youtube_id', 'clip_id', 'ytid']:
+        if "clip_id" in sample:
+            clip_id = sample["clip_id"]
+            if clip_id and isinstance(clip_id, str) and len(clip_id) == 11:
+                if clip_id.replace('-', '').replace('_', '').isalnum():
+                    video_url = f"https://www.youtube.com/watch?v={clip_id}"
+    
+    # video_id -> YouTube/TikTok URL
+    if video_data is None and video_url is None:
+        if "video_id" in sample:
+            vid_id = sample["video_id"]
+            if vid_id and isinstance(vid_id, str):
+                # Strip "v_" prefix (ActivityNet/VideoInstruct-100K format)
+                if vid_id.startswith("v_"):
+                    video_url = f"https://www.youtube.com/watch?v={vid_id[2:]}"
+                elif len(vid_id) == 11:
+                    video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                elif vid_id.isdigit() and len(vid_id) > 15:
+                    # TikTok ID (long numeric)
+                    video_url = f"https://www.tiktok.com/@user/video/{vid_id}"
+    
+    # videoID -> YouTube URL
+    if video_data is None and video_url is None:
+        if "videoID" in sample:
+            vid_id = sample["videoID"]
+            if vid_id and isinstance(vid_id, str) and len(vid_id) == 11:
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
+    
+    # Vript meta.video_id (nested field)
+    if video_data is None and video_url is None:
+        if "meta" in sample and isinstance(sample.get("meta"), dict):
+            meta = sample["meta"]
+            if "video_id" in meta:
+                vid_id = str(meta["video_id"])
+                # Try Vript metadata first
+                vript_url = get_vript_video_url(vid_id)
+                if vript_url:
+                    video_url = vript_url
+                elif len(vid_id) == 11:
+                    video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                elif vid_id.isdigit() and len(vid_id) > 15:
+                    # TikTok ID (long numeric)
+                    video_url = f"https://www.tiktok.com/@user/video/{vid_id}"
+    
+    # Fallback: youtube_id, ytid fields
+    if video_data is None and video_url is None:
+        for field in ['youtube_id', 'ytid']:
             if field in sample:
                 vid_id = str(sample[field])
-                if vid_id:
-                    # Strip "v_" prefix (ActivityNet/VideoInstruct-100K format)
-                    if vid_id.startswith('v_'):
-                        vid_id = vid_id[2:]
-                    
-                    # Try Vript metadata first
-                    vript_url = get_vript_video_url(vid_id)
-                    if vript_url:
-                        video_url = vript_url
-                        break
-                    # YouTube ID (11 chars)
-                    if len(vid_id) == 11:
-                        video_url = f"https://www.youtube.com/watch?v={vid_id}"
-                        break
-                    # TikTok ID (long numeric)
-                    if vid_id.isdigit() and len(vid_id) > 15:
-                        video_url = f"https://www.tiktok.com/@user/video/{vid_id}"
-                        break
-                    # Default to YouTube (take first 11 chars)
-                    if len(vid_id) >= 11:
-                        video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
-                        break
+                if vid_id and len(vid_id) == 11:
+                    video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                    break
     
     return result, video_data, video_url
 
