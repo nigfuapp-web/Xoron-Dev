@@ -1176,24 +1176,12 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing video dataset: {name}")
     
     try:
-        # Pull exactly max_samples in one batch (no per-sample HTTP requests)
-        split_str = f"{config['split']}[:{max_samples}]"
-        load_kwargs = {"path": config["path"], "split": split_str, "streaming": False}
+        # Use streaming to avoid downloading entire dataset
+        load_kwargs = {"path": config["path"], "split": config['split'], "streaming": True}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
         ds = load_dataset(**load_kwargs)
-        
-        # Disable automatic video decoding to prevent downloading entire video files upfront
-        # This is critical for large video datasets - only download when we actually need the sample
-        for col in ds.column_names:
-            if col.lower() in ['video', 'clip', 'media']:
-                try:
-                    ds = ds.cast_column(col, Video(decode=False))
-                    logger.info(f"  📝 Disabled auto-decoding for column '{col}' to prevent full dataset download")
-                    break
-                except Exception:
-                    pass
         
         count = 0
         downloaded = 0
