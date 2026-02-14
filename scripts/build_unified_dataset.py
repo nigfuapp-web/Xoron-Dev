@@ -1718,8 +1718,10 @@ def build_unified_dataset(args):
     
     # VIDEO DATASET
     # Schema: video, caption, question, answer, prompt, options, duration, domain, sub_category, category, source
+    # Videos use metadata.jsonl file so HuggingFace can show thumbnails from /videos/ folder
+    video_metadata_path = None
     if all_samples["video"]:
-        logger.info("\n🎬 Creating VIDEO dataset...")
+        logger.info("\n🎬 Creating VIDEO metadata...")
         # Validate: video_path must be a string and file must exist
         valid_samples = [s for s in all_samples["video"]
                         if s.get("video_path") 
@@ -1727,50 +1729,33 @@ def build_unified_dataset(args):
                         and os.path.exists(s.get("video_path", ""))]
         
         if valid_samples:
-            video_data = {
-                "video": [],
-                "caption": [],
-                "question": [],
-                "answer": [],
-                "prompt": [],
-                "options": [],
-                "duration": [],
-                "domain": [],
-                "sub_category": [],
-                "category": [],
-                "source": [],
-            }
+            # Create metadata.jsonl for videos - HuggingFace auto-loads this with the video files
+            video_metadata_path = os.path.join(OUTPUT_DIR, "videos", "metadata.jsonl")
+            os.makedirs(os.path.dirname(video_metadata_path), exist_ok=True)
             
-            for s in valid_samples:
-                video_path = s.get("video_path")
-                # Double-check path is valid string before adding
-                if isinstance(video_path, str) and os.path.exists(video_path):
-                    # Get just the filename: /tmp/.../videos/000001.mp4 -> videos/000001.mp4
-                    filename = os.path.basename(video_path)
-                    repo_path = f"videos/{filename}"
-                    video_data["video"].append(repo_path)
-                    video_data["caption"].append(to_string_or_none(s.get("caption")))
-                    video_data["question"].append(to_string_or_none(s.get("question")))
-                    video_data["answer"].append(to_string_or_none(s.get("answer")))
-                    video_data["prompt"].append(to_string_or_none(s.get("prompt")))
-                    video_data["options"].append(to_string_or_none(s.get("options")))
-                    video_data["duration"].append(to_string_or_none(s.get("duration")))
-                    video_data["domain"].append(to_string_or_none(s.get("domain")))
-                    video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
-                    video_data["category"].append(to_string_or_none(s.get("category")))
-                    video_data["source"].append(to_string_or_none(s.get("source")))
+            with open(video_metadata_path, 'w') as f:
+                for s in valid_samples:
+                    video_path = s.get("video_path")
+                    if isinstance(video_path, str) and os.path.exists(video_path):
+                        filename = os.path.basename(video_path)
+                        # metadata.jsonl entry - file_name is relative to the folder
+                        entry = {
+                            "file_name": filename,
+                            "caption": to_string_or_none(s.get("caption")),
+                            "question": to_string_or_none(s.get("question")),
+                            "answer": to_string_or_none(s.get("answer")),
+                            "prompt": to_string_or_none(s.get("prompt")),
+                            "options": to_string_or_none(s.get("options")),
+                            "duration": to_string_or_none(s.get("duration")),
+                            "domain": to_string_or_none(s.get("domain")),
+                            "sub_category": to_string_or_none(s.get("sub_category")),
+                            "category": to_string_or_none(s.get("category")),
+                            "source": to_string_or_none(s.get("source")),
+                        }
+                        f.write(json.dumps(entry) + "\n")
             
-            if video_data["video"]:
-                try:
-                    # Create dataset with paths pointing to /videos/ folder
-                    # HuggingFace will show thumbnails from the video files
-                    ds = Dataset.from_dict(video_data)
-                    datasets_dict["video"] = ds
-                    logger.info(f"  ✓ Video: {len(ds)} samples (paths to /videos/ folder)")
-                    logger.info(f"    Columns: {ds.column_names}")
-                except Exception as e:
-                    logger.error(f"  ✗ Failed to create video dataset: {e}")
-                    traceback.print_exc()
+            logger.info(f"  ✓ Video metadata: {len(valid_samples)} samples written to metadata.jsonl")
+            logger.info(f"    Videos in /videos/ folder with metadata.jsonl for HuggingFace")
     
     # Merge with existing datasets if --hf flag was used
     if existing_datasets:
@@ -1825,26 +1810,28 @@ def build_unified_dataset(args):
         except Exception:
             pass
         
-        # Upload videos folder first so they exist when dataset references them
+        # Upload videos folder with metadata.jsonl - HuggingFace auto-creates dataset from this
         videos_dir = os.path.join(OUTPUT_DIR, "videos")
         if os.path.exists(videos_dir):
-            logger.info("  📹 Uploading videos folder...")
+            logger.info("  📹 Uploading videos folder (with metadata.jsonl)...")
             api.upload_folder(
                 folder_path=videos_dir,
-                path_in_repo="videos",
+                path_in_repo="data",  # Put in /data/ so HuggingFace auto-loads as dataset
                 repo_id=HF_DATASET_NAME,
                 repo_type="dataset",
                 token=HF_TOKEN,
             )
-            logger.info("  ✓ Videos uploaded to /videos/")
+            logger.info("  ✓ Videos + metadata.jsonl uploaded to /data/")
+            logger.info("    HuggingFace will auto-create video dataset with thumbnails")
         
-        # Push the dataset (parquet files reference videos in /videos/ folder)
-        final_dataset.push_to_hub(
-            HF_DATASET_NAME,
-            token=HF_TOKEN,
-            private=False,
-        )
-        logger.info("✅ Dataset uploaded successfully!")
+        # Push other datasets (text, audio, image) if any
+        if datasets_dict:
+            final_dataset.push_to_hub(
+                HF_DATASET_NAME,
+                token=HF_TOKEN,
+                private=False,
+            )
+            logger.info("✅ Dataset uploaded successfully!")
         logger.info(f"   View at: https://huggingface.co/datasets/{HF_DATASET_NAME}")
     except Exception as e:
         logger.error(f"Failed to upload to HuggingFace: {e}")
