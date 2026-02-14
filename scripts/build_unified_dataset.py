@@ -453,6 +453,53 @@ def download_audio_direct(url: str, output_path: str, timeout: int = 60) -> Opti
         return None
 
 
+def download_youtube_audio(yt_id: str, output_path: str, start: float = None, end: float = None, timeout: int = 120) -> Optional[str]:
+    """Download audio from YouTube using yt-dlp."""
+    try:
+        if not shutil.which('yt-dlp'):
+            logger.warning("yt-dlp not found for YouTube audio download")
+            return None
+        
+        url = f"https://www.youtube.com/watch?v={yt_id}"
+        
+        cmd = [
+            'yt-dlp',
+            '-x',  # Extract audio
+            '--audio-format', 'wav',
+            '-o', output_path,
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings',
+            '--socket-timeout', '30',
+            '--retries', '3',
+        ]
+        
+        # Add time range if specified (for clips)
+        if start is not None and end is not None:
+            # yt-dlp uses --download-sections for time ranges
+            cmd.extend(['--download-sections', f'*{start}-{end}'])
+        
+        cmd.append(url)
+        
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        
+        # yt-dlp may add extension, check for output
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        # Check with .wav extension added
+        wav_path = output_path if output_path.endswith('.wav') else output_path + '.wav'
+        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+            return wav_path
+        
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout downloading YouTube audio: {yt_id}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error downloading YouTube audio {yt_id}: {e}")
+        return None
+
+
 def download_image(url: str, output_path: str, timeout: int = 30) -> Optional[str]:
     """Download image from URL."""
     try:
@@ -763,6 +810,7 @@ def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
     audio_data = None
     audio_path = None
     
+    # Standard audio column names
     for field in ['audio', 'speech', 'sound', 'waveform']:
         if field in sample and sample[field] is not None:
             audio = sample[field]
@@ -784,6 +832,30 @@ def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
             else:
                 audio_data = audio
                 break
+    
+    # If no standard audio column, check for URL/path fields
+    # MLS-SpeakerDescriptions uses 'original_path'
+    if audio_data is None:
+        for url_field in ['original_path', 'audio_url', 'url', 'file_path', 'path', 'file']:
+            if url_field in sample and sample[url_field]:
+                val = sample[url_field]
+                if isinstance(val, str) and (val.startswith('http') or val.endswith(('.wav', '.mp3', '.flac', '.ogg'))):
+                    audio_path = val
+                    break
+    
+    # YouTube ID fields (MusicCaps, AudioSet) - construct YouTube URL
+    if audio_data is None and audio_path is None:
+        for yt_field in ['ytid', 'youtube_id', 'video_id', 'yt_id']:
+            if yt_field in sample and sample[yt_field]:
+                yt_id = sample[yt_field]
+                if isinstance(yt_id, str) and len(yt_id) == 11:
+                    audio_path = f"youtube:{yt_id}"  # Special marker for YouTube
+                    # Get start/end times if available
+                    start = sample.get('start_s', sample.get('start', 0))
+                    end = sample.get('end_s', sample.get('end', None))
+                    if start or end:
+                        audio_path = f"youtube:{yt_id}:{start}:{end}"
+                    break
     
     return result, audio_data, audio_path
 
@@ -1447,7 +1519,15 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             load_kwargs["name"] = config["config"]
         
         ds = load_dataset(**load_kwargs)
-        logger.info(f"  📥 Streaming mode: will fetch only {max_samples} samples")
+        
+        # Disable HuggingFace's automatic audio decoding (avoids torchcodec requirement)
+        # We use our own soundfile/librosa decoder instead
+        try:
+            ds = ds.cast_column('audio', Audio(decode=False))
+            logger.info(f"  📥 Streaming mode with decode=False: will fetch only {max_samples} samples")
+        except Exception:
+            # Dataset may not have 'audio' column - will use alternative fields
+            logger.info(f"  📥 Streaming mode: will fetch only {max_samples} samples")
         
         count = 0
         for idx, sample in enumerate(ds):
@@ -1497,13 +1577,22 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             
             elif audio_src_path:
                 try:
-                    if isinstance(audio_src_path, str) and audio_src_path.startswith('http'):
-                        # Download from URL
-                        audio_path = download_audio_direct(audio_src_path, target_path)
-                    elif os.path.exists(audio_src_path):
-                        shutil.copy(audio_src_path, target_path)
-                        audio_path = target_path
-                except:
+                    if isinstance(audio_src_path, str):
+                        if audio_src_path.startswith('youtube:'):
+                            # YouTube audio - parse youtube:ID:start:end format
+                            parts = audio_src_path.split(':')
+                            yt_id = parts[1]
+                            start = float(parts[2]) if len(parts) > 2 and parts[2] else None
+                            end = float(parts[3]) if len(parts) > 3 and parts[3] else None
+                            audio_path = download_youtube_audio(yt_id, target_path, start, end)
+                        elif audio_src_path.startswith('http'):
+                            # Download from URL
+                            audio_path = download_audio_direct(audio_src_path, target_path)
+                        elif os.path.exists(audio_src_path):
+                            shutil.copy(audio_src_path, target_path)
+                            audio_path = target_path
+                except Exception as e:
+                    logger.warning(f"  Error downloading audio {idx}: {e}")
                     audio_path = None
             
             if audio_path and os.path.exists(audio_path):
