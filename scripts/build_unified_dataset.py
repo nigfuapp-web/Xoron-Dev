@@ -903,6 +903,10 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
             if field in sample:
                 vid_id = str(sample[field])
                 if vid_id:
+                    # Strip "v_" prefix (ActivityNet/VideoInstruct-100K format)
+                    if vid_id.startswith('v_'):
+                        vid_id = vid_id[2:]
+                    
                     # Try Vript metadata first
                     vript_url = get_vript_video_url(vid_id)
                     if vript_url:
@@ -916,7 +920,7 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
                     if vid_id.isdigit() and len(vid_id) > 15:
                         video_url = f"https://www.tiktok.com/@user/video/{vid_id}"
                         break
-                    # Default to YouTube
+                    # Default to YouTube (take first 11 chars)
                     if len(vid_id) >= 11:
                         video_url = f"https://www.youtube.com/watch?v={vid_id[:11]}"
                         break
