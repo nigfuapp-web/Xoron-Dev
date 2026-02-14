@@ -832,13 +832,22 @@ def extract_video_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
         if isinstance(caption_obj, dict):
             result["caption"] = caption_obj.get('content', caption_obj.get('shot_type', ''))
     
+    # Pexels format: extract caption from image filename (column0)
+    if result["caption"] is None and sample.get("column0") and sample.get("column1"):
+        col0 = str(sample.get("column0", ""))
+        if col0 != "thumbnail_loc" and ('pexels.com' in col0 or 'images.pexels' in col0):
+            filename = col0.split('/')[-1].replace('.jpeg', '').replace('.jpg', '').replace('.png', '')
+            parts = filename.split('-')[:-1]  # Remove ID at end
+            if parts:
+                result["caption"] = ' '.join(parts)
+    
     # Prompt - for generation
     result["prompt"] = get_field(sample, [
         'Prompt', 'prompt', 'Text_Prompt', 'instruction', 'query'
     ])
     
-    # QA fields (Video-MME format)
-    result["question"] = get_field(sample, ['question', 'query'])
+    # QA fields (Video-MME format, VideoInstruct-100K uses 'q'/'a')
+    result["question"] = get_field(sample, ['question', 'q', 'query'])
     result["answer"] = get_field(sample, ['answer', 'a'])
     
     # Options list
