@@ -767,19 +767,19 @@ def extract_audio_sample(sample: Dict, category: str, source: str) -> Tuple[Opti
         if field in sample and sample[field] is not None:
             audio = sample[field]
             if isinstance(audio, dict):
+                # Get sampling_rate from audio dict
+                if result["sampling_rate"] is None and 'sampling_rate' in audio:
+                    result["sampling_rate"] = audio['sampling_rate']
+                
                 if 'bytes' in audio and audio['bytes']:
                     audio_data = audio['bytes']
-                    # Also get sampling_rate from audio dict
-                    if result["sampling_rate"] is None and 'sampling_rate' in audio:
-                        result["sampling_rate"] = audio['sampling_rate']
                     break
-                elif 'array' in audio:
+                elif 'array' in audio and audio['array'] is not None:
                     audio_data = audio
-                    if result["sampling_rate"] is None and 'sampling_rate' in audio:
-                        result["sampling_rate"] = audio['sampling_rate']
                     break
                 elif 'path' in audio and audio['path']:
-                    audio_path = audio['path']
+                    # Return the full dict so we can handle path (URL or local)
+                    audio_data = audio
                     break
             else:
                 audio_data = audio
@@ -1481,10 +1481,13 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                         sf.write(target_path, arr, sr)
                         audio_path = target_path
                     
-                    # Handle dict with 'path' key
+                    # Handle dict with 'path' key (local or URL)
                     elif isinstance(audio_data, dict) and 'path' in audio_data and audio_data['path']:
                         src_path = audio_data['path']
-                        if os.path.exists(src_path):
+                        if isinstance(src_path, str) and src_path.startswith('http'):
+                            # Download from URL
+                            audio_path = download_audio_direct(src_path, target_path)
+                        elif os.path.exists(src_path):
                             shutil.copy(src_path, target_path)
                             audio_path = target_path
                 
@@ -1492,10 +1495,14 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                     logger.warning(f"  Error saving audio {idx}: {e}")
                     audio_path = None
             
-            elif audio_src_path and os.path.exists(audio_src_path):
+            elif audio_src_path:
                 try:
-                    shutil.copy(audio_src_path, target_path)
-                    audio_path = target_path
+                    if isinstance(audio_src_path, str) and audio_src_path.startswith('http'):
+                        # Download from URL
+                        audio_path = download_audio_direct(audio_src_path, target_path)
+                    elif os.path.exists(audio_src_path):
+                        shutil.copy(audio_src_path, target_path)
+                        audio_path = target_path
                 except:
                     audio_path = None
             
