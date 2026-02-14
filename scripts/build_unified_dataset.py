@@ -195,7 +195,7 @@ DATASET_CONFIGS = {
     ],
     "voice_tts": [
         # LibriTTS-R-Clean already uploaded
-        {"name": "MLS-Eng-10k", "path": "parler-tts/mls_eng_10k", "split": "train"},
+#        {"name": "MLS-Eng-10k", "path": "parler-tts/mls_eng_10k", "split": "train"},
         {"name": "HiFi-TTS-Clean", "path": "MikhailT/hifi-tts", "config": "clean", "split": "train"},
     ],
     "voice_emotion": [
