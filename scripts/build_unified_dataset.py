@@ -1783,21 +1783,20 @@ def build_unified_dataset(args):
         except Exception:
             pass
         
-        # Upload videos to /data/ folder - HuggingFace auto-creates video dataset with thumbnails
+        # Upload videos to /videos/ folder
         videos_dir = os.path.join(OUTPUT_DIR, "videos")
         if os.path.exists(videos_dir):
-            logger.info("  📹 Uploading videos to /data/...")
+            logger.info("  📹 Uploading videos to /videos/...")
             api.upload_folder(
                 folder_path=videos_dir,
-                path_in_repo="data",
+                path_in_repo="videos",
                 repo_id=HF_DATASET_NAME,
                 repo_type="dataset",
                 token=HF_TOKEN,
             )
-            logger.info("  ✓ Videos uploaded to /data/")
-            logger.info("    HuggingFace will auto-create video dataset with thumbnails")
+            logger.info("  ✓ Videos uploaded to /videos/")
         
-        # Push other datasets (text, audio, image) if any
+        # Push other datasets (text, audio, image)
         if datasets_dict:
             final_dataset.push_to_hub(
                 HF_DATASET_NAME,
