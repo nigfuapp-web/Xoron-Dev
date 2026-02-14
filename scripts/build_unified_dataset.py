@@ -114,8 +114,8 @@ MAX_VIDEO_SIZE_MB = 50  # Skip videos larger than this
 MAX_AUDIO_SIZE_MB = 20  # Skip audio files larger than this
 MAX_IMAGE_SIZE_MB = 10  # Skip images larger than this
 
-# Concurrent downloads
-MAX_WORKERS = 4
+# Concurrent downloads (can exceed CPU count since this is I/O bound)
+MAX_WORKERS = 8
 
 # ============================================================================
 # DATASET CONFIGURATIONS (from config/dataset_config.py)
@@ -1157,6 +1157,30 @@ def save_video_bytes(video_bytes: bytes, target_path: str) -> Optional[str]:
         return None
 
 
+def _download_video_task(task: Dict) -> Dict:
+    """
+    Worker function for parallel video downloading.
+    Downloads a single video and returns result dict.
+    """
+    video_url = task['video_url']
+    vid_dir = task['vid_dir']
+    video_id = task['video_id']
+    metadata = task['metadata']
+    
+    try:
+        video_path = download_video(video_url, vid_dir, video_id)
+        if video_path and os.path.exists(video_path):
+            size_mb = get_file_size_mb(video_path)
+            if size_mb > MAX_VIDEO_SIZE_MB:
+                os.remove(video_path)
+                return {'success': False, 'metadata': None, 'video_id': video_id}
+            metadata['video_path'] = video_path
+            return {'success': True, 'metadata': metadata, 'video_id': video_id}
+    except Exception:
+        pass
+    return {'success': False, 'metadata': None, 'video_id': video_id}
+
+
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
     """
     Process a video dataset with standardized schema.
@@ -1164,13 +1188,14 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
     Uses custom video handling (NOT torchcodec) to avoid dependency issues.
     Supports all major formats: MP4, GIF, WebM, AVI, MOV, MKV, FLV, WMV, OGV.
     
+    Uses parallel downloading for URL-based videos to maximize throughput.
     Disables HuggingFace's automatic video decoding to prevent torchcodec usage.
     """
     from datasets import load_dataset, Video
     
     samples = []
     name = config['name']
-    vid_dir = os.path.join(output_dir, "videos")
+    vid_dir = os.path.join(output_dir, "videos", name.replace(" ", "_").replace("/", "_"))
     os.makedirs(vid_dir, exist_ok=True)
     
     logger.info(f"Processing video dataset: {name}")
@@ -1183,33 +1208,36 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
         
         ds = load_dataset(**load_kwargs)
         
-        count = 0
-        downloaded = 0
-        failed = 0
+        # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
+        embedded_samples = []  # Samples with embedded video data (processed immediately)
+        url_download_tasks = []  # Tasks for parallel URL downloading
         
-        for idx, sample in enumerate(ds):
-            if count >= max_samples:
+        collected = 0
+        embedded_count = 0
+        failed_embedded = 0
+        idx = 0
+        
+        # Collect up to max_samples * 1.5 candidates (some URL downloads will fail)
+        max_candidates = int(max_samples * 1.5) + 100
+        
+        logger.info(f"  Phase 1: Collecting video samples (target: {max_samples})...")
+        
+        for sample in ds:
+            if collected >= max_candidates:
                 break
             
-            if failed > max_samples * 2:
-                logger.warning(f"  Too many failures, stopping {name}")
-                break
-            
-            # Extract with standardized schema (now returns video_data too)
+            # Extract with standardized schema
             metadata, video_data, video_url = extract_video_sample(sample, category, name)
             
-            video_path = None
-            video_id = f"{idx:06d}"
+            video_id = f"{name.replace(' ', '_')}_{idx:06d}"
             base_target = os.path.join(vid_dir, video_id)
+            video_path = None
             
-            # First try to save video data directly using our custom handler (avoids torchcodec)
+            # Try to save embedded video data directly
             if video_data is not None:
                 try:
-                    # Handle dict with 'bytes' key (HuggingFace Video format with decode=False)
                     if isinstance(video_data, dict) and 'bytes' in video_data and video_data['bytes'] is not None:
                         video_path = save_video_bytes(video_data['bytes'], base_target + '.mp4')
-                    
-                    # Handle dict with 'path' key (local file reference)
                     elif isinstance(video_data, dict) and 'path' in video_data and video_data['path']:
                         src_path = video_data['path']
                         if os.path.exists(src_path):
@@ -1217,34 +1245,89 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                             target_path = base_target + ext
                             shutil.copy(src_path, target_path)
                             video_path = target_path
-                    
-                    # Handle raw bytes directly
                     elif isinstance(video_data, bytes):
                         video_path = save_video_bytes(video_data, base_target + '.mp4')
-                
-                except Exception as e:
-                    logger.warning(f"  Error saving video {idx}: {e}")
+                except Exception:
                     video_path = None
-            
-            # If no video data saved, try downloading from URL
-            if video_path is None and video_url:
-                video_path = download_video(video_url, vid_dir, video_id)
             
             if video_path and os.path.exists(video_path):
                 size_mb = get_file_size_mb(video_path)
-                if size_mb > MAX_VIDEO_SIZE_MB:
+                if size_mb <= MAX_VIDEO_SIZE_MB:
+                    metadata['video_path'] = video_path
+                    embedded_samples.append(metadata)
+                    embedded_count += 1
+                    collected += 1
+                else:
                     os.remove(video_path)
-                    failed += 1
-                    continue
-                
-                metadata['video_path'] = video_path
-                samples.append(metadata)
-                count += 1
-                downloaded += 1
+                    failed_embedded += 1
+            elif video_url:
+                # Queue for parallel download
+                url_download_tasks.append({
+                    'video_url': video_url,
+                    'vid_dir': vid_dir,
+                    'video_id': video_id,
+                    'metadata': metadata
+                })
+                collected += 1
             else:
-                failed += 1
+                failed_embedded += 1
+            
+            idx += 1
+            
+            # Progress logging every 1000 samples
+            if idx % 1000 == 0:
+                logger.info(f"    Scanned {idx} samples, collected {len(embedded_samples)} embedded + {len(url_download_tasks)} URLs queued")
         
-        logger.info(f"  ✓ {len(samples)} samples from {name} (downloaded: {downloaded}, failed: {failed})")
+        logger.info(f"  Phase 1 complete: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs to download")
+        
+        # Add embedded samples first
+        samples.extend(embedded_samples)
+        
+        # Phase 2: Parallel URL downloads
+        if url_download_tasks and len(samples) < max_samples:
+            remaining_needed = max_samples - len(samples)
+            tasks_to_process = url_download_tasks[:int(remaining_needed * 1.3) + 50]  # Extra for failures
+            
+            logger.info(f"  Phase 2: Downloading {len(tasks_to_process)} videos in parallel (workers: {MAX_WORKERS})...")
+            
+            downloaded = 0
+            failed_downloads = 0
+            
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                # Submit all tasks
+                future_to_task = {executor.submit(_download_video_task, task): task for task in tasks_to_process}
+                
+                # Process completed downloads
+                for future in as_completed(future_to_task):
+                    if len(samples) >= max_samples:
+                        # Cancel remaining futures
+                        for f in future_to_task:
+                            f.cancel()
+                        break
+                    
+                    try:
+                        result = future.result(timeout=300)  # 5 min timeout per download
+                        if result['success'] and result['metadata']:
+                            samples.append(result['metadata'])
+                            downloaded += 1
+                        else:
+                            failed_downloads += 1
+                    except Exception:
+                        failed_downloads += 1
+                    
+                    # Progress logging
+                    total_processed = downloaded + failed_downloads
+                    if total_processed % 50 == 0:
+                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed, {len(samples)}/{max_samples} total")
+            
+            logger.info(f"  Phase 2 complete: {downloaded} downloaded, {failed_downloads} failed")
+        
+        # Trim to max_samples if we got more
+        if len(samples) > max_samples:
+            samples = samples[:max_samples]
+        
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
+        
     except Exception as e:
         logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
