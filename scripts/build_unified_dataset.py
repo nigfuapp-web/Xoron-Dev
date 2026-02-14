@@ -1650,10 +1650,8 @@ def build_unified_dataset(args):
                 video_path = s.get("video_path")
                 # Double-check path is valid string before adding
                 if isinstance(video_path, str) and os.path.exists(video_path):
-                    # Read actual video bytes so they get embedded in the dataset
-                    with open(video_path, 'rb') as f:
-                        video_bytes = f.read()
-                    video_data["video"].append({"bytes": video_bytes, "path": None})
+                    # Pass file path - HuggingFace will upload as separate file (shows thumbnails)
+                    video_data["video"].append(video_path)
                     video_data["caption"].append(to_string_or_none(s.get("caption")))
                     video_data["question"].append(to_string_or_none(s.get("question")))
                     video_data["answer"].append(to_string_or_none(s.get("answer")))
@@ -1731,6 +1729,7 @@ def build_unified_dataset(args):
             HF_DATASET_NAME,
             token=HF_TOKEN,
             private=False,
+            embed_external_files=True,  # Upload video/audio/image files as separate files (enables thumbnails)
         )
         logger.info("✅ Dataset uploaded successfully!")
         logger.info(f"   View at: https://huggingface.co/datasets/{HF_DATASET_NAME}")
