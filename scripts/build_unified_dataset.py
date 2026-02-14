@@ -1063,8 +1063,109 @@ def get_video_ext_from_path(path: str) -> str:
     return '.mp4'
 
 
+def detect_video_format_from_bytes(video_bytes: bytes) -> str:
+    """
+    Detect video format from magic bytes.
+    Custom video format detection - avoids torchcodec dependency.
+    
+    Supports: MP4, GIF, WebM, AVI, MOV, MKV, FLV, WMV
+    
+    Args:
+        video_bytes: Raw video bytes
+        
+    Returns:
+        File extension string (e.g., '.mp4', '.gif')
+    """
+    if len(video_bytes) < 12:
+        return '.mp4'  # Default for too-short data
+    
+    # GIF: starts with GIF87a or GIF89a
+    if video_bytes[:6] in (b'GIF87a', b'GIF89a') or video_bytes[:4] == b'GIF8':
+        return '.gif'
+    
+    # WebM/MKV: EBML header (0x1A 0x45 0xDF 0xA3)
+    if video_bytes[:4] == b'\x1a\x45\xdf\xa3':
+        # Check for WebM doctype vs MKV
+        if b'webm' in video_bytes[:64].lower():
+            return '.webm'
+        return '.mkv'
+    
+    # MP4/MOV: ftyp box (typically at byte 4)
+    if video_bytes[4:8] == b'ftyp':
+        ftyp_brand = video_bytes[8:12]
+        # QuickTime MOV
+        if ftyp_brand in (b'qt  ', b'MSNV'):
+            return '.mov'
+        # MP4 variants
+        return '.mp4'
+    
+    # AVI: RIFF....AVI
+    if video_bytes[:4] == b'RIFF' and video_bytes[8:12] == b'AVI ':
+        return '.avi'
+    
+    # FLV: FLV header
+    if video_bytes[:3] == b'FLV':
+        return '.flv'
+    
+    # WMV/ASF: ASF header GUID
+    if video_bytes[:16] == b'\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c':
+        return '.wmv'
+    
+    # OGV/OGG: OggS
+    if video_bytes[:4] == b'OggS':
+        return '.ogv'
+    
+    # Default to MP4 for unknown formats
+    return '.mp4'
+
+
+def save_video_bytes(video_bytes: bytes, target_path: str) -> Optional[str]:
+    """
+    Save raw video bytes to file with proper extension detection.
+    Custom video handler - avoids torchcodec dependency entirely.
+    
+    Supports all major video formats: MP4, GIF, WebM, AVI, MOV, MKV, FLV, WMV, OGV
+    
+    Args:
+        video_bytes: Raw video bytes
+        target_path: Base path to save (extension will be adjusted based on format)
+        
+    Returns:
+        Path to saved video file or None if failed
+    """
+    if not video_bytes or len(video_bytes) == 0:
+        return None
+    
+    try:
+        # Detect format and get proper extension
+        detected_ext = detect_video_format_from_bytes(video_bytes)
+        
+        # Adjust target path with correct extension
+        base_path = os.path.splitext(target_path)[0]
+        final_path = base_path + detected_ext
+        
+        # Write bytes directly - no transcoding needed
+        with open(final_path, 'wb') as f:
+            f.write(video_bytes)
+        
+        # Verify file was written
+        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+            return final_path
+        
+        return None
+    except Exception:
+        return None
+
+
 def process_video_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
-    """Process a video dataset with standardized schema. Supports .mp4, .gif, .webm and other formats."""
+    """
+    Process a video dataset with standardized schema.
+    
+    Uses custom video handling (NOT torchcodec) to avoid dependency issues.
+    Supports all major formats: MP4, GIF, WebM, AVI, MOV, MKV, FLV, WMV, OGV.
+    
+    Disables HuggingFace's automatic video decoding to prevent torchcodec usage.
+    """
     from datasets import load_dataset, Video
     
     samples = []
@@ -1111,44 +1212,27 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             
             video_path = None
             video_id = f"{idx:06d}"
+            base_target = os.path.join(vid_dir, video_id)
             
-            # First try to save video data directly (bytes or dict)
+            # First try to save video data directly using our custom handler (avoids torchcodec)
             if video_data is not None:
                 try:
-                    # Handle dict with 'bytes' key (HuggingFace Video format)
+                    # Handle dict with 'bytes' key (HuggingFace Video format with decode=False)
                     if isinstance(video_data, dict) and 'bytes' in video_data and video_data['bytes'] is not None:
-                        # Try to detect format from bytes magic numbers
-                        video_bytes = video_data['bytes']
-                        ext = '.mp4'  # default
-                        if video_bytes[:4] == b'GIF8' or video_bytes[:6] == b'GIF89a' or video_bytes[:6] == b'GIF87a':
-                            ext = '.gif'
-                        elif video_bytes[:4] == b'\x1a\x45\xdf\xa3':  # webm/mkv
-                            ext = '.webm'
-                        target_path = os.path.join(vid_dir, f"{video_id}{ext}")
-                        with open(target_path, 'wb') as f:
-                            f.write(video_bytes)
-                        video_path = target_path
+                        video_path = save_video_bytes(video_data['bytes'], base_target + '.mp4')
                     
-                    # Handle dict with 'path' key
+                    # Handle dict with 'path' key (local file reference)
                     elif isinstance(video_data, dict) and 'path' in video_data and video_data['path']:
                         src_path = video_data['path']
                         if os.path.exists(src_path):
                             ext = get_video_ext_from_path(src_path)
-                            target_path = os.path.join(vid_dir, f"{video_id}{ext}")
+                            target_path = base_target + ext
                             shutil.copy(src_path, target_path)
                             video_path = target_path
                     
-                    # Handle raw bytes
+                    # Handle raw bytes directly
                     elif isinstance(video_data, bytes):
-                        ext = '.mp4'  # default
-                        if video_data[:4] == b'GIF8' or video_data[:6] == b'GIF89a' or video_data[:6] == b'GIF87a':
-                            ext = '.gif'
-                        elif video_data[:4] == b'\x1a\x45\xdf\xa3':  # webm/mkv
-                            ext = '.webm'
-                        target_path = os.path.join(vid_dir, f"{video_id}{ext}")
-                        with open(target_path, 'wb') as f:
-                            f.write(video_data)
-                        video_path = target_path
+                        video_path = save_video_bytes(video_data, base_target + '.mp4')
                 
                 except Exception as e:
                     logger.warning(f"  Error saving video {idx}: {e}")
@@ -1676,18 +1760,14 @@ def build_unified_dataset(args):
             
             if video_data["video"]:
                 try:
-                    # Use HF Video type to store actual video files
-                    from datasets import Video as HFVideo
+                    # Store videos as file paths (strings) - NOT using HF Video type
+                    # This avoids torchcodec dependency entirely
+                    # Videos are uploaded separately to /videos/ folder and referenced by path
                     ds = Dataset.from_dict(video_data)
-                    ds = ds.cast_column("video", HFVideo())
+                    # Keep video column as string paths - do NOT cast to Video type
                     datasets_dict["video"] = ds
-                    logger.info(f"  ✓ Video: {len(ds)} samples (with embedded .mp4 files)")
+                    logger.info(f"  ✓ Video: {len(ds)} samples (stored as file paths, no torchcodec)")
                     logger.info(f"    Columns: {ds.column_names}")
-                except ImportError:
-                    # Fallback if Video type not available (older datasets version)
-                    logger.warning("  ⚠ HF Video type not available, storing as paths")
-                    datasets_dict["video"] = Dataset.from_dict(video_data)
-                    logger.info(f"  ✓ Video: {len(datasets_dict['video'])} samples (as paths)")
                 except Exception as e:
                     logger.error(f"  ✗ Failed to create video dataset: {e}")
                     traceback.print_exc()
