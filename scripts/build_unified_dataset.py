@@ -191,10 +191,10 @@ DATASET_CONFIGS = {
     
     # === AUDIO/VOICE DATASETS ===
     "voice_asr": [
-        {"name": "LibriSpeech-Clean", "path": "openslr/librispeech_asr", "config": "clean", "split": "train.100"},
+        # LibriSpeech-Clean already uploaded
     ],
     "voice_tts": [
-        {"name": "LibriTTS-R-Clean", "path": "blabble-io/libritts_r", "config": "clean", "split": "train.clean.100"},
+        # LibriTTS-R-Clean already uploaded
         {"name": "MLS-Eng-10k", "path": "parler-tts/mls_eng_10k", "split": "train"},
         {"name": "HiFi-TTS-Clean", "path": "MikhailT/hifi-tts", "config": "clean", "split": "train"},
     ],
