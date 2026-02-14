@@ -1170,7 +1170,7 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
     
     samples = []
     name = config['name']
-    vid_dir = os.path.join(output_dir, "videos", name.replace(" ", "_").replace("/", "_"))
+    vid_dir = os.path.join(output_dir, "videos")
     os.makedirs(vid_dir, exist_ok=True)
     
     logger.info(f"Processing video dataset: {name}")
@@ -1745,9 +1745,9 @@ def build_unified_dataset(args):
                 video_path = s.get("video_path")
                 # Double-check path is valid string before adding
                 if isinstance(video_path, str) and os.path.exists(video_path):
-                    # Convert local path to repo path NOW (before creating dataset)
-                    # e.g., /tmp/.../output/videos/Dataset/000001.mp4 -> videos/Dataset/000001.mp4
-                    repo_path = video_path.replace(OUTPUT_DIR + "/", "")
+                    # Get just the filename: /tmp/.../videos/000001.mp4 -> videos/000001.mp4
+                    filename = os.path.basename(video_path)
+                    repo_path = f"videos/{filename}"
                     video_data["video"].append(repo_path)
                     video_data["caption"].append(to_string_or_none(s.get("caption")))
                     video_data["question"].append(to_string_or_none(s.get("question")))
