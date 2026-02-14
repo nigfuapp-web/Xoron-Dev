@@ -1530,26 +1530,30 @@ Examples:
 # MAIN DATASET BUILDER
 # ============================================================================
 
-def _cleanup_modality_files(modality: str, output_dir: str):
-    """Clean up downloaded files for a specific modality to free disk space."""
-    cleanup_dirs = {
-        "image": os.path.join(output_dir, "images"),
-        "video": os.path.join(output_dir, "videos"),
-        "audio": os.path.join(output_dir, "audio"),
-    }
+def _cleanup_dataset_files(dataset_name: str, modality: str, output_dir: str):
+    """Clean up downloaded files for a specific dataset to free disk space."""
+    safe_name = dataset_name.replace(" ", "_").replace("/", "_")
     
-    cleanup_path = cleanup_dirs.get(modality)
-    if cleanup_path and os.path.exists(cleanup_path):
+    if modality == "image":
+        cleanup_path = os.path.join(output_dir, "images", safe_name)
+    elif modality == "video":
+        cleanup_path = os.path.join(output_dir, "videos")  # Videos use flat structure
+    elif modality == "audio":
+        cleanup_path = os.path.join(output_dir, "audio", safe_name)
+    else:
+        return
+    
+    if os.path.exists(cleanup_path):
         try:
             shutil.rmtree(cleanup_path)
-            logger.info(f"  🗑️ Cleaned up {modality} files: {cleanup_path}")
+            logger.info(f"    🗑️ Cleaned up: {cleanup_path}")
         except Exception as e:
-            logger.warning(f"  Could not cleanup {cleanup_path}: {e}")
+            logger.warning(f"    Could not cleanup {cleanup_path}: {e}")
 
 
-def _upload_single_modality(modality: str, dataset, hf_dataset_name: str, hf_token: str, existing_ds=None):
-    """Upload a single modality dataset to HuggingFace immediately."""
-    from datasets import DatasetDict, concatenate_datasets
+def _upload_dataset_to_hub(modality: str, dataset, hf_dataset_name: str, hf_token: str):
+    """Upload dataset samples to HuggingFace, appending to existing split."""
+    from datasets import DatasetDict, load_dataset, concatenate_datasets
     from huggingface_hub import create_repo
     
     try:
@@ -1559,27 +1563,25 @@ def _upload_single_modality(modality: str, dataset, hf_dataset_name: str, hf_tok
         except Exception:
             pass
         
-        # Merge with existing if provided
-        if existing_ds is not None:
-            try:
-                dataset = concatenate_datasets([existing_ds, dataset])
-                logger.info(f"    Merged with existing: now {len(dataset)} samples")
-            except Exception as e:
-                logger.warning(f"    Could not merge: {e}, uploading new data only")
+        # Try to load existing data for this modality and merge
+        try:
+            existing = load_dataset(hf_dataset_name, split=modality, token=hf_token)
+            dataset = concatenate_datasets([existing, dataset])
+            logger.info(f"    Merged with existing {modality}: now {len(dataset)} total samples")
+        except Exception:
+            # No existing data for this modality, that's fine
+            pass
         
-        # Create DatasetDict with just this modality
+        # Create DatasetDict and push
         ds_dict = DatasetDict({modality: dataset})
-        
-        # Push to hub
         ds_dict.push_to_hub(
             hf_dataset_name,
             token=hf_token,
             private=False,
         )
-        logger.info(f"  ✅ {modality.upper()} uploaded to HuggingFace!")
         return True
     except Exception as e:
-        logger.error(f"  ✗ Failed to upload {modality}: {e}")
+        logger.error(f"    ✗ Upload failed: {e}")
         traceback.print_exc()
         return False
 
@@ -1588,16 +1590,17 @@ def build_unified_dataset(args):
     """
     Build the unified multimodal dataset.
     
-    MEMORY-EFFICIENT: Processes and uploads each modality separately,
-    cleaning up files immediately after upload to conserve disk space.
+    DISK-EFFICIENT: Processes each individual dataset, uploads to HuggingFace
+    immediately, then cleans up files before moving to the next dataset.
     """
     from datasets import Dataset, DatasetDict, Features, Value, Image as HFImage, Audio as HFAudio, load_dataset, concatenate_datasets
     from huggingface_hub import HfApi, login
+    import gc
     
     logger.info("=" * 60)
     logger.info("XORON UNIFIED MULTIMODAL DATASET BUILDER")
     logger.info("=" * 60)
-    logger.info("⚡ MEMORY-EFFICIENT MODE: Upload & cleanup after each modality")
+    logger.info("⚡ DISK-EFFICIENT: Upload & cleanup after EACH dataset")
     
     # Show what we're building
     modalities_to_build = []
@@ -1614,8 +1617,6 @@ def build_unified_dataset(args):
             modalities_to_build.append("audio")
     
     logger.info(f"Building modalities: {modalities_to_build}")
-    if args.hf:
-        logger.info(f"Will load existing dataset from HF: {HF_DATASET_NAME}")
     
     # Validate HF token
     if not HF_TOKEN:
@@ -1632,26 +1633,8 @@ def build_unified_dataset(args):
     logger.info("Logging into HuggingFace...")
     login(token=HF_TOKEN)
     
-    # Load existing dataset splits if --hf flag is set
-    existing_datasets = {}
-    if args.hf:
-        logger.info(f"\nLoading existing dataset from HuggingFace: {HF_DATASET_NAME}")
-        try:
-            existing_ds = load_dataset(HF_DATASET_NAME, token=HF_TOKEN)
-            if isinstance(existing_ds, DatasetDict):
-                for split_name in existing_ds:
-                    existing_datasets[split_name] = existing_ds[split_name]
-                    logger.info(f"  Loaded existing '{split_name}' split: {len(existing_ds[split_name])} samples")
-            else:
-                existing_datasets["train"] = existing_ds
-                logger.info(f"  Loaded existing dataset: {len(existing_ds)} samples")
-        except Exception as e:
-            logger.warning(f"Could not load existing dataset (may not exist yet): {e}")
-            logger.info("Will create new dataset from scratch")
-    
     # Helper function to ensure consistent string types for PyArrow
     def to_string_or_none(val):
-        """Convert value to string or None to avoid PyArrow type errors."""
         if val is None:
             return None
         if isinstance(val, (int, float)):
@@ -1663,19 +1646,139 @@ def build_unified_dataset(args):
                 return str(val)
         return str(val) if not isinstance(val, str) else val
     
-    uploaded_modalities = []
+    def create_and_upload_audio_dataset(samples, dataset_name):
+        """Create HF audio dataset from samples and upload immediately."""
+        valid = [s for s in samples if s.get("audio_path") and isinstance(s.get("audio_path"), str) and os.path.exists(s.get("audio_path", ""))]
+        if not valid:
+            return False
+        audio_data = {"audio": [], "text": [], "speaker_id": [], "sampling_rate": [], "gender": [], "age": [], "language": [], "emotion": [], "arousal": [], "valence": [], "dominance": [], "category": [], "source": []}
+        for s in valid:
+            audio_path = s.get("audio_path")
+            if isinstance(audio_path, str) and os.path.exists(audio_path):
+                audio_data["audio"].append(audio_path)
+                audio_data["text"].append(to_string_or_none(s.get("text")))
+                audio_data["speaker_id"].append(to_string_or_none(s.get("speaker_id")))
+                sr = s.get("sampling_rate")
+                audio_data["sampling_rate"].append(int(sr) if sr is not None else None)
+                audio_data["gender"].append(to_string_or_none(s.get("gender")))
+                audio_data["age"].append(to_string_or_none(s.get("age")))
+                audio_data["language"].append(to_string_or_none(s.get("language")))
+                audio_data["emotion"].append(to_string_or_none(s.get("emotion")))
+                audio_data["arousal"].append(to_string_or_none(s.get("arousal")))
+                audio_data["valence"].append(to_string_or_none(s.get("valence")))
+                audio_data["dominance"].append(to_string_or_none(s.get("dominance")))
+                audio_data["category"].append(to_string_or_none(s.get("category")))
+                audio_data["source"].append(to_string_or_none(s.get("source")))
+        if not audio_data["audio"]:
+            return False
+        try:
+            ds = Dataset.from_dict(audio_data)
+            ds = ds.cast_column("audio", HFAudio())
+            logger.info(f"    ✓ Created: {len(ds)} samples")
+            logger.info(f"    📤 Uploading to HuggingFace...")
+            return _upload_dataset_to_hub("audio", ds, HF_DATASET_NAME, HF_TOKEN)
+        except Exception as e:
+            logger.error(f"    ✗ Failed: {e}")
+            return False
+    
+    def create_and_upload_video_dataset(samples, dataset_name):
+        """Create HF video dataset from samples and upload immediately."""
+        valid = [s for s in samples if s.get("video_path") and isinstance(s.get("video_path"), str) and os.path.exists(s.get("video_path", ""))]
+        if not valid:
+            return False
+        video_data = {"video": [], "caption": [], "question": [], "answer": [], "prompt": [], "options": [], "duration": [], "domain": [], "sub_category": [], "category": [], "source": []}
+        for s in valid:
+            video_path = s.get("video_path")
+            if isinstance(video_path, str) and os.path.exists(video_path):
+                try:
+                    with open(video_path, 'rb') as f:
+                        video_bytes = f.read()
+                    video_data["video"].append({"bytes": video_bytes, "path": None})
+                    video_data["caption"].append(to_string_or_none(s.get("caption")))
+                    video_data["question"].append(to_string_or_none(s.get("question")))
+                    video_data["answer"].append(to_string_or_none(s.get("answer")))
+                    video_data["prompt"].append(to_string_or_none(s.get("prompt")))
+                    video_data["options"].append(to_string_or_none(s.get("options")))
+                    video_data["duration"].append(to_string_or_none(s.get("duration")))
+                    video_data["domain"].append(to_string_or_none(s.get("domain")))
+                    video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
+                    video_data["category"].append(to_string_or_none(s.get("category")))
+                    video_data["source"].append(to_string_or_none(s.get("source")))
+                except Exception as e:
+                    logger.warning(f"    Could not read {video_path}: {e}")
+        if not video_data["video"]:
+            return False
+        try:
+            from datasets import Video as HFVideo
+            ds = Dataset.from_dict(video_data)
+            ds = ds.cast_column("video", HFVideo(decode=False))
+            logger.info(f"    ✓ Created: {len(ds)} samples")
+            logger.info(f"    📤 Uploading to HuggingFace...")
+            return _upload_dataset_to_hub("video", ds, HF_DATASET_NAME, HF_TOKEN)
+        except Exception as e:
+            logger.error(f"    ✗ Failed: {e}")
+            return False
+    
+    def create_and_upload_image_dataset(samples, dataset_name):
+        """Create HF image dataset from samples and upload immediately."""
+        valid = [s for s in samples if s.get("image_path") and isinstance(s.get("image_path"), str) and os.path.exists(s.get("image_path", ""))]
+        if not valid:
+            return False
+        image_data = {"image": [], "caption": [], "question": [], "answer": [], "choices": [], "category": [], "source": []}
+        for s in valid:
+            img_path = s.get("image_path")
+            if isinstance(img_path, str) and os.path.exists(img_path):
+                image_data["image"].append(img_path)
+                image_data["caption"].append(to_string_or_none(s.get("caption")))
+                image_data["question"].append(to_string_or_none(s.get("question")))
+                image_data["answer"].append(to_string_or_none(s.get("answer")))
+                image_data["choices"].append(to_string_or_none(s.get("choices")))
+                image_data["category"].append(to_string_or_none(s.get("category")))
+                image_data["source"].append(to_string_or_none(s.get("source")))
+        if not image_data["image"]:
+            return False
+        try:
+            ds = Dataset.from_dict(image_data)
+            ds = ds.cast_column("image", HFImage())
+            logger.info(f"    ✓ Created: {len(ds)} samples")
+            logger.info(f"    📤 Uploading to HuggingFace...")
+            return _upload_dataset_to_hub("image", ds, HF_DATASET_NAME, HF_TOKEN)
+        except Exception as e:
+            logger.error(f"    ✗ Failed: {e}")
+            return False
+    
+    def create_and_upload_text_dataset(samples, dataset_name):
+        """Create HF text dataset from samples and upload immediately."""
+        if not samples:
+            return False
+        text_data = {"instruction": [], "response": [], "system": [], "conversations": [], "context": [], "category": [], "source": []}
+        for s in samples:
+            text_data["instruction"].append(to_string_or_none(s.get("instruction")))
+            text_data["response"].append(to_string_or_none(s.get("response")))
+            text_data["system"].append(to_string_or_none(s.get("system")))
+            text_data["conversations"].append(to_string_or_none(s.get("conversations")))
+            text_data["context"].append(to_string_or_none(s.get("context")))
+            text_data["category"].append(to_string_or_none(s.get("category")))
+            text_data["source"].append(to_string_or_none(s.get("source")))
+        try:
+            ds = Dataset.from_dict(text_data)
+            logger.info(f"    ✓ Created: {len(ds)} samples")
+            logger.info(f"    📤 Uploading to HuggingFace...")
+            return _upload_dataset_to_hub("text", ds, HF_DATASET_NAME, HF_TOKEN)
+        except Exception as e:
+            logger.error(f"    ✗ Failed: {e}")
+            return False
+    
+    uploaded_datasets = []
     
     # =========================================================================
-    # PROCESS EACH MODALITY SEPARATELY - Upload and cleanup immediately
+    # PROCESS EACH DATASET INDIVIDUALLY - Upload and cleanup after EACH one
     # =========================================================================
     
     for target_modality in modalities_to_build:
         logger.info(f"\n{'='*60}")
         logger.info(f"PROCESSING MODALITY: {target_modality.upper()}")
         logger.info(f"{'='*60}")
-        
-        # Collect samples for this modality only
-        modality_samples = []
         
         for category, configs in DATASET_CONFIGS.items():
             modality = MODALITY_MAP.get(category, "text")
@@ -1686,175 +1789,52 @@ def build_unified_dataset(args):
             logger.info(f"\n  Category: {category}")
             
             for config in configs:
+                dataset_name = config['name']
+                logger.info(f"\n  {'─'*50}")
+                logger.info(f"  📦 Dataset: {dataset_name}")
+                logger.info(f"  {'─'*50}")
+                
                 try:
+                    # Process this single dataset
                     if modality == "text":
                         samples = process_text_dataset(config, category, MAX_SAMPLES_PER_DATASET)
+                        if samples:
+                            success = create_and_upload_text_dataset(samples, dataset_name)
                     elif modality == "image":
                         samples = process_image_dataset(config, category, MAX_SAMPLES_PER_DATASET, OUTPUT_DIR)
+                        if samples:
+                            success = create_and_upload_image_dataset(samples, dataset_name)
+                            # Cleanup image files for this dataset
+                            _cleanup_dataset_files(dataset_name, "image", OUTPUT_DIR)
                     elif modality == "video":
                         samples = process_video_dataset(config, category, MAX_SAMPLES_PER_DATASET, OUTPUT_DIR)
+                        if samples:
+                            success = create_and_upload_video_dataset(samples, dataset_name)
+                            # Cleanup video files
+                            _cleanup_dataset_files(dataset_name, "video", OUTPUT_DIR)
                     elif modality == "audio":
                         samples = process_audio_dataset(config, category, MAX_SAMPLES_PER_DATASET, OUTPUT_DIR)
+                        if samples:
+                            success = create_and_upload_audio_dataset(samples, dataset_name)
+                            # Cleanup audio files for this dataset
+                            _cleanup_dataset_files(dataset_name, "audio", OUTPUT_DIR)
                     else:
                         samples = []
+                        success = False
                     
-                    modality_samples.extend(samples)
+                    if samples and success:
+                        uploaded_datasets.append(dataset_name)
+                        logger.info(f"    ✅ {dataset_name} complete!")
+                    elif not samples:
+                        logger.info(f"    ⚠️ No samples from {dataset_name}")
+                    
+                    # Clear memory after each dataset
+                    del samples
+                    gc.collect()
                     
                 except Exception as e:
-                    logger.error(f"Failed to process {config['name']}: {e}")
+                    logger.error(f"  ✗ Failed to process {dataset_name}: {e}")
                     traceback.print_exc()
-        
-        logger.info(f"\n  Total {target_modality} samples: {len(modality_samples)}")
-        
-        if not modality_samples:
-            logger.info(f"  No samples collected for {target_modality}, skipping...")
-            continue
-        
-        # Create HuggingFace dataset for this modality
-        logger.info(f"\n  Creating {target_modality.upper()} HuggingFace dataset...")
-        
-        hf_dataset = None
-        
-        if target_modality == "text":
-            text_data = {
-                "instruction": [], "response": [], "system": [],
-                "conversations": [], "context": [], "category": [], "source": [],
-            }
-            for s in modality_samples:
-                text_data["instruction"].append(to_string_or_none(s.get("instruction")))
-                text_data["response"].append(to_string_or_none(s.get("response")))
-                text_data["system"].append(to_string_or_none(s.get("system")))
-                text_data["conversations"].append(to_string_or_none(s.get("conversations")))
-                text_data["context"].append(to_string_or_none(s.get("context")))
-                text_data["category"].append(to_string_or_none(s.get("category")))
-                text_data["source"].append(to_string_or_none(s.get("source")))
-            try:
-                hf_dataset = Dataset.from_dict(text_data)
-                logger.info(f"    ✓ Text dataset: {len(hf_dataset)} samples")
-            except Exception as e:
-                logger.error(f"    ✗ Failed to create text dataset: {e}")
-        
-        elif target_modality == "image":
-            valid_samples = [s for s in modality_samples
-                           if s.get("image_path") and isinstance(s.get("image_path"), str)
-                           and os.path.exists(s.get("image_path", ""))]
-            if valid_samples:
-                image_data = {
-                    "image": [], "caption": [], "question": [],
-                    "answer": [], "choices": [], "category": [], "source": [],
-                }
-                for s in valid_samples:
-                    img_path = s.get("image_path")
-                    if isinstance(img_path, str) and os.path.exists(img_path):
-                        image_data["image"].append(img_path)
-                        image_data["caption"].append(to_string_or_none(s.get("caption")))
-                        image_data["question"].append(to_string_or_none(s.get("question")))
-                        image_data["answer"].append(to_string_or_none(s.get("answer")))
-                        image_data["choices"].append(to_string_or_none(s.get("choices")))
-                        image_data["category"].append(to_string_or_none(s.get("category")))
-                        image_data["source"].append(to_string_or_none(s.get("source")))
-                if image_data["image"]:
-                    try:
-                        hf_dataset = Dataset.from_dict(image_data)
-                        hf_dataset = hf_dataset.cast_column("image", HFImage())
-                        logger.info(f"    ✓ Image dataset: {len(hf_dataset)} samples")
-                    except Exception as e:
-                        logger.error(f"    ✗ Failed to create image dataset: {e}")
-        
-        elif target_modality == "audio":
-            valid_samples = [s for s in modality_samples
-                           if s.get("audio_path") and isinstance(s.get("audio_path"), str)
-                           and os.path.exists(s.get("audio_path", ""))]
-            if valid_samples:
-                audio_data = {
-                    "audio": [], "text": [], "speaker_id": [], "sampling_rate": [],
-                    "gender": [], "age": [], "language": [], "emotion": [],
-                    "arousal": [], "valence": [], "dominance": [], "category": [], "source": [],
-                }
-                for s in valid_samples:
-                    audio_path = s.get("audio_path")
-                    if isinstance(audio_path, str) and os.path.exists(audio_path):
-                        audio_data["audio"].append(audio_path)
-                        audio_data["text"].append(to_string_or_none(s.get("text")))
-                        audio_data["speaker_id"].append(to_string_or_none(s.get("speaker_id")))
-                        sr = s.get("sampling_rate")
-                        audio_data["sampling_rate"].append(int(sr) if sr is not None else None)
-                        audio_data["gender"].append(to_string_or_none(s.get("gender")))
-                        audio_data["age"].append(to_string_or_none(s.get("age")))
-                        audio_data["language"].append(to_string_or_none(s.get("language")))
-                        audio_data["emotion"].append(to_string_or_none(s.get("emotion")))
-                        audio_data["arousal"].append(to_string_or_none(s.get("arousal")))
-                        audio_data["valence"].append(to_string_or_none(s.get("valence")))
-                        audio_data["dominance"].append(to_string_or_none(s.get("dominance")))
-                        audio_data["category"].append(to_string_or_none(s.get("category")))
-                        audio_data["source"].append(to_string_or_none(s.get("source")))
-                if audio_data["audio"]:
-                    try:
-                        hf_dataset = Dataset.from_dict(audio_data)
-                        hf_dataset = hf_dataset.cast_column("audio", HFAudio())
-                        logger.info(f"    ✓ Audio dataset: {len(hf_dataset)} samples")
-                    except Exception as e:
-                        logger.error(f"    ✗ Failed to create audio dataset: {e}")
-        
-        elif target_modality == "video":
-            valid_samples = [s for s in modality_samples
-                           if s.get("video_path") and isinstance(s.get("video_path"), str)
-                           and os.path.exists(s.get("video_path", ""))]
-            if valid_samples:
-                video_data = {
-                    "video": [], "caption": [], "question": [], "answer": [],
-                    "prompt": [], "options": [], "duration": [], "domain": [],
-                    "sub_category": [], "category": [], "source": [],
-                }
-                for s in valid_samples:
-                    video_path = s.get("video_path")
-                    if isinstance(video_path, str) and os.path.exists(video_path):
-                        try:
-                            with open(video_path, 'rb') as f:
-                                video_bytes = f.read()
-                            video_data["video"].append({"bytes": video_bytes, "path": None})
-                            video_data["caption"].append(to_string_or_none(s.get("caption")))
-                            video_data["question"].append(to_string_or_none(s.get("question")))
-                            video_data["answer"].append(to_string_or_none(s.get("answer")))
-                            video_data["prompt"].append(to_string_or_none(s.get("prompt")))
-                            video_data["options"].append(to_string_or_none(s.get("options")))
-                            video_data["duration"].append(to_string_or_none(s.get("duration")))
-                            video_data["domain"].append(to_string_or_none(s.get("domain")))
-                            video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
-                            video_data["category"].append(to_string_or_none(s.get("category")))
-                            video_data["source"].append(to_string_or_none(s.get("source")))
-                        except Exception as e:
-                            logger.warning(f"    Could not read video {video_path}: {e}")
-                if video_data["video"]:
-                    try:
-                        from datasets import Video as HFVideo
-                        hf_dataset = Dataset.from_dict(video_data)
-                        hf_dataset = hf_dataset.cast_column("video", HFVideo(decode=False))
-                        logger.info(f"    ✓ Video dataset: {len(hf_dataset)} samples")
-                    except Exception as e:
-                        logger.error(f"    ✗ Failed to create video dataset: {e}")
-        
-        # Upload this modality immediately
-        if hf_dataset is not None:
-            logger.info(f"\n  📤 Uploading {target_modality.upper()} to HuggingFace...")
-            existing_for_modality = existing_datasets.get(target_modality)
-            success = _upload_single_modality(
-                target_modality, hf_dataset, HF_DATASET_NAME, HF_TOKEN, existing_for_modality
-            )
-            if success:
-                uploaded_modalities.append(target_modality)
-        
-        # Clean up downloaded files for this modality immediately
-        logger.info(f"\n  🗑️ Cleaning up {target_modality} files to free disk space...")
-        _cleanup_modality_files(target_modality, OUTPUT_DIR)
-        
-        # Clear memory
-        del modality_samples
-        if hf_dataset is not None:
-            del hf_dataset
-        
-        import gc
-        gc.collect()
     
     # Final cleanup
     logger.info("\n" + "=" * 60)
@@ -1877,7 +1857,7 @@ def build_unified_dataset(args):
     logger.info("\n" + "=" * 60)
     logger.info("DATASET BUILD COMPLETE")
     logger.info("=" * 60)
-    logger.info(f"  Uploaded modalities: {uploaded_modalities}")
+    logger.info(f"  Uploaded {len(uploaded_datasets)} datasets: {uploaded_datasets}")
     logger.info(f"  View at: https://huggingface.co/datasets/{HF_DATASET_NAME}")
 
 
