@@ -109,7 +109,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
 # Limits per dataset (adjust based on available storage/time)
-MAX_SAMPLES_PER_DATASET = 50000  # How many samples to take from each dataset
+MAX_SAMPLES_PER_DATASET = 1  # How many samples to take from each dataset
 MAX_VIDEO_SIZE_MB = 50  # Skip videos larger than this
 MAX_AUDIO_SIZE_MB = 20  # Skip audio files larger than this
 MAX_IMAGE_SIZE_MB = 10  # Skip images larger than this
