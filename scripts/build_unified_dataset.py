@@ -1494,12 +1494,50 @@ def decode_audio_bytes(audio_bytes: bytes, target_path: str) -> Optional[str]:
     return None
 
 
+def _download_audio_task(task: Dict) -> Dict:
+    """
+    Worker function for parallel audio downloading.
+    Downloads a single audio file and returns result dict.
+    """
+    audio_url = task['audio_url']
+    audio_dir = task['audio_dir']
+    audio_id = task['audio_id']
+    metadata = task['metadata']
+    target_path = task['target_path']
+    
+    try:
+        audio_path = None
+        
+        # Handle YouTube audio
+        if audio_url.startswith('youtube:'):
+            parts = audio_url.split(':')
+            yt_id = parts[1]
+            start = float(parts[2]) if len(parts) > 2 and parts[2] else None
+            end = float(parts[3]) if len(parts) > 3 and parts[3] else None
+            audio_path = download_youtube_audio(yt_id, target_path, start, end)
+        # Handle direct URL
+        elif audio_url.startswith('http'):
+            audio_path = download_audio_direct(audio_url, target_path)
+        
+        if audio_path and os.path.exists(audio_path):
+            size_mb = get_file_size_mb(audio_path)
+            if size_mb > MAX_AUDIO_SIZE_MB:
+                os.remove(audio_path)
+                return {'success': False, 'metadata': None, 'audio_id': audio_id, 'reason': 'too_large'}
+            metadata['audio_path'] = audio_path
+            return {'success': True, 'metadata': metadata, 'audio_id': audio_id}
+    except Exception as e:
+        pass
+    return {'success': False, 'metadata': None, 'audio_id': audio_id, 'reason': 'download_failed'}
+
+
 def process_audio_dataset(config: Dict, category: str, max_samples: int, output_dir: str) -> List[Dict]:
     """
     Process an audio dataset with standardized schema.
     
     Uses STREAMING to avoid downloading entire dataset - only fetches max_samples.
     Uses custom audio decoding (soundfile/librosa) instead of torchcodec.
+    Uses parallel downloading for URL-based audio to maximize throughput.
     """
     from datasets import load_dataset, Audio
     import soundfile as sf
@@ -1524,23 +1562,39 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
         # We use our own soundfile/librosa decoder instead
         try:
             ds = ds.cast_column('audio', Audio(decode=False))
-            logger.info(f"  📥 Streaming mode with decode=False: will fetch only {max_samples} samples")
+            logger.info(f"  📥 Streaming mode with decode=False")
         except Exception:
             # Dataset may not have 'audio' column - will use alternative fields
-            logger.info(f"  📥 Streaming mode: will fetch only {max_samples} samples")
+            logger.info(f"  📥 Streaming mode (no audio column to cast)")
         
-        count = 0
-        for idx, sample in enumerate(ds):
-            if count >= max_samples:
+        # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
+        embedded_samples = []  # Samples with embedded audio data (processed immediately)
+        url_download_tasks = []  # Tasks for parallel URL downloading
+        
+        collected = 0
+        embedded_count = 0
+        failed_embedded = 0
+        skipped_no_audio = 0
+        idx = 0
+        
+        # Collect up to max_samples * 1.5 candidates (some URL downloads will fail)
+        max_candidates = int(max_samples * 1.5) + 100
+        
+        logger.info(f"  Phase 1: Scanning for audio samples (target: {max_samples})...")
+        
+        for sample in ds:
+            if collected >= max_candidates:
                 break
             
             # Extract with standardized schema
             metadata, audio_data, audio_src_path = extract_audio_sample(sample, category, name)
             
-            audio_path = None
+            audio_id = f"{name.replace(' ', '_').replace('/', '_')}_{idx:06d}"
             audio_filename = f"{idx:06d}.wav"
             target_path = os.path.join(audio_dir, audio_filename)
+            audio_path = None
             
+            # Try to process embedded audio data directly
             if audio_data is not None:
                 try:
                     # Handle bytes (from decode=False or raw bytes)
@@ -1552,60 +1606,131 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                         audio_path = decode_audio_bytes(audio_data['bytes'], target_path)
                     
                     # Handle dict with 'array' key (if decode=True was used somehow)
-                    elif isinstance(audio_data, dict) and 'array' in audio_data:
+                    elif isinstance(audio_data, dict) and 'array' in audio_data and audio_data['array'] is not None:
                         arr = np.array(audio_data['array'], dtype=np.float32)
                         sr = audio_data.get('sampling_rate', 16000)
-                        # Handle stereo -> mono
                         if arr.ndim > 1:
                             arr = arr.mean(axis=1)
                         sf.write(target_path, arr, sr)
                         audio_path = target_path
                     
-                    # Handle dict with 'path' key (local or URL)
+                    # Handle dict with 'path' key - queue URL for parallel download
                     elif isinstance(audio_data, dict) and 'path' in audio_data and audio_data['path']:
                         src_path = audio_data['path']
                         if isinstance(src_path, str) and src_path.startswith('http'):
-                            # Download from URL
-                            audio_path = download_audio_direct(src_path, target_path)
+                            url_download_tasks.append({
+                                'audio_url': src_path,
+                                'audio_dir': audio_dir,
+                                'audio_id': audio_id,
+                                'metadata': metadata,
+                                'target_path': target_path
+                            })
+                            collected += 1
+                            idx += 1
+                            continue
                         elif os.path.exists(src_path):
                             shutil.copy(src_path, target_path)
                             audio_path = target_path
                 
-                except Exception as e:
-                    logger.warning(f"  Error saving audio {idx}: {e}")
+                except Exception:
                     audio_path = None
             
+            # If no embedded data, check for URL path
             elif audio_src_path:
-                try:
-                    if isinstance(audio_src_path, str):
-                        if audio_src_path.startswith('youtube:'):
-                            # YouTube audio - parse youtube:ID:start:end format
-                            parts = audio_src_path.split(':')
-                            yt_id = parts[1]
-                            start = float(parts[2]) if len(parts) > 2 and parts[2] else None
-                            end = float(parts[3]) if len(parts) > 3 and parts[3] else None
-                            audio_path = download_youtube_audio(yt_id, target_path, start, end)
-                        elif audio_src_path.startswith('http'):
-                            # Download from URL
-                            audio_path = download_audio_direct(audio_src_path, target_path)
-                        elif os.path.exists(audio_src_path):
-                            shutil.copy(audio_src_path, target_path)
-                            audio_path = target_path
-                except Exception as e:
-                    logger.warning(f"  Error downloading audio {idx}: {e}")
-                    audio_path = None
+                if isinstance(audio_src_path, str) and (audio_src_path.startswith('http') or audio_src_path.startswith('youtube:')):
+                    url_download_tasks.append({
+                        'audio_url': audio_src_path,
+                        'audio_dir': audio_dir,
+                        'audio_id': audio_id,
+                        'metadata': metadata,
+                        'target_path': target_path
+                    })
+                    collected += 1
+                    idx += 1
+                    continue
+                elif os.path.exists(audio_src_path):
+                    try:
+                        shutil.copy(audio_src_path, target_path)
+                        audio_path = target_path
+                    except Exception:
+                        audio_path = None
             
+            # Check if we got embedded audio
             if audio_path and os.path.exists(audio_path):
                 size_mb = get_file_size_mb(audio_path)
-                if size_mb > MAX_AUDIO_SIZE_MB:
+                if size_mb <= MAX_AUDIO_SIZE_MB:
+                    metadata['audio_path'] = audio_path
+                    embedded_samples.append(metadata)
+                    embedded_count += 1
+                    collected += 1
+                else:
                     os.remove(audio_path)
-                    continue
+                    failed_embedded += 1
+            elif audio_data is None and audio_src_path is None:
+                skipped_no_audio += 1
+            else:
+                failed_embedded += 1
+            
+            idx += 1
+            
+            # Progress logging every 500 samples
+            if idx % 500 == 0:
+                logger.info(f"    Scanned {idx}: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed")
+        
+        logger.info(f"  Phase 1 complete: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} skipped (no audio), {failed_embedded} failed")
+        
+        # Add embedded samples first
+        samples.extend(embedded_samples)
+        
+        # Phase 2: Parallel URL downloads
+        if url_download_tasks and len(samples) < max_samples:
+            remaining_needed = max_samples - len(samples)
+            tasks_to_process = url_download_tasks[:int(remaining_needed * 1.3) + 50]  # Extra for failures
+            
+            logger.info(f"  Phase 2: Downloading {len(tasks_to_process)} audio files in parallel (workers: {MAX_WORKERS})...")
+            
+            downloaded = 0
+            failed_downloads = 0
+            too_large = 0
+            
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                # Submit all tasks
+                future_to_task = {executor.submit(_download_audio_task, task): task for task in tasks_to_process}
                 
-                metadata['audio_path'] = audio_path
-                samples.append(metadata)
-                count += 1
+                # Process completed downloads
+                for future in as_completed(future_to_task):
+                    if len(samples) >= max_samples:
+                        # Cancel remaining futures
+                        for f in future_to_task:
+                            f.cancel()
+                        break
+                    
+                    try:
+                        result = future.result(timeout=180)  # 3 min timeout per download
+                        if result['success'] and result['metadata']:
+                            samples.append(result['metadata'])
+                            downloaded += 1
+                        else:
+                            if result.get('reason') == 'too_large':
+                                too_large += 1
+                            else:
+                                failed_downloads += 1
+                    except Exception:
+                        failed_downloads += 1
+                    
+                    # Progress logging every 25 downloads
+                    total_processed = downloaded + failed_downloads + too_large
+                    if total_processed % 25 == 0:
+                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed, {too_large} too large, {len(samples)}/{max_samples} total")
+            
+            logger.info(f"  Phase 2 complete: {downloaded} downloaded, {failed_downloads} failed, {too_large} too large")
+        
+        # Trim to max_samples if we got more
+        if len(samples) > max_samples:
+            samples = samples[:max_samples]
         
         logger.info(f"  ✓ {len(samples)} samples from {name}")
+        
     except Exception as e:
         logger.error(f"  ✗ Error processing {name}: {e}")
         traceback.print_exc()
