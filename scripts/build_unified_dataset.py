@@ -1760,13 +1760,26 @@ def build_unified_dataset(args):
             
             if video_data["video"]:
                 try:
-                    # Store videos as file paths (strings) - NOT using HF Video type
-                    # This avoids torchcodec dependency entirely
-                    # Videos are uploaded separately to /videos/ folder and referenced by path
+                    # Convert local paths to repo paths BEFORE creating the dataset
+                    # This avoids needing .map() on Video column which triggers torchcodec
+                    updated_video_paths = []
+                    for local_path in video_data["video"]:
+                        if isinstance(local_path, str):
+                            # Convert /tmp/.../output/videos/Dataset/000001.mp4 -> videos/Dataset/000001.mp4
+                            rel_path = local_path.replace(OUTPUT_DIR + "/", "")
+                            updated_video_paths.append(rel_path)
+                        else:
+                            updated_video_paths.append(local_path)
+                    video_data["video"] = updated_video_paths
+                    
+                    # Create dataset with string paths first
                     ds = Dataset.from_dict(video_data)
-                    # Keep video column as string paths - do NOT cast to Video type
+                    
+                    # Cast to HF Video type so videos work properly for users
+                    from datasets import Video as HFVideo
+                    ds = ds.cast_column("video", HFVideo())
                     datasets_dict["video"] = ds
-                    logger.info(f"  ✓ Video: {len(ds)} samples (stored as file paths, no torchcodec)")
+                    logger.info(f"  ✓ Video: {len(ds)} samples (with HF Video type, paths pre-converted)")
                     logger.info(f"    Columns: {ds.column_names}")
                 except Exception as e:
                     logger.error(f"  ✗ Failed to create video dataset: {e}")
@@ -1837,22 +1850,8 @@ def build_unified_dataset(args):
                 token=HF_TOKEN,
             )
             logger.info("  ✓ Videos uploaded to /videos/")
-            
-            # Update video paths in dataset to point to repo paths
-            if "video" in datasets_dict:
-                video_ds = datasets_dict["video"]
-                # Convert local paths to repo paths
-                def update_video_path(example):
-                    if example.get("video"):
-                        local_path = example["video"]
-                        if isinstance(local_path, str):
-                            # Convert /tmp/.../output/videos/Dataset/000001.mp4 -> videos/Dataset/000001.mp4
-                            rel_path = local_path.replace(OUTPUT_DIR + "/", "")
-                            example["video"] = rel_path
-                    return example
-                video_ds = video_ds.map(update_video_path)
-                datasets_dict["video"] = video_ds
-                final_dataset = DatasetDict(datasets_dict)
+            # Note: Video paths already converted to repo paths during dataset creation
+            # to avoid .map() call on Video column which triggers torchcodec
         
         # Now push the dataset (parquet files go to /data/)
         final_dataset.push_to_hub(
