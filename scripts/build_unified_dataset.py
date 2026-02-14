@@ -1018,13 +1018,13 @@ def process_image_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing image dataset: {name}")
     
     try:
-        # Pull exactly max_samples in one batch (no per-sample HTTP requests)
-        split_str = f"{config['split']}[:{max_samples}]"
-        load_kwargs = {"path": config["path"], "split": split_str, "streaming": False}
+        # Use STREAMING to avoid downloading entire dataset
+        load_kwargs = {"path": config["path"], "split": config['split'], "streaming": True}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
         ds = load_dataset(**load_kwargs)
+        logger.info(f"  📥 Streaming mode: will fetch only {max_samples} samples")
         
         count = 0
         for idx, sample in enumerate(ds):
@@ -1426,8 +1426,8 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     """
     Process an audio dataset with standardized schema.
     
+    Uses STREAMING to avoid downloading entire dataset - only fetches max_samples.
     Uses custom audio decoding (soundfile/librosa) instead of torchcodec.
-    Disables HuggingFace's automatic audio decoding to avoid torchcodec dependency.
     """
     from datasets import load_dataset, Audio
     import soundfile as sf
@@ -1441,22 +1441,13 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
     logger.info(f"Processing audio dataset: {name}")
     
     try:
-        # Pull exactly max_samples in one batch (no per-sample HTTP requests)
-        split_str = f"{config['split']}[:{max_samples}]"
-        load_kwargs = {"path": config["path"], "split": split_str, "streaming": False}
+        # Use STREAMING to avoid downloading entire dataset
+        load_kwargs = {"path": config["path"], "split": config['split'], "streaming": True}
         if "config" in config:
             load_kwargs["name"] = config["config"]
         
         ds = load_dataset(**load_kwargs)
-        
-        # Disable automatic audio decoding - use our custom soundfile/librosa decoder
-        # This avoids torchcodec dependency
-        try:
-            ds = ds.cast_column('audio', Audio(decode=False))
-            logger.info(f"  📝 Using custom audio decoder (soundfile/librosa), NOT torchcodec")
-        except Exception:
-            # Column might not exist or already in different format
-            pass
+        logger.info(f"  📥 Streaming mode: will fetch only {max_samples} samples")
         
         count = 0
         for idx, sample in enumerate(ds):
