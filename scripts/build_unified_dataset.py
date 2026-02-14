@@ -1716,19 +1716,59 @@ def build_unified_dataset(args):
                     logger.error(f"  ✗ Failed to create audio dataset: {e}")
                     traceback.print_exc()
     
-    # VIDEO - Videos are uploaded separately to /data/ folder
-    # HuggingFace auto-creates dataset from video files and shows thumbnails
-    # We don't create a dataset split - just count valid videos for logging
-    video_count = 0
+    # VIDEO DATASET - store video bytes directly in dataset
     if all_samples["video"]:
-        logger.info("\n🎬 VIDEO files will be uploaded to /data/ folder...")
+        logger.info("\n🎬 Creating VIDEO dataset...")
         valid_samples = [s for s in all_samples["video"]
                         if s.get("video_path") 
                         and isinstance(s.get("video_path"), str)
                         and os.path.exists(s.get("video_path", ""))]
-        video_count = len(valid_samples)
-        logger.info(f"  ✓ {video_count} video files ready for upload")
-        logger.info(f"    HuggingFace will auto-create video dataset with thumbnails")
+        
+        if valid_samples:
+            video_data = {
+                "video": [],
+                "caption": [],
+                "question": [],
+                "answer": [],
+                "prompt": [],
+                "options": [],
+                "duration": [],
+                "domain": [],
+                "sub_category": [],
+                "category": [],
+                "source": [],
+            }
+            
+            for s in valid_samples:
+                video_path = s.get("video_path")
+                if isinstance(video_path, str) and os.path.exists(video_path):
+                    try:
+                        with open(video_path, 'rb') as f:
+                            video_bytes = f.read()
+                        video_data["video"].append({"bytes": video_bytes, "path": None})
+                        video_data["caption"].append(to_string_or_none(s.get("caption")))
+                        video_data["question"].append(to_string_or_none(s.get("question")))
+                        video_data["answer"].append(to_string_or_none(s.get("answer")))
+                        video_data["prompt"].append(to_string_or_none(s.get("prompt")))
+                        video_data["options"].append(to_string_or_none(s.get("options")))
+                        video_data["duration"].append(to_string_or_none(s.get("duration")))
+                        video_data["domain"].append(to_string_or_none(s.get("domain")))
+                        video_data["sub_category"].append(to_string_or_none(s.get("sub_category")))
+                        video_data["category"].append(to_string_or_none(s.get("category")))
+                        video_data["source"].append(to_string_or_none(s.get("source")))
+                    except Exception as e:
+                        logger.warning(f"  Could not read video {video_path}: {e}")
+            
+            if video_data["video"]:
+                try:
+                    from datasets import Video as HFVideo
+                    ds = Dataset.from_dict(video_data)
+                    ds = ds.cast_column("video", HFVideo(decode=False))
+                    datasets_dict["video"] = ds
+                    logger.info(f"  ✓ Video: {len(ds)} samples")
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to create video dataset: {e}")
+                    traceback.print_exc()
     
     # Merge with existing datasets if --hf flag was used
     if existing_datasets:
@@ -1783,20 +1823,7 @@ def build_unified_dataset(args):
         except Exception:
             pass
         
-        # Upload videos to /videos/ folder
-        videos_dir = os.path.join(OUTPUT_DIR, "videos")
-        if os.path.exists(videos_dir):
-            logger.info("  📹 Uploading videos to /videos/...")
-            api.upload_folder(
-                folder_path=videos_dir,
-                path_in_repo="videos",
-                repo_id=HF_DATASET_NAME,
-                repo_type="dataset",
-                token=HF_TOKEN,
-            )
-            logger.info("  ✓ Videos uploaded to /videos/")
-        
-        # Push other datasets (text, audio, image)
+        # Push dataset (videos are embedded as bytes in the video column)
         if datasets_dict:
             final_dataset.push_to_hub(
                 HF_DATASET_NAME,
