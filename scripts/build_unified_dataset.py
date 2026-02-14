@@ -169,7 +169,7 @@ DATASET_CONFIGS = {
     
     # === VIDEO DATASETS ===
     "video_caption": [
-        {"name": "Video-MME", "path": "lmms-lab/Video-MME", "split": "test"},
+#        {"name": "Video-MME", "path": "lmms-lab/Video-MME", "split": "test"},
     ],
     "video_qa": [
         {"name": "VideoInstruct-100K", "path": "MBZUAI/VideoInstruct-100K", "split": "train"},
