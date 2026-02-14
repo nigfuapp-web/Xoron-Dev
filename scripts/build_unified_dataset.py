@@ -1195,7 +1195,7 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
     
     samples = []
     name = config['name']
-    vid_dir = os.path.join(output_dir, "videos", name.replace(" ", "_").replace("/", "_"))
+    vid_dir = os.path.join(output_dir, "videos")
     os.makedirs(vid_dir, exist_ok=True)
     
     logger.info(f"Processing video dataset: {name}")
