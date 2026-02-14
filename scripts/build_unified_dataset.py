@@ -1725,11 +1725,75 @@ def build_unified_dataset(args):
     # Upload to HuggingFace
     logger.info(f"\nUploading to HuggingFace Hub: {HF_DATASET_NAME}...")
     try:
+        from huggingface_hub import HfApi, create_repo
+        api = HfApi()
+        
+        # Create repo if it doesn't exist
+        try:
+            create_repo(HF_DATASET_NAME, repo_type="dataset", token=HF_TOKEN, exist_ok=True)
+        except Exception:
+            pass
+        
+        # Upload videos folder separately so they're in /videos/ not /data/
+        videos_dir = os.path.join(OUTPUT_DIR, "videos")
+        if os.path.exists(videos_dir):
+            logger.info("  📹 Uploading videos folder...")
+            api.upload_folder(
+                folder_path=videos_dir,
+                path_in_repo="videos",
+                repo_id=HF_DATASET_NAME,
+                repo_type="dataset",
+                token=HF_TOKEN,
+            )
+            logger.info("  ✓ Videos uploaded to /videos/")
+            
+            # Update video paths in dataset to point to repo paths
+            if "video" in datasets_dict:
+                video_ds = datasets_dict["video"]
+                # Convert local paths to repo paths
+                def update_video_path(example):
+                    if example.get("video"):
+                        local_path = example["video"]
+                        if isinstance(local_path, str):
+                            # Convert /tmp/.../output/videos/Dataset/000001.mp4 -> videos/Dataset/000001.mp4
+                            rel_path = local_path.replace(OUTPUT_DIR + "/", "")
+                            example["video"] = rel_path
+                    return example
+                video_ds = video_ds.map(update_video_path)
+                datasets_dict["video"] = video_ds
+                final_dataset = DatasetDict(datasets_dict)
+        
+        # Upload audio folder separately
+        audio_dir = os.path.join(OUTPUT_DIR, "audio")
+        if os.path.exists(audio_dir):
+            logger.info("  🔊 Uploading audio folder...")
+            api.upload_folder(
+                folder_path=audio_dir,
+                path_in_repo="audio",
+                repo_id=HF_DATASET_NAME,
+                repo_type="dataset",
+                token=HF_TOKEN,
+            )
+            logger.info("  ✓ Audio uploaded to /audio/")
+        
+        # Upload images folder separately
+        images_dir = os.path.join(OUTPUT_DIR, "images")
+        if os.path.exists(images_dir):
+            logger.info("  🖼️ Uploading images folder...")
+            api.upload_folder(
+                folder_path=images_dir,
+                path_in_repo="images",
+                repo_id=HF_DATASET_NAME,
+                repo_type="dataset",
+                token=HF_TOKEN,
+            )
+            logger.info("  ✓ Images uploaded to /images/")
+        
+        # Now push the dataset (parquet files go to /data/)
         final_dataset.push_to_hub(
             HF_DATASET_NAME,
             token=HF_TOKEN,
             private=False,
-            embed_external_files=True,  # Upload video/audio/image files as separate files (enables thumbnails)
         )
         logger.info("✅ Dataset uploaded successfully!")
         logger.info(f"   View at: https://huggingface.co/datasets/{HF_DATASET_NAME}")
