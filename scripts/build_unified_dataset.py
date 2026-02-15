@@ -148,19 +148,19 @@ DATASET_CONFIGS = {
     
     # === IMAGE DATASETS ===
     "image_caption": [
-        {"name": "Flickr8k", "path": "Naveengo/flickr8k", "split": "train"},
-        {"name": "Football", "path": "ybelkada/football-dataset", "split": "train"},
-        {"name": "NewYorker", "path": "jmhessel/newyorker_caption_contest", "config": "explanation", "split": "train"},
+#        {"name": "Flickr8k", "path": "Naveengo/flickr8k", "split": "train"},
+#        {"name": "Football", "path": "ybelkada/football-dataset", "split": "train"},
+#        {"name": "NewYorker", "path": "jmhessel/newyorker_caption_contest", "config": "explanation", "split": "train"},
     ],
     "image_vqa": [
-        {"name": "ScienceQA", "path": "derek-thomas/ScienceQA", "split": "train"},
+#        {"name": "ScienceQA", "path": "derek-thomas/ScienceQA", "split": "train"},
     ],
     "image_editing": [
-        {"name": "MagicBrush", "path": "osunlp/MagicBrush", "split": "train"},
-        {"name": "InstructPix2Pix", "path": "timbrooks/instructpix2pix-clip-filtered", "split": "train"},
+#        {"name": "MagicBrush", "path": "osunlp/MagicBrush", "split": "train"},
+#        {"name": "InstructPix2Pix", "path": "timbrooks/instructpix2pix-clip-filtered", "split": "train"},
     ],
     "ui_to_code": [
-        {"name": "WebSight", "path": "HuggingFaceM4/WebSight", "split": "train"},
+#        {"name": "WebSight", "path": "HuggingFaceM4/WebSight", "split": "train"},
     ],
     "image_prompts": [
         {"name": "SD-Prompts", "path": "Gustavosta/Stable-Diffusion-Prompts", "split": "train"},
@@ -1322,7 +1322,7 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
         ds = load_dataset(**load_kwargs)
         
         # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
-        # Pull exactly max_samples from dataset, upload whatever is valid, move to next
+        # Keep scanning until we have enough valid samples (embedded + queued URLs)
         embedded_samples = []  # Samples with embedded video data (processed immediately)
         url_download_tasks = []  # Tasks for parallel URL downloading
         
@@ -1331,11 +1331,16 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
         skipped_no_video = 0
         idx = 0
         
-        logger.info(f"  Phase 1: Pulling {max_samples} samples from dataset...")
+        # Target: collect enough candidates to reach max_samples after URL download failures
+        # We need ~1.3x URLs to account for download failures
+        target_candidates = int(max_samples * 1.3) + 100
+        
+        logger.info(f"  Phase 1: Scanning for video samples (target: {max_samples} valid)...")
         
         for sample in ds:
-            # Stop at exactly max_samples pulled
-            if idx >= max_samples:
+            # Stop when we have enough valid candidates (embedded + URLs queued)
+            valid_candidates = len(embedded_samples) + len(url_download_tasks)
+            if valid_candidates >= target_candidates:
                 break
             
             # Extract with standardized schema
@@ -1389,28 +1394,35 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             # Progress logging every 1000 samples
             if idx % 1000 == 0:
                 valid = len(embedded_samples) + len(url_download_tasks)
-                logger.info(f"    Pulled {idx}/{max_samples}: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_video} no video, {failed_embedded} failed")
+                logger.info(f"    Scanned {idx}: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_video} no video, {failed_embedded} failed ({valid}/{target_candidates} candidates)")
         
-        valid_total = len(embedded_samples) + len(url_download_tasks)
-        logger.info(f"  Phase 1 complete: Pulled {idx}/{max_samples} → {valid_total} valid ({len(embedded_samples)} embedded, {len(url_download_tasks)} URLs)")
+        logger.info(f"  Phase 1 complete: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_video} no video, {failed_embedded} failed (scanned {idx} total)")
         
         # Add embedded samples first
         samples.extend(embedded_samples)
         
-        # Phase 2: Parallel URL downloads - download ALL queued URLs
-        if url_download_tasks:
-            logger.info(f"  Phase 2: Downloading {len(url_download_tasks)} videos in parallel (workers: {MAX_WORKERS})...")
+        # Phase 2: Parallel URL downloads
+        if url_download_tasks and len(samples) < max_samples:
+            remaining_needed = max_samples - len(samples)
+            tasks_to_process = url_download_tasks[:int(remaining_needed * 1.3) + 50]  # Extra for failures
+            
+            logger.info(f"  Phase 2: Downloading {len(tasks_to_process)} videos in parallel (workers: {MAX_WORKERS})...")
             
             downloaded = 0
             failed_downloads = 0
-            too_large = 0
             
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 # Submit all tasks
-                future_to_task = {executor.submit(_download_video_task, task): task for task in url_download_tasks}
+                future_to_task = {executor.submit(_download_video_task, task): task for task in tasks_to_process}
                 
                 # Process completed downloads
                 for future in as_completed(future_to_task):
+                    if len(samples) >= max_samples:
+                        # Cancel remaining futures
+                        for f in future_to_task:
+                            f.cancel()
+                        break
+                    
                     try:
                         result = future.result(timeout=300)  # 5 min timeout per download
                         if result['success'] and result['metadata']:
@@ -1424,11 +1436,15 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                     # Progress logging
                     total_processed = downloaded + failed_downloads
                     if total_processed % 50 == 0:
-                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed")
+                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed, {len(samples)}/{max_samples} total")
             
             logger.info(f"  Phase 2 complete: {downloaded} downloaded, {failed_downloads} failed")
         
-        logger.info(f"  ✓ {len(samples)} valid samples from {name} (pulled {max_samples})")
+        # Trim to max_samples if we got more
+        if len(samples) > max_samples:
+            samples = samples[:max_samples]
+        
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
         
     except Exception as e:
         logger.error(f"  ✗ Error processing {name}: {e}")
@@ -1557,7 +1573,7 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             logger.info(f"  📥 Streaming mode (no audio column to cast)")
         
         # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
-        # Pull exactly max_samples from dataset, upload whatever is valid, move to next
+        # Keep scanning until we have enough valid samples (embedded + queued URLs)
         embedded_samples = []  # Samples with embedded audio data (processed immediately)
         url_download_tasks = []  # Tasks for parallel URL downloading
         
@@ -1566,11 +1582,16 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
         skipped_no_audio = 0
         idx = 0
         
-        logger.info(f"  Phase 1: Pulling {max_samples} samples from dataset...")
+        # Target: collect enough candidates to reach max_samples after URL download failures
+        # We need ~1.3x URLs to account for download failures
+        target_candidates = int(max_samples * 1.3) + 100
+        
+        logger.info(f"  Phase 1: Scanning for audio samples (target: {max_samples} valid)...")
         
         for sample in ds:
-            # Stop at exactly max_samples pulled
-            if idx >= max_samples:
+            # Stop when we have enough valid candidates (embedded + URLs queued)
+            valid_candidates = len(embedded_samples) + len(url_download_tasks)
+            if valid_candidates >= target_candidates:
                 break
             
             # Extract with standardized schema
@@ -1660,17 +1681,19 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             # Progress logging every 500 samples
             if idx % 500 == 0:
                 valid = len(embedded_samples) + len(url_download_tasks)
-                logger.info(f"    Pulled {idx}/{max_samples}: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed")
+                logger.info(f"    Scanned {idx}: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed ({valid}/{target_candidates} candidates)")
         
-        valid_total = len(embedded_samples) + len(url_download_tasks)
-        logger.info(f"  Phase 1 complete: Pulled {idx}/{max_samples} → {valid_total} valid ({embedded_count} embedded, {len(url_download_tasks)} URLs)")
+        logger.info(f"  Phase 1 complete: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed (scanned {idx} total)")
         
         # Add embedded samples first
         samples.extend(embedded_samples)
         
-        # Phase 2: Parallel URL downloads - download ALL queued URLs
-        if url_download_tasks:
-            logger.info(f"  Phase 2: Downloading {len(url_download_tasks)} audio files in parallel (workers: {MAX_WORKERS})...")
+        # Phase 2: Parallel URL downloads
+        if url_download_tasks and len(samples) < max_samples:
+            remaining_needed = max_samples - len(samples)
+            tasks_to_process = url_download_tasks[:int(remaining_needed * 1.3) + 50]  # Extra for failures
+            
+            logger.info(f"  Phase 2: Downloading {len(tasks_to_process)} audio files in parallel (workers: {MAX_WORKERS})...")
             
             downloaded = 0
             failed_downloads = 0
@@ -1678,10 +1701,16 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 # Submit all tasks
-                future_to_task = {executor.submit(_download_audio_task, task): task for task in url_download_tasks}
+                future_to_task = {executor.submit(_download_audio_task, task): task for task in tasks_to_process}
                 
                 # Process completed downloads
                 for future in as_completed(future_to_task):
+                    if len(samples) >= max_samples:
+                        # Cancel remaining futures
+                        for f in future_to_task:
+                            f.cancel()
+                        break
+                    
                     try:
                         result = future.result(timeout=180)  # 3 min timeout per download
                         if result['success'] and result['metadata']:
@@ -1698,11 +1727,15 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                     # Progress logging every 25 downloads
                     total_processed = downloaded + failed_downloads + too_large
                     if total_processed % 25 == 0:
-                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed, {too_large} too large")
+                        logger.info(f"    Progress: {downloaded} downloaded, {failed_downloads} failed, {too_large} too large, {len(samples)}/{max_samples} total")
             
             logger.info(f"  Phase 2 complete: {downloaded} downloaded, {failed_downloads} failed, {too_large} too large")
         
-        logger.info(f"  ✓ {len(samples)} valid samples from {name} (pulled {max_samples})")
+        # Trim to max_samples if we got more
+        if len(samples) > max_samples:
+            samples = samples[:max_samples]
+        
+        logger.info(f"  ✓ {len(samples)} samples from {name}")
         
     except Exception as e:
         logger.error(f"  ✗ Error processing {name}: {e}")
