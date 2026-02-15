@@ -1322,21 +1322,25 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
         ds = load_dataset(**load_kwargs)
         
         # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
+        # Keep scanning until we have enough valid samples (embedded + queued URLs)
         embedded_samples = []  # Samples with embedded video data (processed immediately)
         url_download_tasks = []  # Tasks for parallel URL downloading
         
-        collected = 0
         embedded_count = 0
         failed_embedded = 0
+        skipped_no_video = 0
         idx = 0
         
-        # Collect up to max_samples * 1.5 candidates (some URL downloads will fail)
-        max_candidates = int(max_samples * 1.5) + 100
+        # Target: collect enough candidates to reach max_samples after URL download failures
+        # We need ~1.3x URLs to account for download failures
+        target_candidates = int(max_samples * 1.3) + 100
         
-        logger.info(f"  Phase 1: Collecting video samples (target: {max_samples})...")
+        logger.info(f"  Phase 1: Scanning for video samples (target: {max_samples} valid)...")
         
         for sample in ds:
-            if collected >= max_candidates:
+            # Stop when we have enough valid candidates (embedded + URLs queued)
+            valid_candidates = len(embedded_samples) + len(url_download_tasks)
+            if valid_candidates >= target_candidates:
                 break
             
             # Extract with standardized schema
@@ -1369,7 +1373,6 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                     metadata['video_path'] = video_path
                     embedded_samples.append(metadata)
                     embedded_count += 1
-                    collected += 1
                 else:
                     os.remove(video_path)
                     failed_embedded += 1
@@ -1381,7 +1384,8 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
                     'video_id': video_id,
                     'metadata': metadata
                 })
-                collected += 1
+            elif video_data is None and video_url is None:
+                skipped_no_video += 1
             else:
                 failed_embedded += 1
             
@@ -1389,9 +1393,10 @@ def process_video_dataset(config: Dict, category: str, max_samples: int, output_
             
             # Progress logging every 1000 samples
             if idx % 1000 == 0:
-                logger.info(f"    Scanned {idx} samples, collected {len(embedded_samples)} embedded + {len(url_download_tasks)} URLs queued")
+                valid = len(embedded_samples) + len(url_download_tasks)
+                logger.info(f"    Scanned {idx}: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_video} no video, {failed_embedded} failed ({valid}/{target_candidates} candidates)")
         
-        logger.info(f"  Phase 1 complete: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs to download")
+        logger.info(f"  Phase 1 complete: {len(embedded_samples)} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_video} no video, {failed_embedded} failed (scanned {idx} total)")
         
         # Add embedded samples first
         samples.extend(embedded_samples)
@@ -1568,22 +1573,25 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             logger.info(f"  📥 Streaming mode (no audio column to cast)")
         
         # Phase 1: Collect samples - process embedded data immediately, queue URL downloads
+        # Keep scanning until we have enough valid samples (embedded + queued URLs)
         embedded_samples = []  # Samples with embedded audio data (processed immediately)
         url_download_tasks = []  # Tasks for parallel URL downloading
         
-        collected = 0
         embedded_count = 0
         failed_embedded = 0
         skipped_no_audio = 0
         idx = 0
         
-        # Collect up to max_samples * 1.5 candidates (some URL downloads will fail)
-        max_candidates = int(max_samples * 1.5) + 100
+        # Target: collect enough candidates to reach max_samples after URL download failures
+        # We need ~1.3x URLs to account for download failures
+        target_candidates = int(max_samples * 1.3) + 100
         
-        logger.info(f"  Phase 1: Scanning for audio samples (target: {max_samples})...")
+        logger.info(f"  Phase 1: Scanning for audio samples (target: {max_samples} valid)...")
         
         for sample in ds:
-            if collected >= max_candidates:
+            # Stop when we have enough valid candidates (embedded + URLs queued)
+            valid_candidates = len(embedded_samples) + len(url_download_tasks)
+            if valid_candidates >= target_candidates:
                 break
             
             # Extract with standardized schema
@@ -1625,7 +1633,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                                 'metadata': metadata,
                                 'target_path': target_path
                             })
-                            collected += 1
                             idx += 1
                             continue
                         elif os.path.exists(src_path):
@@ -1645,7 +1652,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                         'metadata': metadata,
                         'target_path': target_path
                     })
-                    collected += 1
                     idx += 1
                     continue
                 elif os.path.exists(audio_src_path):
@@ -1662,7 +1668,6 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
                     metadata['audio_path'] = audio_path
                     embedded_samples.append(metadata)
                     embedded_count += 1
-                    collected += 1
                 else:
                     os.remove(audio_path)
                     failed_embedded += 1
@@ -1675,9 +1680,10 @@ def process_audio_dataset(config: Dict, category: str, max_samples: int, output_
             
             # Progress logging every 500 samples
             if idx % 500 == 0:
-                logger.info(f"    Scanned {idx}: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed")
+                valid = len(embedded_samples) + len(url_download_tasks)
+                logger.info(f"    Scanned {idx}: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed ({valid}/{target_candidates} candidates)")
         
-        logger.info(f"  Phase 1 complete: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} skipped (no audio), {failed_embedded} failed")
+        logger.info(f"  Phase 1 complete: {embedded_count} embedded, {len(url_download_tasks)} URLs queued, {skipped_no_audio} no audio, {failed_embedded} failed (scanned {idx} total)")
         
         # Add embedded samples first
         samples.extend(embedded_samples)
